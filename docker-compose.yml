@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  # MySQL Database
+  database:
+    image: mysql:8.0
+    container_name: markd_database
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-markd}
+      MYSQL_USER: ${MYSQL_USER:-markd_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-changeme}
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./database/install.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "3306:3306"
+    networks:
+      - markd_network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend API
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: markd_backend
+    restart: unless-stopped
+    environment:
+      MYSQL_HOST: database
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-markd}
+      MYSQL_USER: ${MYSQL_USER:-markd_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-changeme}
+      JWT_SECRET: ${JWT_SECRET:-changeme_generate_secure_key}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-changeme_generate_secure_key}
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+    volumes:
+      - ./documents:/app/documents
+      - ./backend/logs:/app/logs
+    ports:
+      - "8000:8000"
+    depends_on:
+      database:
+        condition: service_healthy
+    networks:
+      - markd_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: markd_frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_URL: http://localhost:8000
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    networks:
+      - markd_network
+
+volumes:
+  db_data:
+    driver: local
+
+networks:
+  markd_network:
+    driver: bridge

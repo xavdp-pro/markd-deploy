@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  background-color: #f9fafb;
+}
+
+html.dark {
+  background-color: #111827;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #f9fafb;
+}
+
+body.dark,
+html.dark body {
+  background-color: #111827;
+}
+
+code {
+  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+    monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+#root {
+  width: 100%;
+  height: 100vh;
+  background-color: #f9fafb;
+}
+
+html.dark #root {
+  background-color: #111827;
+}
+
+/* Éditeur à gauche, preview à droite */
+.custom-md-editor-reversed .w-md-editor-content {
+  display: flex !important;
+  flex-direction: row !important;
+}
+
+.custom-md-editor-reversed .w-md-editor-text {
+  order: 1 !important;
+}
+
+.custom-md-editor-reversed .w-md-editor-text-pre {
+  order: 1 !important;
+}
+
+.custom-md-editor-reversed .w-md-editor-input {
+  order: 1 !important;
+}
+
+.custom-md-editor-reversed .w-md-editor-preview {
+  order: 2 !important;
+  border-left: 1px solid #e5e7eb !important;
+  border-right: none !important;
+}
+
+/* Augmenter la taille de la police de l'éditeur */
+.custom-md-editor-reversed .w-md-editor-text-pre,
+.custom-md-editor-reversed .w-md-editor-text-input,
+.custom-md-editor-reversed .w-md-editor-input textarea {
+  font-size: 16px !important;
+  line-height: 1.6 !important;
+}
+
+/* Augmenter la taille de la police pour tous les éditeurs */
+.w-md-editor-text-pre,
+.w-md-editor-text-input,
+.w-md-editor-input textarea {
+  font-size: 16px !important;
+  line-height: 1.6 !important;
+}
