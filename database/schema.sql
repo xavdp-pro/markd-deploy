@@ -8,10 +8,14 @@ CREATE TABLE IF NOT EXISTS documents (
     type ENUM('file', 'folder') NOT NULL,
     content LONGTEXT,
     parent_id VARCHAR(36),
+    workspace_id VARCHAR(50) DEFAULT 'default',
+    user_id INT(11) DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_parent (parent_id),
     INDEX idx_type (type),
+    INDEX idx_workspace (workspace_id),
+    INDEX idx_user (user_id),
     FOREIGN KEY (parent_id) REFERENCES documents(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

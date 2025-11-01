@@ -493,3 +493,26 @@ async def test_email(request: TestEmailRequest):
             raise HTTPException(status_code=500, detail="Échec de l'envoi de l'email")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# Dependency for JWT authentication
+async def get_current_user(request: Request) -> dict:
+    """Get current user from JWT token in cookie"""
+    import jwt
+    
+    # Use the same SECRET_KEY and ALGORITHM as defined at the top of the file
+    token = request.cookies.get("markd_auth")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("user_id")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        return {
+            "id": user_id,
+            "username": payload.get("username"),
+            "role": payload.get("role")
+        }
+    except Exception as e:
+        print(f"JWT decode error: {e}")  # Debug
+        raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")

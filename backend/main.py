@@ -106,23 +106,8 @@ class PermissionBase(BaseModel):
 
 # ===== Authentication & Permission Helpers =====
 
-async def get_current_user(request: Request) -> Dict:
-    """Get current user from JWT token in cookie"""
-    token = request.cookies.get("markd_auth")
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("user_id")
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        return {
-            "id": user_id,
-            "username": payload.get("username"),
-            "role": payload.get("role")
-        }
-    except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+# Import get_current_user from auth to avoid circular imports
+from auth import get_current_user
 
 async def check_workspace_permission(workspace_id: str, user: Dict, required_level: str = 'read') -> str:
     """Check user permission for a workspace via groups. Returns permission level if authorized."""
@@ -265,9 +250,12 @@ async def get_workspaces(request: Request, user: Dict = Depends(get_current_user
             if user.get('role') == 'admin':
                 ws['user_permission'] = 'admin'
             else:
-                perm_query = "SELECT permission_level FROM workspace_permissions WHERE workspace_id = %s AND user_id = %s"
-                perms = db.execute_query(perm_query, (ws['id'], user['id']))
-                ws['user_permission'] = perms[0]['permission_level'] if perms else 'read'
+                # Use group-based permissions instead of direct workspace_permissions
+                try:
+                    perm_level = await check_workspace_permission(ws['id'], user, 'read')
+                    ws['user_permission'] = perm_level
+                except:
+                    ws['user_permission'] = 'read'  # Default to read if no explicit permission
         
         return {"success": True, "workspaces": workspaces}
     except Exception as e:
@@ -457,8 +445,11 @@ async def get_users(request: Request, user: Dict = Depends(get_current_user)):
 async def get_tree(workspace_id: str = 'default', request: Request = None, user: Dict = Depends(get_current_user)):
     """Get full document tree for a workspace (requires read permission)"""
     try:
+        print(f"DEBUG: Checking permission for user {user.get('id')} on workspace {workspace_id}")
         await check_workspace_permission(workspace_id, user, 'read')
+        print(f"DEBUG: Permission OK, building tree")
         tree = build_tree('root', workspace_id)
+        print(f"DEBUG: Tree built, getting workspace info")
         
         # Get workspace info
         ws_query = "SELECT name FROM workspaces WHERE id = %s"
@@ -467,6 +458,9 @@ async def get_tree(workspace_id: str = 'default', request: Request = None, user:
         
         return {"success": True, "tree": tree, "workspace_name": workspace_name}
     except Exception as e:
+        print(f"DEBUG ERROR: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/documents/{document_id}")

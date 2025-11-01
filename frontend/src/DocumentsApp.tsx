@@ -52,38 +52,39 @@ function App() {
   const [userPermission, setUserPermission] = useState<string>('read');
   const [searchQuery, setSearchQuery] = useState<string>('');
   
-  // Filter tree based on search query
+  // Filter tree based on search query - Show results in their hierarchy
   const filterTree = useCallback((nodes: Document[], query: string): Document[] => {
     if (!query.trim()) return nodes;
     
     const lowerQuery = query.toLowerCase();
-    const filtered: Document[] = [];
     
-    const searchNode = (node: Document): boolean => {
+    const filterNode = (node: Document): Document | null => {
       const nameMatches = node.name.toLowerCase().includes(lowerQuery);
-      let hasMatchingChildren = false;
       
       if (node.type === 'folder' && node.children) {
-        const filteredChildren = node.children.filter(searchNode);
-        hasMatchingChildren = filteredChildren.length > 0;
+        // Filter children recursively
+        const filteredChildren = node.children
+          .map(child => filterNode(child))
+          .filter((child): child is Document => child !== null);
         
-        if (nameMatches || hasMatchingChildren) {
-          filtered.push({
+        // Keep folder if it matches OR has matching children
+        if (nameMatches || filteredChildren.length > 0) {
+          return {
             ...node,
-            children: hasMatchingChildren ? filteredChildren : node.children
-          });
-          return true;
+            children: filteredChildren
+          };
         }
       } else if (nameMatches) {
-        filtered.push(node);
-        return true;
+        // Keep file if it matches
+        return node;
       }
       
-      return false;
+      return null;
     };
     
-    nodes.forEach(searchNode);
-    return filtered;
+    return nodes
+      .map(node => filterNode(node))
+      .filter((node): node is Document => node !== null);
   }, []);
   
   // Auto-expand folders when searching

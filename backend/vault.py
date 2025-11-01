@@ -8,8 +8,8 @@ import json
 
 router = APIRouter()
 
-# Import get_current_user from main
-from main import get_current_user
+# Import get_current_user from auth
+from auth import get_current_user
 
 class PasswordCreate(BaseModel):
     workspace_id: str
