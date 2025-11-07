@@ -48,8 +48,8 @@ app.include_router(groups_router)
 from vault import router as vault_router
 app.include_router(vault_router)
 
-# Include tasks router
-from tasks import router as tasks_router
+# Include tasks router (simple version)
+from tasks_simple import router as tasks_router
 app.include_router(tasks_router)
 
 

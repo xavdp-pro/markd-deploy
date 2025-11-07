@@ -1,279 +1,248 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Task } from '../types';
+import React, { useState, useEffect, useRef } from 'react';
 import {
-  ChevronRight,
-  ChevronDown,
+  CheckSquare,
+  Folder,
+  FolderOpen,
   Plus,
   Trash2,
-  Copy,
   Edit2,
-  Folder,
+  Copy,
+  ChevronRight,
+  ChevronDown,
+  Lock,
+  GripVertical,
+  Search,
+  X,
 } from 'lucide-react';
-import TaskStatusBadge from './TaskStatusBadge';
-import TaskPriorityIcon from './TaskPriorityIcon';
-import TaskTypeIcon from './TaskTypeIcon';
-import TaskAssigneeAvatars from './TaskAssigneeAvatars';
-import { useSortable } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
-import InputModal from './InputModal';
+import { Task } from '../types';
+import { useDraggable, useDroppable } from '@dnd-kit/core';
+import { useAuth } from '../contexts/AuthContext';
 import ConfirmModal from './ConfirmModal';
+import InputModal from './InputModal';
 
 interface TaskTreeProps {
-  tasks: Task[];
-  selectedTask: Task | null;
-  onSelect: (task: Task) => void;
-  onCreateTask: (parentId: string | null, title: string) => void;
-  onCreateFolder: (parentId: string | null, title: string) => void;
-  onRenameTask: (taskId: string, newTitle: string) => void;
-  onDeleteTask: (taskId: string) => void;
-  onDuplicateTask: (taskId: string) => void;
+  tree: Task[];
   expanded: Record<string, boolean>;
-  onToggle: (taskId: string) => void;
-  className?: string;
+  selected: Task | null;
+  onToggleExpand: (id: string) => void;
+  onSelect: (task: Task) => void;
+  onCreate?: (parentId: string, name: string) => void;
+  onCreateFolder?: (parentId: string, name: string) => void;
+  onDelete?: (id: string) => void;
+  onRename?: (id: string, newName: string) => void;
+  onCopy: (id: string) => void;
+  onUnlock?: (id: string) => void;
+  width?: number;
+  readOnly?: boolean;
+  userPermission?: string;
+  workspaceSelector?: React.ReactNode;
+  searchQuery?: string;
+  onSearchChange?: (query: string) => void;
+  onClearSearch?: () => void;
 }
 
-const TaskTree: React.FC<TaskTreeProps> = ({
-  tasks,
-  selectedTask,
-  onSelect,
-  onCreateTask,
+interface ContextMenuProps {
+  x: number;
+  y: number;
+  node: Task;
+  onClose: () => void;
+  onCreate?: (parentId: string, name: string) => void;
+  onCreateFolder?: (parentId: string, name: string) => void;
+  onDelete?: (id: string) => void;
+  onRename?: (id: string, newName: string) => void;
+  onCopy: (id: string) => void;
+  onUnlock?: (id: string) => void;
+  readOnly?: boolean;
+}
+
+const ContextMenu: React.FC<ContextMenuProps> = ({
+  x,
+  y,
+  node,
+  onClose,
+  onCreate,
   onCreateFolder,
-  onRenameTask,
-  onDeleteTask,
-  onDuplicateTask,
-  expanded,
-  onToggle,
-  className = '',
+  onDelete,
+  onRename,
+  onCopy,
+  onUnlock,
 }) => {
-  const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
-    task: Task | null;
-  } | null>(null);
-  
-  const [inputModal, setInputModal] = useState<{
-    isOpen: boolean;
-    title: string;
-    placeholder: string;
-    defaultValue?: string;
-    onConfirm: (value: string) => void;
-  } | null>(null);
-  
+  const { user } = useAuth();
+  const menuRef = useRef<HTMLDivElement>(null);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     title: string;
     message: string;
     onConfirm: () => void;
   } | null>(null);
+  const [inputModal, setInputModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    label: string;
+    defaultValue?: string;
+    onConfirm: (value: string) => void;
+  } | null>(null);
 
-  const handleContextMenu = (e: React.MouseEvent, task: Task | null) => {
-    e.preventDefault();
-    setContextMenu({
-      x: e.clientX,
-      y: e.clientY,
-      task,
-    });
-  };
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        onClose();
+      }
+    };
 
-  const closeContextMenu = () => {
-    setContextMenu(null);
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [onClose]);
+
+  const handleAction = (action: () => void) => {
+    action();
+    onClose();
   };
 
   return (
-    <div className={`${className}`}>
-      {/* Root level actions */}
-      <div className="p-2 border-b border-gray-200 dark:border-gray-700 space-y-1">
-        <button
-          onClick={() => {
-            setInputModal({
-              isOpen: true,
-              title: 'Nouvelle tâche',
-              placeholder: 'Titre de la tâche...',
-              onConfirm: (title) => {
-                onCreateTask(null, title);
-                setInputModal(null);
-              }
-            });
-          }}
-          className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded w-full"
-        >
-          <Plus size={16} />
-          Nouvelle tâche
-        </button>
-        <button
-          onClick={() => {
-            setInputModal({
-              isOpen: true,
-              title: 'Nouveau dossier',
-              placeholder: 'Nom du dossier...',
-              onConfirm: (title) => {
-                onCreateFolder(null, title);
-                setInputModal(null);
-              }
-            });
-          }}
-          className="flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded w-full"
-        >
-          <Folder size={16} />
-          Nouveau dossier
-        </button>
-      </div>
-
-      {/* Task tree */}
-      <div className="overflow-y-auto flex-1">
-        {tasks.length === 0 ? (
-          <div className="p-4 text-center text-gray-400 text-sm">
-            Aucune tâche. Créez-en une !
-          </div>
-        ) : (
-          tasks.map(task => (
-            <TaskTreeNode
-              key={task.id}
-              task={task}
-              level={0}
-              selected={selectedTask?.id === task.id}
-              onSelect={onSelect}
-              onContextMenu={handleContextMenu}
-              expanded={expanded}
-              onToggle={onToggle}
-            />
-          ))
-        )}
-      </div>
-
-      {/* Context menu */}
-      {contextMenu && (
+    <div
+      ref={menuRef}
+      className="fixed bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 z-50 min-w-[160px]"
+      style={{ left: x, top: y }}
+    >
+      {node.type === 'folder' && (
         <>
-          <div
-            className="fixed inset-0 z-40"
-            onClick={closeContextMenu}
-          />
-          <div
-            className="fixed z-50 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 min-w-[180px]"
-            style={{
-              left: `${contextMenu.x}px`,
-              top: `${contextMenu.y}px`,
+          <button
+            onClick={() => {
+              setInputModal({
+                isOpen: true,
+                title: 'Nouvelle tâche',
+                label: 'Nom de la tâche',
+                defaultValue: '',
+                onConfirm: (name) => {
+                  onCreate?.(node.id, name);
+                  setInputModal(null);
+                  onClose();
+                }
+              });
             }}
+            className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
           >
-            {/* Create actions */}
-            <button
-              onClick={() => {
-                closeContextMenu();
-                setInputModal({
-                  isOpen: true,
-                  title: 'Nouvelle sous-tâche',
-                  placeholder: 'Titre de la sous-tâche...',
-                  onConfirm: (title) => {
-                    onCreateTask(contextMenu.task?.id || null, title);
-                    setInputModal(null);
-                  }
-                });
-              }}
-              className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
-            >
-              <Plus size={14} />
-              Ajouter une tâche
-            </button>
-            
-            <button
-              onClick={() => {
-                closeContextMenu();
-                setInputModal({
-                  isOpen: true,
-                  title: 'Nouveau dossier',
-                  placeholder: 'Nom du dossier...',
-                  onConfirm: (title) => {
-                    onCreateFolder(contextMenu.task?.id || null, title);
-                    setInputModal(null);
-                  }
-                });
-              }}
-              className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
-            >
-              <Folder size={14} />
-              Créer un dossier
-            </button>
-
-            {contextMenu.task && (
-              <>
-                <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
-                
-                <button
-                  onClick={() => {
-                    closeContextMenu();
-                    setInputModal({
-                      isOpen: true,
-                      title: 'Renommer',
-                      placeholder: 'Nouveau titre...',
-                      defaultValue: contextMenu.task?.title,
-                      onConfirm: (title) => {
-                        onRenameTask(contextMenu.task!.id, title);
-                        setInputModal(null);
-                      }
-                    });
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
-                >
-                  <Edit2 size={14} />
-                  Renommer
-                </button>
-                
-                <button
-                  onClick={() => {
-                    closeContextMenu();
-                    onDuplicateTask(contextMenu.task!.id);
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
-                >
-                  <Copy size={14} />
-                  Dupliquer
-                </button>
-
-                <button
-                  onClick={() => {
-                    const taskToDelete = contextMenu.task!;
-                    closeContextMenu();
-                    setConfirmModal({
-                      isOpen: true,
-                      title: 'Supprimer la tâche',
-                      message: `Êtes-vous sûr de vouloir supprimer "${taskToDelete.title}" ?`,
-                      onConfirm: () => {
-                        onDeleteTask(taskToDelete.id);
-                        setConfirmModal(null);
-                      }
-                    });
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
-                >
-                  <Trash2 size={14} />
-                  Supprimer
-                </button>
-              </>
-            )}
-          </div>
+            <Plus size={14} />
+            Ajouter une tâche
+          </button>
+          <button
+            onClick={() => {
+              setInputModal({
+                isOpen: true,
+                title: 'Nouveau dossier',
+                label: 'Nom du dossier',
+                defaultValue: '',
+                onConfirm: (name) => {
+                  onCreateFolder?.(node.id, name);
+                  setInputModal(null);
+                  onClose();
+                }
+              });
+            }}
+            className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+          >
+            <Folder size={14} />
+            Créer un dossier
+          </button>
+          <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
         </>
       )}
       
-      {/* Input Modal */}
+      {node.id !== 'root' && (
+        <>
+          <button
+            onClick={() => {
+              setInputModal({
+                isOpen: true,
+                title: 'Renommer',
+                label: 'Nouveau nom',
+                defaultValue: node.name,
+                onConfirm: (newName) => {
+                  if (newName.trim()) {
+                    onRename?.(node.id, newName.trim());
+                    setInputModal(null);
+                  }
+                  onClose();
+                }
+              });
+            }}
+            className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+          >
+            <Edit2 size={14} />
+            Renommer
+          </button>
+          
+          <button
+            onClick={() => handleAction(() => onCopy(node.id))}
+            className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+          >
+            <Copy size={14} />
+            Dupliquer
+          </button>
+
+          <button
+            onClick={() => {
+              setConfirmModal({
+                isOpen: true,
+                title: 'Supprimer la tâche',
+                message: `Êtes-vous sûr de vouloir supprimer "${node.name}" ?`,
+                onConfirm: () => {
+                  onDelete?.(node.id);
+                  setConfirmModal(null);
+                  onClose();
+                }
+              });
+            }}
+            className="w-full px-3 py-2 text-left text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
+          >
+            <Trash2 size={14} />
+            Supprimer
+          </button>
+
+          {node.locked_by && node.locked_by.user_id !== user?.id?.toString() && (
+            <button
+              onClick={() => handleAction(() => onUnlock?.(node.id))}
+              className="w-full px-3 py-2 text-left text-sm text-orange-600 hover:bg-orange-50 flex items-center gap-2"
+            >
+              <Lock size={14} />
+              Forcer le déverr
+
+ouillage
+            </button>
+          )}
+        </>
+      )}
+
       {inputModal && (
         <InputModal
           isOpen={inputModal.isOpen}
+          title={inputModal.title}
+          placeholder={inputModal.label}
+          defaultValue={inputModal.defaultValue}
           onClose={() => setInputModal(null)}
           onConfirm={inputModal.onConfirm}
-          title={inputModal.title}
-          placeholder={inputModal.placeholder}
-          defaultValue={inputModal.defaultValue}
         />
       )}
-      
-      {/* Confirm Modal */}
+
       {confirmModal && (
         <ConfirmModal
           isOpen={confirmModal.isOpen}
-          onClose={() => setConfirmModal(null)}
-          onConfirm={confirmModal.onConfirm}
           title={confirmModal.title}
           message={confirmModal.message}
+          onClose={() => setConfirmModal(null)}
+          onConfirm={confirmModal.onConfirm}
           confirmStyle="danger"
         />
       )}
@@ -281,134 +250,246 @@ const TaskTree: React.FC<TaskTreeProps> = ({
   );
 };
 
-interface TaskTreeNodeProps {
-  task: Task;
-  level: number;
-  selected: boolean;
-  onSelect: (task: Task) => void;
-  onContextMenu: (e: React.MouseEvent, task: Task) => void;
-  expanded: Record<string, boolean>;
-  onToggle: (taskId: string) => void;
-}
-
-const TaskTreeNode: React.FC<TaskTreeNodeProps> = ({
-  task,
-  level,
-  selected,
-  onSelect,
-  onContextMenu,
+const TaskTree: React.FC<TaskTreeProps> = ({
+  tree,
   expanded,
-  onToggle,
+  selected,
+  onToggleExpand,
+  onSelect,
+  onCreate,
+  onCreateFolder,
+  onDelete,
+  onRename,
+  onCopy,
+  onUnlock,
+  width,
+  readOnly = false,
+  userPermission = 'read',
+  workspaceSelector,
+  searchQuery = '',
+  onSearchChange,
+  onClearSearch,
 }) => {
-  const hasChildren = task.children && task.children.length > 0;
-  const isExpanded = expanded[task.id] || false;
-  const paddingLeft = level * 16 + 8;
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; node: Task } | null>(null);
+  const [inputModal, setInputModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    label: string;
+    onConfirm: (value: string) => void;
+  } | null>(null);
 
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: task.id });
+  const canWrite = userPermission === 'write' || userPermission === 'admin';
 
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.5 : 1,
+  const handleContextMenu = (e: React.MouseEvent, node: Task) => {
+    e.preventDefault();
+    if (readOnly) return;
+    setContextMenu({ x: e.clientX, y: e.clientY, node });
+  };
+
+  const closeContextMenu = () => {
+    setContextMenu(null);
+  };
+
+  const renderNode = (node: Task, level: number = 0) => {
+    const isExpanded = expanded[node.id];
+    const isSelected = selected?.id === node.id;
+    const hasChildren = node.children && node.children.length > 0;
+
+    const { attributes, listeners, setNodeRef, transform } = useDraggable({
+      id: node.id,
+      data: { node },
+    });
+
+    const { setNodeRef: setDropRef, isOver } = useDroppable({
+      id: node.id,
+      data: { node },
+    });
+
+    const style = transform
+      ? {
+          transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`,
+        }
+      : undefined;
+
+    return (
+      <div key={node.id}>
+        <div
+          ref={el => {
+            setNodeRef(el);
+            setDropRef(el);
+          }}
+          style={style}
+          className={`group flex items-center gap-2 py-1 px-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer ${
+            isSelected ? 'bg-blue-50 dark:bg-blue-900/20' : ''
+          } ${isOver ? 'bg-blue-100 dark:bg-blue-800/30' : ''}`}
+          style={{ paddingLeft: `${level * 16 + 8}px`, ...style }}
+          onClick={() => onSelect(node)}
+          onContextMenu={e => handleContextMenu(e, node)}
+          {...attributes}
+          {...listeners}
+        >
+          {/* Expand/collapse */}
+          <button
+            onClick={e => {
+              e.stopPropagation();
+              if (hasChildren) onToggleExpand(node.id);
+            }}
+            className="w-4 h-4 flex items-center justify-center"
+          >
+            {hasChildren ? (
+              isExpanded ? (
+                <ChevronDown size={14} className="text-gray-600 dark:text-gray-400" />
+              ) : (
+                <ChevronRight size={14} className="text-gray-600 dark:text-gray-400" />
+              )
+            ) : (
+              <span className="w-4" />
+            )}
+          </button>
+
+          {/* Icon */}
+          {node.type === 'folder' ? (
+            isExpanded ? (
+              <FolderOpen size={16} className="text-blue-500 flex-shrink-0" />
+            ) : (
+              <Folder size={16} className="text-blue-500 flex-shrink-0" />
+            )
+          ) : (
+            <CheckSquare size={16} className="text-green-500 flex-shrink-0" />
+          )}
+
+          {/* Name */}
+          <span className="flex-1 text-sm truncate text-gray-900 dark:text-gray-100">
+            {node.name}
+          </span>
+
+          {/* Status badge */}
+          {node.type === 'task' && node.status && (
+            <span className="text-xs px-2 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+              {node.status}
+            </span>
+          )}
+
+          {/* Lock indicator */}
+          {node.locked_by && (
+            <Lock size={14} className="text-orange-500 flex-shrink-0" title={`Verrouillé par ${node.locked_by.user_name}`} />
+          )}
+        </div>
+
+        {/* Children */}
+        {hasChildren && isExpanded && (
+          <div>
+            {node.children!.map(child => renderNode(child, level + 1))}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
-    <>
-      <div
-        ref={setNodeRef}
-        style={{ ...style, paddingLeft: `${paddingLeft}px` }}
-        className={`group flex items-center gap-2 py-1.5 px-2 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 ${
-          selected ? 'bg-blue-50 dark:bg-blue-900/20' : ''
-        }`}
-        onClick={() => onSelect(task)}
-        onContextMenu={e => onContextMenu(e, task)}
-        {...attributes}
-        {...listeners}
-      >
-        {/* Expand/collapse button */}
-        <button
-          onClick={e => {
-            e.stopPropagation();
-            if (hasChildren) {
-              onToggle(task.id);
-            }
-          }}
-          className="flex-shrink-0 w-4 h-4 flex items-center justify-center hover:bg-gray-200 dark:hover:bg-gray-600 rounded"
-        >
-          {hasChildren ? (
-            isExpanded ? (
-              <ChevronDown size={14} className="text-gray-600 dark:text-gray-400" />
-            ) : (
-              <ChevronRight size={14} className="text-gray-600 dark:text-gray-400" />
-            )
-          ) : (
-            <span className="w-4" />
+    <div className="flex flex-col h-full bg-white dark:bg-gray-800">
+      {/* Header with search and workspace */}
+      <div className="p-3 border-b border-gray-200 dark:border-gray-700 space-y-2">
+        {workspaceSelector}
+        
+        {/* Search */}
+        <div className="relative">
+          <Search size={16} className="absolute left-3 top-2.5 text-gray-400" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={e => onSearchChange?.(e.target.value)}
+            placeholder="Rechercher..."
+            className="w-full pl-9 pr-8 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-gray-100"
+          />
+          {searchQuery && (
+            <button
+              onClick={onClearSearch}
+              className="absolute right-2 top-2 p-0.5 hover:bg-gray-200 dark:hover:bg-gray-600 rounded"
+            >
+              <X size={16} className="text-gray-400" />
+            </button>
           )}
-        </button>
+        </div>
 
-        {/* Task type icon */}
-        <TaskTypeIcon
-          icon={task.type_icon}
-          color={task.type_color}
-          name={task.type_name || 'Task'}
-          size="text-sm"
-        />
-
-        {/* Task title */}
-        <span className="flex-1 text-sm text-gray-900 dark:text-gray-100 truncate">
-          {task.title}
-        </span>
-
-        {/* Status badge */}
-        {task.workflow_statuses && (
-          <TaskStatusBadge
-            status={task.status}
-            workflowStatuses={task.workflow_statuses}
-            className="flex-shrink-0"
-          />
+        {/* Create buttons */}
+        {canWrite && (
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                setInputModal({
+                  isOpen: true,
+                  title: 'Nouvelle tâche',
+                  label: 'Nom de la tâche',
+                  onConfirm: (name) => {
+                    onCreate?.('root', name);
+                    setInputModal(null);
+                  }
+                });
+              }}
+              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-sm bg-blue-500 text-white rounded hover:bg-blue-600"
+            >
+              <Plus size={14} />
+              Tâche
+            </button>
+            <button
+              onClick={() => {
+                setInputModal({
+                  isOpen: true,
+                  title: 'Nouveau dossier',
+                  label: 'Nom du dossier',
+                  onConfirm: (name) => {
+                    onCreateFolder?.('root', name);
+                    setInputModal(null);
+                  }
+                });
+              }}
+              className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-sm bg-gray-500 text-white rounded hover:bg-gray-600"
+            >
+              <Folder size={14} />
+              Dossier
+            </button>
+          </div>
         )}
-
-        {/* Priority icon */}
-        <TaskPriorityIcon priority={task.priority} size={14} className="flex-shrink-0" />
-
-        {/* Assignees */}
-        {task.assigned_users && task.assigned_users.length > 0 && (
-          <TaskAssigneeAvatars
-            assignedUsers={task.assigned_users}
-            responsibleUserId={task.responsible_user_id}
-            maxDisplay={2}
-            size="sm"
-            className="flex-shrink-0"
-          />
-        )}
-
       </div>
 
-      {/* Children */}
-      {hasChildren && isExpanded && (
-        <div>
-          {task.children!.map(child => (
-            <TaskTreeNode
-              key={child.id}
-              task={child}
-              level={level + 1}
-              selected={selected}
-              onSelect={onSelect}
-              onContextMenu={onContextMenu}
-              expanded={expanded}
-              onToggle={onToggle}
-            />
-          ))}
-        </div>
+      {/* Tree */}
+      <div className="flex-1 overflow-y-auto">
+        {tree.length === 0 ? (
+          <div className="p-4 text-center text-gray-400 text-sm">
+            Aucune tâche. Cliquez sur "Tâche" pour créer.
+          </div>
+        ) : (
+          tree.map(node => renderNode(node))
+        )}
+      </div>
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <ContextMenu
+          {...contextMenu}
+          onClose={closeContextMenu}
+          onCreate={onCreate}
+          onCreateFolder={onCreateFolder}
+          onDelete={onDelete}
+          onRename={onRename}
+          onCopy={onCopy}
+          onUnlock={onUnlock}
+          readOnly={readOnly}
+        />
       )}
-    </>
+
+      {/* Input Modal */}
+      {inputModal && (
+        <InputModal
+          isOpen={inputModal.isOpen}
+          title={inputModal.title}
+          placeholder={inputModal.label}
+          onClose={() => setInputModal(null)}
+          onConfirm={inputModal.onConfirm}
+        />
+      )}
+    </div>
   );
 };
 

@@ -11,9 +11,7 @@ import SettingsPage from './pages/SettingsPage';
 import WorkspacesAdmin from './pages/WorkspacesAdmin';
 import GroupsAdmin from './pages/GroupsAdmin';
 import VaultPage from './pages/VaultPage';
-import TasksPage from './pages/TasksPage';
-import TaskTypesAdmin from './pages/TaskTypesAdmin';
-import WorkflowsAdmin from './pages/WorkflowsAdmin';
+import TasksApp from './TasksApp';
 import DocumentsApp from './DocumentsApp';
 import Header from './components/layout/Header';
 
@@ -123,25 +121,9 @@ function AppContent() {
               <div className="h-screen flex flex-col">
                 <Header />
                 <div className="flex-1 overflow-hidden">
-                  <TasksPage />
+                  <TasksApp />
                 </div>
               </div>
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/admin/task-types"
-          element={
-            <ProtectedRoute>
-              <TaskTypesAdmin />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/admin/workflows"
-          element={
-            <ProtectedRoute>
-              <WorkflowsAdmin />
             </ProtectedRoute>
           }
         />
