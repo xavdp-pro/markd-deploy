@@ -1,0 +1,52 @@
+<mjml>
+  <mj-head>
+    <mj-title>Nouvelle tâche assignée - MarkD</mj-title>
+    <mj-attributes>
+      <mj-all font-family="Arial, sans-serif" />
+      <mj-text font-size="14px" color="#333333" line-height="1.6" />
+      <mj-button background-color="#3b82f6" color="#ffffff" font-weight="bold" />
+    </mj-attributes>
+  </mj-head>
+  <mj-body background-color="#f3f4f6">
+    <mj-section background-color="#ffffff" padding="20px">
+      <mj-column>
+        <mj-text font-size="24px" color="#1f2937" font-weight="bold" align="center">
+          MarkD - Task Management
+        </mj-text>
+      </mj-column>
+    </mj-section>
+
+    <mj-section background-color="#ffffff" padding="40px 20px">
+      <mj-column>
+        <mj-text font-size="18px" color="#1f2937" font-weight="bold">
+          Bonjour {{username}},
+        </mj-text>
+        
+        <mj-text>
+          Une nouvelle tâche vous a été assignée par <strong>{{assigned_by}}</strong>.
+        </mj-text>
+
+        <mj-text font-size="16px" color="#1f2937" font-weight="bold" padding-top="20px">
+          📋 Tâche: {{task_title}}
+        </mj-text>
+
+        <mj-button href="{{task_url}}" padding-top="30px">
+          Voir la tâche
+        </mj-button>
+
+        <mj-text padding-top="30px" color="#6b7280" font-size="12px">
+          Connectez-vous à MarkD pour consulter les détails et collaborer avec votre équipe.
+        </mj-text>
+      </mj-column>
+    </mj-section>
+
+    <mj-section background-color="#f9fafb" padding="20px">
+      <mj-column>
+        <mj-text align="center" color="#6b7280" font-size="12px">
+          © 2025 MarkD - Système de gestion de tâches collaboratif
+        </mj-text>
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>
+

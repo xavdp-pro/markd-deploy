@@ -48,6 +48,10 @@ app.include_router(groups_router)
 from vault import router as vault_router
 app.include_router(vault_router)
 
+# Include tasks router
+from tasks import router as tasks_router
+app.include_router(tasks_router)
+
 # Socket.IO server
 sio = socketio.AsyncServer(
     async_mode='asgi',
@@ -826,6 +830,33 @@ async def document_editing(sid, data):
         'document_id': data.get('document_id'),
         'user_name': data.get('user_name')
     }, skip_sid=sid)
+
+# ===== Task Management WebSocket Events =====
+
+@sio.event
+async def task_updated(sid, data):
+    """Broadcast task update to all clients"""
+    await sio.emit('task_updated', data, skip_sid=sid)
+
+@sio.event
+async def task_status_changed(sid, data):
+    """Broadcast task status change to all clients"""
+    await sio.emit('task_status_changed', data, skip_sid=sid)
+
+@sio.event
+async def task_comment_added(sid, data):
+    """Broadcast new comment to all clients"""
+    await sio.emit('task_comment_added', data, skip_sid=sid)
+
+@sio.event
+async def task_assigned(sid, data):
+    """Broadcast task assignment to all clients"""
+    await sio.emit('task_assigned', data, skip_sid=sid)
+
+@sio.event
+async def task_moved(sid, data):
+    """Broadcast task move to all clients"""
+    await sio.emit('task_moved', data, skip_sid=sid)
 
 # ===== Static Files =====
 # Mount at the end to avoid conflicts with API routes

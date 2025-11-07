@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { FileText, User, Settings, LogOut, Shield, Mail, FolderTree, Users, Sun, Moon } from 'lucide-react';
+import { FileText, User, Settings, LogOut, Shield, Mail, FolderTree, Users, Sun, Moon, CheckSquare, ListChecks, Workflow } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 
@@ -71,6 +71,17 @@ const Header: React.FC = () => {
               }`}
             >
               Documents
+            </button>
+            <button
+              onClick={() => navigate('/tasks')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                location.pathname === '/tasks' 
+                  ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300' 
+                  : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+              }`}
+            >
+              <CheckSquare size={16} />
+              Tasks
             </button>
             <button
               onClick={() => navigate('/vault')}
@@ -177,6 +188,26 @@ const Header: React.FC = () => {
                   >
                     <Users className="w-4 h-4" />
                     Groupes
+                  </button>
+                  <button
+                    onClick={() => {
+                      navigate('/admin/task-types');
+                      setShowMenu(false);
+                    }}
+                    className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+                  >
+                    <ListChecks className="w-4 h-4" />
+                    Types de tâches
+                  </button>
+                  <button
+                    onClick={() => {
+                      navigate('/admin/workflows');
+                      setShowMenu(false);
+                    }}
+                    className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+                  >
+                    <Workflow className="w-4 h-4" />
+                    Workflows
                   </button>
                   <button
                     onClick={() => {

@@ -73,3 +73,39 @@ def send_password_reset_email(to_email: str, username: str, code: str) -> bool:
         'Réinitialisation de votre mot de passe MarkD',
         html_content
     )
+
+def send_task_assignment_email(to_email: str, username: str, task_title: str, task_url: str, assigned_by: str) -> bool:
+    """Send email when user is assigned to a task"""
+    mjml_template = os.path.join(os.path.dirname(__file__), 'email_templates', 'task_assignment.mjml')
+    
+    html_content = compile_mjml_template(mjml_template)
+    if not html_content:
+        return False
+    
+    # Replace placeholders
+    html_content = html_content.replace('{{username}}', username)
+    html_content = html_content.replace('{{task_title}}', task_title)
+    html_content = html_content.replace('{{task_url}}', task_url)
+    html_content = html_content.replace('{{assigned_by}}', assigned_by)
+    
+    subject = f"MarkD - Nouvelle tâche assignée: {task_title}"
+    
+    return send_email(to_email, subject, html_content)
+
+def send_task_due_date_reminder(to_email: str, username: str, task_title: str, task_url: str, due_date: str) -> bool:
+    """Send email reminder for task due date"""
+    mjml_template = os.path.join(os.path.dirname(__file__), 'email_templates', 'task_due_reminder.mjml')
+    
+    html_content = compile_mjml_template(mjml_template)
+    if not html_content:
+        return False
+    
+    # Replace placeholders
+    html_content = html_content.replace('{{username}}', username)
+    html_content = html_content.replace('{{task_title}}', task_title)
+    html_content = html_content.replace('{{task_url}}', task_url)
+    html_content = html_content.replace('{{due_date}}', due_date)
+    
+    subject = f"MarkD - Rappel échéance: {task_title}"
+    
+    return send_email(to_email, subject, html_content)

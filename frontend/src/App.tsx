@@ -11,6 +11,9 @@ import SettingsPage from './pages/SettingsPage';
 import WorkspacesAdmin from './pages/WorkspacesAdmin';
 import GroupsAdmin from './pages/GroupsAdmin';
 import VaultPage from './pages/VaultPage';
+import TasksPage from './pages/TasksPage';
+import TaskTypesAdmin from './pages/TaskTypesAdmin';
+import WorkflowsAdmin from './pages/WorkflowsAdmin';
 import DocumentsApp from './DocumentsApp';
 import Header from './components/layout/Header';
 
@@ -110,6 +113,30 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <VaultPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tasks"
+          element={
+            <ProtectedRoute>
+              <TasksPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/task-types"
+          element={
+            <ProtectedRoute>
+              <TaskTypesAdmin />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/workflows"
+          element={
+            <ProtectedRoute>
+              <WorkflowsAdmin />
             </ProtectedRoute>
           }
         />
