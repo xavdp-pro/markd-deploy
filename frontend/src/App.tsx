@@ -120,7 +120,12 @@ function AppContent() {
           path="/tasks"
           element={
             <ProtectedRoute>
-              <TasksPage />
+              <div className="h-screen flex flex-col">
+                <Header />
+                <div className="flex-1 overflow-hidden">
+                  <TasksPage />
+                </div>
+              </div>
             </ProtectedRoute>
           }
         />

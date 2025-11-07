@@ -52,6 +52,7 @@ app.include_router(vault_router)
 from tasks import router as tasks_router
 app.include_router(tasks_router)
 
+
 # Socket.IO server
 sio = socketio.AsyncServer(
     async_mode='asgi',
@@ -335,6 +336,29 @@ async def delete_workspace(workspace_id: str, request: Request, user: Dict = Dep
         raise HTTPException(status_code=500, detail=str(e))
 
 # ===== Workspace Permission Endpoints =====
+
+@app.get("/api/workspaces/{workspace_id}/users")
+async def get_workspace_users(workspace_id: str, request: Request, user: Dict = Depends(get_current_user)):
+    """Get all users who have access to this workspace"""
+    try:
+        await check_workspace_permission(workspace_id, user, 'read')
+        
+        # Get all users who have access via groups
+        query = """
+            SELECT DISTINCT u.id, u.username, u.email
+            FROM users u
+            JOIN user_groups ug ON u.id = ug.user_id
+            JOIN group_workspace_permissions gwp ON ug.group_id = gwp.group_id
+            WHERE gwp.workspace_id = %s AND u.is_active = TRUE
+            ORDER BY u.username
+        """
+        users = db.execute_query(query, (workspace_id,))
+        
+        return {"success": True, "users": users}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/workspaces/{workspace_id}/permissions")
 async def get_workspace_permissions(workspace_id: str, request: Request, user: Dict = Depends(get_current_user)):

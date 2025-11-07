@@ -156,6 +156,7 @@ const TasksPage: React.FC = () => {
       setSelectedTask(response.task);
     } catch (error: any) {
       toast.error(error.message || 'Erreur lors du chargement de la tâche');
+      console.error('Error loading task:', error);
     }
   };
 
@@ -311,9 +312,9 @@ const TasksPage: React.FC = () => {
   }, [tasks]);
 
   return (
-    <div className="flex h-full bg-gray-50 dark:bg-gray-900">
+    <div className="flex h-full bg-gray-50 dark:bg-gray-900 flex-col">
       {/* Header with workspace selector */}
-      <div className="absolute top-0 left-0 right-0 h-14 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center px-4 gap-4 z-10">
+      <div className="h-14 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center px-4 gap-4 flex-shrink-0">
         <div className="flex items-center gap-2">
           <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Workspace:</label>
           <select
@@ -342,7 +343,7 @@ const TasksPage: React.FC = () => {
       </div>
 
       {/* Main content */}
-      <div className="flex w-full mt-14">
+      <div className="flex flex-1 w-full overflow-hidden">
         <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={allTaskIds} strategy={verticalListSortingStrategy}>
             {/* Task Tree */}
