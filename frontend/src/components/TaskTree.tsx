@@ -389,16 +389,6 @@ const TaskTreeNode: React.FC<TaskTreeNodeProps> = ({
           />
         )}
 
-        {/* More options */}
-        <button
-          onClick={e => {
-            e.stopPropagation();
-            onContextMenu(e, task);
-          }}
-          className="flex-shrink-0 opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded"
-        >
-          <MoreVertical size={14} className="text-gray-600 dark:text-gray-400" />
-        </button>
       </div>
 
       {/* Children */}
