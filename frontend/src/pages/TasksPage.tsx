@@ -38,11 +38,6 @@ const TasksPage: React.FC = () => {
   });
   const [isResizing, setIsResizing] = useState(false);
   
-  const [createModalTask, setCreateModalTask] = useState<{
-    parentId: string | null;
-    taskType: TaskType;
-  } | null>(null);
-  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; title: string } | null>(null);
 
   // Load workspaces
   useEffect(() => {
@@ -160,16 +155,17 @@ const TasksPage: React.FC = () => {
     }
   };
 
-  const handleCreateTask = async (parentId: string | null, taskType: TaskType) => {
-    setCreateModalTask({ parentId, taskType });
-  };
-
-  const handleConfirmCreate = async (title: string) => {
-    if (!createModalTask) return;
-
+  const handleCreateTask = async (parentId: string | null, title: string) => {
     const defaultWorkflow = workflows.find(w => w.is_default) || workflows[0];
     if (!defaultWorkflow) {
       toast.error('Aucun workflow disponible');
+      return;
+    }
+
+    // Default task type = "Task" (id 3)
+    const defaultTaskType = taskTypes.find(t => t.name === 'Task') || taskTypes[0];
+    if (!defaultTaskType) {
+      toast.error('Aucun type de tâche disponible');
       return;
     }
 
@@ -178,8 +174,8 @@ const TasksPage: React.FC = () => {
     try {
       const response = await api.createTask({
         workspace_id: currentWorkspace,
-        parent_id: createModalTask.parentId,
-        task_type_id: createModalTask.taskType.id,
+        parent_id: parentId,
+        task_type_id: defaultTaskType.id,
         workflow_id: defaultWorkflow.id,
         title,
         status: defaultStatus,
@@ -191,37 +187,66 @@ const TasksPage: React.FC = () => {
       websocket.notifyTaskUpdated({ action: 'created', task_id: response.id });
       
       // Auto-expand parent
-      if (createModalTask.parentId) {
-        setExpanded(prev => ({ ...prev, [createModalTask.parentId!]: true }));
+      if (parentId) {
+        setExpanded(prev => ({ ...prev, [parentId]: true }));
       }
     } catch (error: any) {
       toast.error(error.message || 'Erreur lors de la création');
-    } finally {
-      setCreateModalTask(null);
+    }
+  };
+
+  const handleCreateFolder = async (parentId: string | null, title: string) => {
+    // For now, folders are just tasks with a special type
+    // We could add a "Folder" type or just use Epic
+    const folderType = taskTypes.find(t => t.name === 'Epic') || taskTypes[0];
+    const defaultWorkflow = workflows.find(w => w.is_default) || workflows[0];
+
+    try {
+      const response = await api.createTask({
+        workspace_id: currentWorkspace,
+        parent_id: parentId,
+        task_type_id: folderType.id,
+        workflow_id: defaultWorkflow.id,
+        title,
+        description: '_Dossier de tâches_',
+        status: defaultWorkflow.statuses[0]?.key || 'todo',
+        priority: 'medium',
+      });
+
+      toast.success('Dossier créé');
+      loadTasksTree();
+      websocket.notifyTaskUpdated({ action: 'created', task_id: response.id });
+      
+      if (parentId) {
+        setExpanded(prev => ({ ...prev, [parentId]: true }));
+      }
+    } catch (error: any) {
+      toast.error(error.message || 'Erreur lors de la création');
+    }
+  };
+
+  const handleRenameTask = async (taskId: string, newTitle: string) => {
+    try {
+      await api.updateTask(taskId, { title: newTitle });
+      toast.success('Tâche renommée');
+      loadTasksTree();
+      websocket.notifyTaskUpdated({ action: 'renamed', task_id: taskId });
+    } catch (error: any) {
+      toast.error(error.message || 'Erreur lors du renommage');
     }
   };
 
   const handleDeleteTask = async (taskId: string) => {
-    const task = findTaskById(tasks, taskId);
-    if (!task) return;
-    setDeleteConfirm({ id: taskId, title: task.title });
-  };
-
-  const handleConfirmDelete = async () => {
-    if (!deleteConfirm) return;
-
     try {
-      await api.deleteTask(deleteConfirm.id);
+      await api.deleteTask(taskId);
       toast.success('Tâche supprimée');
       loadTasksTree();
-      websocket.notifyTaskUpdated({ action: 'deleted', task_id: deleteConfirm.id });
-      if (selectedTask?.id === deleteConfirm.id) {
+      websocket.notifyTaskUpdated({ action: 'deleted', task_id: taskId });
+      if (selectedTask?.id === taskId) {
         setSelectedTask(null);
       }
     } catch (error: any) {
       toast.error(error.message || 'Erreur lors de la suppression');
-    } finally {
-      setDeleteConfirm(null);
     }
   };
 
@@ -359,11 +384,12 @@ const TasksPage: React.FC = () => {
                   loadTask(task.id);
                 }}
                 onCreateTask={handleCreateTask}
+                onCreateFolder={handleCreateFolder}
+                onRenameTask={handleRenameTask}
                 onDeleteTask={handleDeleteTask}
                 onDuplicateTask={handleDuplicateTask}
                 expanded={expanded}
                 onToggle={handleToggle}
-                taskTypes={taskTypes}
                 className="flex-1 overflow-hidden flex flex-col"
               />
 
@@ -399,31 +425,6 @@ const TasksPage: React.FC = () => {
           )}
         </div>
       </div>
-
-      {/* Create task modal */}
-      {createModalTask && (
-        <InputModal
-          isOpen={true}
-          onClose={() => setCreateModalTask(null)}
-          onConfirm={handleConfirmCreate}
-          title={`Nouvelle ${createModalTask.taskType.name}`}
-          placeholder="Titre de la tâche..."
-          confirmText="Créer"
-        />
-      )}
-
-      {/* Delete confirmation */}
-      {deleteConfirm && (
-        <ConfirmModal
-          isOpen={true}
-          onClose={() => setDeleteConfirm(null)}
-          onConfirm={handleConfirmDelete}
-          title="Supprimer la tâche"
-          message={`Êtes-vous sûr de vouloir supprimer "${deleteConfirm.title}" ? Cette action supprimera également toutes les sous-tâches.`}
-          confirmText="Supprimer"
-          confirmStyle="danger"
-        />
-      )}
 
       {loading && (
         <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50">
