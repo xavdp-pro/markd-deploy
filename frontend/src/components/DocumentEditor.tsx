@@ -1,8 +1,10 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import MDEditor from '@uiw/react-md-editor';
-import { Document } from '../types';
-import { Image, Upload } from 'lucide-react';
+import { Document, Tag as TagType } from '../types';
+import { Image, Upload, Tag } from 'lucide-react';
 import toast from 'react-hot-toast';
+import TagSelector from './TagSelector';
+import { api } from '../services/api';
 
 interface DocumentEditorProps {
   document: Document;
@@ -22,9 +24,69 @@ const DocumentEditor: React.FC<DocumentEditorProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [tags, setTags] = useState<TagType[]>([]);
+  const [availableTags, setAvailableTags] = useState<TagType[]>([]);
   
   // Detect dark mode
   const isDarkMode = typeof window !== 'undefined' && window.document.documentElement.classList.contains('dark');
+  
+  useEffect(() => {
+    if (document.id) {
+      loadTags();
+      loadTagSuggestions();
+    }
+  }, [document.id]);
+  
+  const loadTags = async () => {
+    try {
+      const result = await api.getDocumentTags(document.id);
+      if (result.success) {
+        setTags(result.tags);
+      }
+    } catch (error) {
+      console.error('Error loading tags:', error);
+    }
+  };
+  
+  const loadTagSuggestions = async () => {
+    try {
+      const result = await api.getDocumentTagSuggestions('', 20);
+      if (result.success) {
+        setAvailableTags(result.tags);
+      }
+    } catch (error) {
+      console.error('Error loading tag suggestions:', error);
+    }
+  };
+  
+  const handleAddTag = async (name: string) => {
+    try {
+      const newTags = [...tags.map(t => t.name), name];
+      const result = await api.updateDocumentTags(document.id, newTags);
+      if (result.success) {
+        setTags(result.tags);
+        await loadTagSuggestions();
+        toast.success('Tag ajouté');
+      }
+    } catch (error) {
+      toast.error('Erreur lors de l\'ajout du tag');
+      throw error;
+    }
+  };
+  
+  const handleRemoveTag = async (tagId: string) => {
+    try {
+      const newTags = tags.filter(t => t.id !== tagId).map(t => t.name);
+      const result = await api.updateDocumentTags(document.id, newTags);
+      if (result.success) {
+        setTags(result.tags);
+        toast.success('Tag supprimé');
+      }
+    } catch (error) {
+      toast.error('Erreur lors de la suppression du tag');
+      throw error;
+    }
+  };
 
   const uploadImage = async (file: File) => {
     if (!file) return;
@@ -103,7 +165,8 @@ const DocumentEditor: React.FC<DocumentEditorProps> = ({
 
   return (
     <>
-      <div className="p-4 border-b bg-white dark:bg-gray-800 dark:border-gray-700 flex items-center justify-between">
+      <div className="p-4 border-b bg-white dark:bg-gray-800 dark:border-gray-700">
+        <div className="flex items-center justify-between mb-3">
         <h2 className="font-bold text-lg text-gray-900 dark:text-white">{document.name}</h2>
         <div className="flex gap-2">
           <input
@@ -144,6 +207,7 @@ const DocumentEditor: React.FC<DocumentEditorProps> = ({
             Annuler
           </button>
         </div>
+        </div>
       </div>
 
       <div 
@@ -153,6 +217,21 @@ const DocumentEditor: React.FC<DocumentEditorProps> = ({
         onDragOver={handleDrag}
         onDrop={handleDrop}
       >
+        {document.type === 'file' && (
+          <div className="px-4 py-3 border-b bg-white dark:bg-gray-800 dark:border-gray-700">
+            <div className="flex items-center gap-2 mb-2">
+              <Tag size={14} className="text-gray-600 dark:text-gray-400" />
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Tags</span>
+            </div>
+            <TagSelector
+              tags={tags}
+              suggestions={availableTags}
+              onAddTag={handleAddTag}
+              onRemoveTag={handleRemoveTag}
+            />
+          </div>
+        )}
+
         {dragActive && (
           <div className="absolute inset-0 z-50 bg-blue-500 bg-opacity-10 border-4 border-dashed border-blue-500 flex items-center justify-center">
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 text-center">

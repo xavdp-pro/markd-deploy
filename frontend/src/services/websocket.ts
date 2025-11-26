@@ -5,13 +5,15 @@ type TreeUpdateCallback = (tree: Document[]) => void;
 type TreeChangedCallback = () => void;
 type LockUpdateCallback = (documentId: string, lockInfo: LockInfo | null) => void;
 type UserEditingCallback = (data: { document_id: string; user_name: string }) => void;
+type DocumentUpdatedCallback = (data: { document_id: string; name?: string | null }) => void;
 
-// Task-related callbacks
-type TaskUpdatedCallback = (data: any) => void;
-type TaskStatusChangedCallback = (data: { task_id: string; status: string; user_name: string; task_title: string }) => void;
-type TaskCommentAddedCallback = (data: { task_id: string; comment: any }) => void;
-type TaskAssignedCallback = (data: { task_id: string; user_id: number; user_name: string }) => void;
-type TaskMovedCallback = (data: { task_id: string; parent_id: string | null }) => void;
+type TaskTreeChangedCallback = () => void;
+type TaskLockUpdateCallback = (taskId: string, lockInfo: LockInfo | null) => void;
+type TaskActivityUpdateCallback = (taskId: string) => void;
+
+// Vault (Passwords) callbacks
+type VaultTreeChangedCallback = () => void;
+type VaultItemUpdatedCallback = (data: { password_id: string; name?: string | null }) => void;
 
 class WebSocketService {
   private socket: Socket | null = null;
@@ -19,13 +21,15 @@ class WebSocketService {
   private treeChangedCallbacks: Set<TreeChangedCallback> = new Set();
   private lockUpdateCallbacks: Set<LockUpdateCallback> = new Set();
   private userEditingCallbacks: Set<UserEditingCallback> = new Set();
-  
-  // Task callbacks
-  private taskUpdatedCallbacks: Set<TaskUpdatedCallback> = new Set();
-  private taskStatusChangedCallbacks: Set<TaskStatusChangedCallback> = new Set();
-  private taskCommentAddedCallbacks: Set<TaskCommentAddedCallback> = new Set();
-  private taskAssignedCallbacks: Set<TaskAssignedCallback> = new Set();
-  private taskMovedCallbacks: Set<TaskMovedCallback> = new Set();
+  private documentUpdatedCallbacks: Set<DocumentUpdatedCallback> = new Set();
+
+  private taskTreeChangedCallbacks: Set<TaskTreeChangedCallback> = new Set();
+  private taskLockUpdateCallbacks: Set<TaskLockUpdateCallback> = new Set();
+  private taskActivityCallbacks: Set<TaskActivityUpdateCallback> = new Set();
+
+  // Vault (Passwords) callbacks
+  private vaultTreeChangedCallbacks: Set<VaultTreeChangedCallback> = new Set();
+  private vaultItemUpdatedCallbacks: Set<VaultItemUpdatedCallback> = new Set();
 
   connect() {
     if (this.socket?.connected) {
@@ -60,26 +64,29 @@ class WebSocketService {
     this.socket.on('user_editing', (data: { document_id: string; user_name: string }) => {
       this.userEditingCallbacks.forEach(cb => cb(data));
     });
-
-    // Task WebSocket events
-    this.socket.on('task_updated', (data: any) => {
-      this.taskUpdatedCallbacks.forEach(cb => cb(data));
+    this.socket.on('document_content_updated', (data: { document_id: string; name?: string | null }) => {
+      this.documentUpdatedCallbacks.forEach(cb => cb(data));
     });
 
-    this.socket.on('task_status_changed', (data: { task_id: string; status: string; user_name: string; task_title: string }) => {
-      this.taskStatusChangedCallbacks.forEach(cb => cb(data));
+    this.socket.on('task_tree_changed', () => {
+      this.taskTreeChangedCallbacks.forEach(cb => cb());
     });
 
-    this.socket.on('task_comment_added', (data: { task_id: string; comment: any }) => {
-      this.taskCommentAddedCallbacks.forEach(cb => cb(data));
+    this.socket.on('task_lock_updated', (data: { task_id: string; locked_by: LockInfo | null }) => {
+      this.taskLockUpdateCallbacks.forEach(cb => cb(data.task_id, data.locked_by));
     });
 
-    this.socket.on('task_assigned', (data: { task_id: string; user_id: number; user_name: string }) => {
-      this.taskAssignedCallbacks.forEach(cb => cb(data));
+    this.socket.on('task_activity_updated', (data: { task_id: string }) => {
+      this.taskActivityCallbacks.forEach(cb => cb(data.task_id));
     });
 
-    this.socket.on('task_moved', (data: { task_id: string; parent_id: string | null }) => {
-      this.taskMovedCallbacks.forEach(cb => cb(data));
+    // Vault (Passwords) events
+    this.socket.on('vault_tree_changed', () => {
+      this.vaultTreeChangedCallbacks.forEach(cb => cb());
+    });
+
+    this.socket.on('vault_item_updated', (data: { password_id: string; name?: string | null }) => {
+      this.vaultItemUpdatedCallbacks.forEach(cb => cb(data));
     });
   }
 
@@ -120,52 +127,59 @@ class WebSocketService {
     this.userEditingCallbacks.add(callback);
     return () => this.userEditingCallbacks.delete(callback);
   }
-
-  // Task event listeners
-  onTaskUpdated(callback: TaskUpdatedCallback) {
-    this.taskUpdatedCallbacks.add(callback);
-    return () => this.taskUpdatedCallbacks.delete(callback);
+  onDocumentUpdated(callback: DocumentUpdatedCallback) {
+    this.documentUpdatedCallbacks.add(callback);
+    return () => this.documentUpdatedCallbacks.delete(callback);
   }
 
-  onTaskStatusChanged(callback: TaskStatusChangedCallback) {
-    this.taskStatusChangedCallbacks.add(callback);
-    return () => this.taskStatusChangedCallbacks.delete(callback);
+  onTaskTreeChanged(callback: TaskTreeChangedCallback) {
+    this.taskTreeChangedCallbacks.add(callback);
+    return () => this.taskTreeChangedCallbacks.delete(callback);
   }
 
-  onTaskCommentAdded(callback: TaskCommentAddedCallback) {
-    this.taskCommentAddedCallbacks.add(callback);
-    return () => this.taskCommentAddedCallbacks.delete(callback);
+  onTaskLockUpdate(callback: TaskLockUpdateCallback) {
+    this.taskLockUpdateCallbacks.add(callback);
+    return () => this.taskLockUpdateCallbacks.delete(callback);
   }
 
-  onTaskAssigned(callback: TaskAssignedCallback) {
-    this.taskAssignedCallbacks.add(callback);
-    return () => this.taskAssignedCallbacks.delete(callback);
+  onTaskActivityUpdate(callback: TaskActivityUpdateCallback) {
+    this.taskActivityCallbacks.add(callback);
+    return () => this.taskActivityCallbacks.delete(callback);
   }
 
-  onTaskMoved(callback: TaskMovedCallback) {
-    this.taskMovedCallbacks.add(callback);
-    return () => this.taskMovedCallbacks.delete(callback);
+  notifyDocumentUpdated(documentId: string, name?: string) {
+    this.socket?.emit('document_content_updated', { document_id: documentId, name });
   }
 
-  // Task event emitters (for broadcasting to other clients)
-  notifyTaskUpdated(data: any) {
-    this.socket?.emit('task_updated', data);
+  notifyTaskTreeChanged() {
+    this.socket?.emit('task_tree_changed');
   }
 
-  notifyTaskStatusChanged(data: { task_id: string; status: string; user_name: string; task_title: string }) {
-    this.socket?.emit('task_status_changed', data);
+  notifyTaskLockUpdate(taskId: string, lockInfo: LockInfo | null) {
+    this.socket?.emit('task_lock_updated', { task_id: taskId, locked_by: lockInfo });
   }
 
-  notifyTaskCommentAdded(data: { task_id: string; comment: any }) {
-    this.socket?.emit('task_comment_added', data);
+  notifyTaskActivity(taskId: string) {
+    this.socket?.emit('task_activity_updated', { task_id: taskId });
   }
 
-  notifyTaskAssigned(data: { task_id: string; user_id: number; user_name: string }) {
-    this.socket?.emit('task_assigned', data);
+  // Vault (Passwords) methods
+  onVaultTreeChanged(callback: VaultTreeChangedCallback) {
+    this.vaultTreeChangedCallbacks.add(callback);
+    return () => this.vaultTreeChangedCallbacks.delete(callback);
   }
 
-  notifyTaskMoved(data: { task_id: string; parent_id: string | null }) {
-    this.socket?.emit('task_moved', data);
+  onVaultItemUpdated(callback: VaultItemUpdatedCallback) {
+    this.vaultItemUpdatedCallbacks.add(callback);
+    return () => this.vaultItemUpdatedCallbacks.delete(callback);
+  }
+
+  notifyVaultTreeChanged() {
+    this.socket?.emit('vault_tree_changed');
+  }
+
+  notifyVaultItemUpdated(passwordId: string, name?: string) {
+    this.socket?.emit('vault_item_updated', { password_id: passwordId, name });
   }
 }
 

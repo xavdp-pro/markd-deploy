@@ -1,13 +1,19 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { FileText, User, Settings, LogOut, Shield, Mail, FolderTree, Users, Sun, Moon, CheckSquare, ListChecks, Workflow } from 'lucide-react';
+import { FileText, User, Settings, LogOut, Shield, Mail, FolderTree, Users, Sun, Moon, CheckSquare, ListChecks, Workflow, Tag, Lock, ChevronDown } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { useSettings } from '../../contexts/SettingsContext';
+import { useWorkspace } from '../../contexts/WorkspaceContext';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 const Header: React.FC = () => {
   const { user, logout } = useAuth();
+  const { modules } = useSettings();
+  const { workspaces, currentWorkspace, setCurrentWorkspace, loading: workspacesLoading } = useWorkspace();
   const [showMenu, setShowMenu] = useState(false);
+  const [showWorkspaceMenu, setShowWorkspaceMenu] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const workspaceMenuRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -15,6 +21,9 @@ const Header: React.FC = () => {
     const handleClickOutside = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setShowMenu(false);
+      }
+      if (workspaceMenuRef.current && !workspaceMenuRef.current.contains(event.target as Node)) {
+        setShowWorkspaceMenu(false);
       }
     };
 
@@ -60,39 +69,88 @@ const Header: React.FC = () => {
             <h1 className="text-2xl font-bold text-gray-800 dark:text-white">MarkD</h1>
           </button>
 
+          {/* Workspace Selector */}
+          <div className="relative" ref={workspaceMenuRef}>
+            <button
+              onClick={() => setShowWorkspaceMenu(!showWorkspaceMenu)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+              disabled={workspacesLoading}
+            >
+              <div className="flex flex-col items-start">
+                <span className="text-xs text-gray-500 dark:text-gray-400">Workspace</span>
+                <span className="text-sm font-medium text-gray-900 dark:text-white">
+                  {workspacesLoading ? 'Loading...' : workspaces.find(w => w.id === currentWorkspace)?.name || 'Select Workspace'}
+                </span>
+              </div>
+              <ChevronDown size={14} className={`text-gray-500 transition-transform ${showWorkspaceMenu ? 'rotate-180' : ''}`} />
+            </button>
+
+            {showWorkspaceMenu && (
+              <div className="absolute left-0 mt-2 w-64 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-1 z-50">
+                {workspaces.map((ws) => (
+                  <button
+                    key={ws.id}
+                    onClick={() => {
+                      setCurrentWorkspace(ws.id);
+                      setShowWorkspaceMenu(false);
+                    }}
+                    className={`w-full px-4 py-2 text-left text-sm flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-700/50 ${
+                      currentWorkspace === ws.id
+                        ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300'
+                        : 'text-gray-700 dark:text-gray-300'
+                    }`}
+                  >
+                    <span>{ws.name}</span>
+                    {currentWorkspace === ws.id && <div className="w-2 h-2 rounded-full bg-blue-600 dark:bg-blue-400" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Navigation Menu */}
           <nav className="flex items-center gap-1">
-            <button
-              onClick={() => navigate('/')}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                location.pathname === '/' 
-                  ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300' 
-                  : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
-              }`}
-            >
-              Documents
-            </button>
-            <button
-              onClick={() => navigate('/tasks')}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
-                location.pathname === '/tasks' 
-                  ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300' 
-                  : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
-              }`}
-            >
-              <CheckSquare size={16} />
-              Tasks
-            </button>
-            <button
-              onClick={() => navigate('/vault')}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                location.pathname === '/vault' 
-                  ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300' 
-                  : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
-              }`}
-            >
-              Passwords
-            </button>
+            {modules.documents && (
+              <button
+                onClick={() => navigate('/')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                  location.pathname === '/' 
+                    ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300' 
+                    : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+                }`}
+              >
+                <FileText size={16} />
+                Documents
+              </button>
+            )}
+            
+            {modules.tasks && (
+              <button
+                onClick={() => navigate('/tasks')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                  location.pathname === '/tasks' 
+                    ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300' 
+                    : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+                }`}
+              >
+                <CheckSquare size={16} />
+                Tasks
+              </button>
+            )}
+            
+            {modules.passwords && (
+              <button
+                onClick={() => navigate('/vault')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                  location.pathname === '/vault' 
+                    ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300' 
+                    : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+                }`}
+              >
+                <Lock size={16} />
+                Passwords
+              </button>
+            )}
           </nav>
         </div>
 
@@ -187,7 +245,17 @@ const Header: React.FC = () => {
                     className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
                   >
                     <Users className="w-4 h-4" />
-                    Groupes
+                    Groups
+                  </button>
+                  <button
+                    onClick={() => {
+                      navigate('/admin/tags');
+                      setShowMenu(false);
+                    }}
+                    className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+                  >
+                    <Tag className="w-4 h-4" />
+                    Tags
                   </button>
                   <button
                     onClick={() => {
@@ -197,7 +265,7 @@ const Header: React.FC = () => {
                     className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
                   >
                     <ListChecks className="w-4 h-4" />
-                    Types de tâches
+                    Task types
                   </button>
                   <button
                     onClick={() => {

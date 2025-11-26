@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, FolderTree, Save, X, Users, Shield, Eye, Edit } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useAuth } from '../contexts/AuthContext';
 
 interface Workspace {
   id: string;
   name: string;
   description?: string;
+  user_permission?: string;
 }
 
 interface Group {
@@ -20,6 +22,8 @@ interface GroupPermission {
 }
 
 const WorkspacesAdmin: React.FC = () => {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [permissions, setPermissions] = useState<{ [wsId: string]: GroupPermission }>({});
@@ -40,15 +44,22 @@ const WorkspacesAdmin: React.FC = () => {
       const wsRes = await fetch('/api/workspaces', { credentials: 'include' });
       const wsData = await wsRes.json();
 
-      // Load groups
-      const groupsRes = await fetch('/api/groups', { credentials: 'include' });
-      const groupsData = await groupsRes.json();
+      // Always set workspaces, even if groups fail to load
+      if (wsData.success) {
+        setWorkspaces(wsData.workspaces || []);
+      }
 
-      if (wsData.success && groupsData.success) {
-        setWorkspaces(wsData.workspaces);
-        setGroups(groupsData.groups);
+      // Only load groups and permissions if user is admin
+      if (isAdmin) {
+        const groupsRes = await fetch('/api/groups', { credentials: 'include' });
+        const groupsData = await groupsRes.json();
 
-        // Load permissions for all workspaces
+      if (groupsData.success) {
+        setGroups(groupsData.groups || []);
+      }
+
+      // Load permissions for all workspaces only if both workspaces and groups loaded successfully
+      if (wsData.success && groupsData.success && wsData.workspaces && groupsData.groups) {
         const permsMap: { [wsId: string]: GroupPermission } = {};
 
         await Promise.all(
@@ -63,16 +74,20 @@ const WorkspacesAdmin: React.FC = () => {
             // Load actual permissions for each group
             await Promise.all(
               groupsData.groups.map(async (group: Group) => {
-                const res = await fetch(`/api/groups/${group.id}/workspaces`, {
-                  credentials: 'include'
-                });
-                const data = await res.json();
+                try {
+                  const res = await fetch(`/api/groups/${group.id}/workspaces`, {
+                    credentials: 'include'
+                  });
+                  const data = await res.json();
 
-                if (data.success) {
-                  const hasAccess = data.workspaces.find((w: any) => w.id === ws.id);
-                  if (hasAccess) {
-                    wsPerms[group.id] = hasAccess.permission_level;
+                  if (data.success && data.workspaces) {
+                    const hasAccess = data.workspaces.find((w: any) => w.id === ws.id);
+                    if (hasAccess) {
+                      wsPerms[group.id] = hasAccess.permission_level;
+                    }
                   }
+                } catch (err) {
+                  console.error(`Error loading permissions for group ${group.id}:`, err);
                 }
               })
             );
@@ -82,6 +97,7 @@ const WorkspacesAdmin: React.FC = () => {
         );
 
         setPermissions(permsMap);
+        }
       }
     } catch (err) {
       console.error('Error loading data:', err);
@@ -247,6 +263,15 @@ const WorkspacesAdmin: React.FC = () => {
     setFormData({ name: '', description: '' });
   };
 
+  const getPermissionLabel = (perm: string | undefined) => {
+    switch (perm) {
+      case 'admin': return 'Admin';
+      case 'write': return 'Écriture (RW)';
+      case 'read': return 'Lecture (RO)';
+      default: return 'Aucun accès';
+    }
+  };
+
   if (loading) {
     return <div className="p-8 text-center text-gray-900 dark:text-gray-100 bg-gray-50 dark:bg-gray-900 min-h-screen">Chargement...</div>;
   }
@@ -255,9 +280,14 @@ const WorkspacesAdmin: React.FC = () => {
     <div className="p-8 max-w-7xl mx-auto bg-gray-50 dark:bg-gray-900 min-h-screen">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Gestion des Workspaces</h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-1">Configurez les permissions par groupe métier</p>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+            {isAdmin ? 'Gestion des Workspaces' : 'Mes Workspaces'}
+          </h1>
+          <p className="text-gray-600 dark:text-gray-400 mt-1">
+            {isAdmin ? 'Configurez les permissions par groupe métier' : 'Vos workspaces et vos droits d\'accès'}
+          </p>
         </div>
+        {isAdmin && (
         <button
           onClick={() => setCreating(true)}
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors"
@@ -265,9 +295,11 @@ const WorkspacesAdmin: React.FC = () => {
           <Plus className="w-5 h-5" />
           Nouveau Workspace
         </button>
+        )}
       </div>
 
       {/* Info Box */}
+      {isAdmin && (
       <div className="mb-6 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
         <p className="text-sm text-blue-900 dark:text-blue-300">
           <strong>Principe :</strong> Les utilisateurs font partie de groupes métier (ALL, Developers, etc.). 
@@ -277,9 +309,10 @@ const WorkspacesAdmin: React.FC = () => {
           <strong>Aucun</strong> = pas d'accès • <strong>RO</strong> = lecture seule • <strong>RW</strong> = lecture + écriture • <strong>Admin</strong> = accès complet
         </p>
       </div>
+      )}
 
       {/* Create Form */}
-      {creating && (
+      {isAdmin && creating && (
         <div className="mb-6 p-6 bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700">
           <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">Créer un workspace</h3>
           <div className="space-y-4">
@@ -331,10 +364,11 @@ const WorkspacesAdmin: React.FC = () => {
       <div className="space-y-6">
         {workspaces.map((workspace) => {
           const wsPerms = permissions[workspace.id] || {};
+          const userPermission = workspace.user_permission || 'none';
 
           return (
             <div key={workspace.id} className="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700">
-              {editing === workspace.id ? (
+              {isAdmin && editing === workspace.id ? (
                 <div className="p-6 space-y-4">
                   <input
                     type="text"
@@ -379,6 +413,14 @@ const WorkspacesAdmin: React.FC = () => {
                           <p className="text-gray-600 dark:text-gray-400 text-sm">{workspace.description}</p>
                         )}
                       </div>
+                      <div className="flex items-center gap-4">
+                        {/* Display user permission for non-admins */}
+                        {!isAdmin && (
+                          <div className={`px-3 py-1.5 rounded-md border text-sm font-medium ${getPermissionColor(userPermission)}`}>
+                            {getPermissionLabel(userPermission)}
+                          </div>
+                        )}
+                        {isAdmin && (
                       <div className="flex gap-2">
                         <button
                           onClick={() => startEdit(workspace)}
@@ -394,11 +436,14 @@ const WorkspacesAdmin: React.FC = () => {
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
 
-                  {/* Permissions Table */}
+                  {/* Permissions Table - Only for admins */}
+                  {isAdmin && (
                   <div className="p-6">
                     <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
                       <Users className="w-4 h-4 text-gray-900 dark:text-white" />
@@ -444,6 +489,27 @@ const WorkspacesAdmin: React.FC = () => {
                       })}
                     </div>
                   </div>
+                  )}
+                  
+                  {/* User permission info for non-admins */}
+                  {!isAdmin && (
+                    <div className="p-6 border-t border-gray-200 dark:border-gray-700">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Vos droits sur ce workspace</h4>
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            {userPermission === 'admin' && 'Vous avez un accès complet à ce workspace'}
+                            {userPermission === 'write' && 'Vous pouvez lire et modifier les documents de ce workspace'}
+                            {userPermission === 'read' && 'Vous pouvez uniquement lire les documents de ce workspace'}
+                            {userPermission === 'none' && 'Vous n\'avez pas accès à ce workspace'}
+                          </p>
+                        </div>
+                        <div className={`px-4 py-2 rounded-md border text-sm font-medium ${getPermissionColor(userPermission)}`}>
+                          {getPermissionLabel(userPermission)}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>
@@ -454,13 +520,17 @@ const WorkspacesAdmin: React.FC = () => {
       {workspaces.length === 0 && (
         <div className="text-center py-12 bg-gray-50 dark:bg-gray-800 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-700">
           <FolderTree className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
-          <p className="text-gray-600 dark:text-gray-400 mb-4">Aucun workspace créé</p>
+          <p className="text-gray-600 dark:text-gray-400 mb-4">
+            {isAdmin ? 'Aucun workspace créé' : 'Aucun workspace accessible'}
+          </p>
+          {isAdmin && (
           <button
             onClick={() => setCreating(true)}
             className="px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-600"
           >
             Créer le premier workspace
           </button>
+          )}
         </div>
       )}
     </div>

@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { SettingsProvider } from './contexts/SettingsContext';
+import { WorkspaceProvider } from './contexts/WorkspaceContext';
 import LoginPage from './pages/LoginPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import AdminPage from './pages/AdminPage';
@@ -10,6 +12,7 @@ import ProfilePage from './pages/ProfilePage';
 import SettingsPage from './pages/SettingsPage';
 import WorkspacesAdmin from './pages/WorkspacesAdmin';
 import GroupsAdmin from './pages/GroupsAdmin';
+import TagsAdmin from './pages/TagsAdmin';
 import VaultPage from './pages/VaultPage';
 import TasksApp from './TasksApp';
 import DocumentsApp from './DocumentsApp';
@@ -17,7 +20,7 @@ import Header from './components/layout/Header';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, isLoading } = useAuth();
-  
+
   if (isLoading) {
     return (
       <div className="h-screen flex items-center justify-center">
@@ -25,7 +28,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
       </div>
     );
   }
-  
+
   return user ? <>{children}</> : <Navigate to="/login" replace />;
 }
 
@@ -107,6 +110,14 @@ function AppContent() {
           }
         />
         <Route
+          path="/admin/tags"
+          element={
+            <ProtectedRoute>
+              <TagsAdmin />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/vault"
           element={
             <ProtectedRoute>
@@ -140,22 +151,26 @@ function App() {
     const checkDarkMode = () => {
       setIsDarkMode(document.documentElement.classList.contains('dark'));
     };
-    
+
     checkDarkMode();
-    
+
     // Observer les changements de classe sur <html>
     const observer = new MutationObserver(checkDarkMode);
     observer.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ['class']
     });
-    
+
     return () => observer.disconnect();
   }, []);
 
   return (
     <AuthProvider>
-      <AppContent />
+      <SettingsProvider>
+        <WorkspaceProvider>
+          <AppContent />
+        </WorkspaceProvider>
+      </SettingsProvider>
       <Toaster
         position="top-right"
         toastOptions={{
@@ -165,7 +180,7 @@ function App() {
             color: isDarkMode ? '#f3f4f6' : '#363636',
             padding: '16px',
             borderRadius: '8px',
-            boxShadow: isDarkMode 
+            boxShadow: isDarkMode
               ? '0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2)'
               : '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
             border: isDarkMode ? '1px solid #374151' : 'none',

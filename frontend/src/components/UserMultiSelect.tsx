@@ -68,12 +68,12 @@ const UserMultiSelect: React.FC<UserMultiSelectProps> = ({
     <div className={`relative ${className}`}>
       {/* Selected users */}
       <div className="mb-2">
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-          Assignés
+        <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+          Assignees
         </label>
         <div className="flex flex-wrap gap-2">
           {selectedUsers.length === 0 ? (
-            <span className="text-sm text-gray-400">Aucun utilisateur assigné</span>
+            <span className="text-sm text-gray-400">No assignees</span>
           ) : (
             selectedUsers.map(user => (
               <div
@@ -82,13 +82,13 @@ const UserMultiSelect: React.FC<UserMultiSelectProps> = ({
               >
                 <span>{user.username}</span>
                 {responsibleUserId === user.id && (
-                  <Crown size={14} className="text-yellow-500" title="Responsable" />
+                  <Crown size={14} className="text-yellow-500" title="Responsible" />
                 )}
                 {responsibleUserId !== user.id && (
                   <button
                     onClick={() => handleSetResponsible(user.id)}
                     className="text-gray-500 hover:text-yellow-500"
-                    title="Définir comme responsable"
+                    title="Set as responsible"
                   >
                     <Crown size={14} />
                   </button>
@@ -107,8 +107,8 @@ const UserMultiSelect: React.FC<UserMultiSelectProps> = ({
 
       {/* Search and add */}
       <div>
-        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-          Ajouter des utilisateurs
+        <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+          Add users
         </label>
         <div className="relative">
           <input
@@ -119,7 +119,7 @@ const UserMultiSelect: React.FC<UserMultiSelectProps> = ({
               setIsOpen(true);
             }}
             onFocus={() => setIsOpen(true)}
-            placeholder="Rechercher un utilisateur..."
+            placeholder="Search a user..."
             className="w-full px-3 py-2 pl-9 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-800 dark:text-gray-100"
           />
           <Search size={18} className="absolute left-3 top-2.5 text-gray-400" />
@@ -154,7 +154,7 @@ const UserMultiSelect: React.FC<UserMultiSelectProps> = ({
       </div>
 
       {loading && (
-        <div className="text-sm text-gray-400 mt-2">Chargement des utilisateurs...</div>
+        <div className="mt-2 text-sm text-gray-400">Loading users...</div>
       )}
     </div>
   );

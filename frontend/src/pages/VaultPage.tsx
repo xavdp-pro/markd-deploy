@@ -1,33 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Header from '../components/layout/Header';
-import { Key, Plus, Eye, EyeOff, Copy, Edit2, Trash2, Search, Lock, Shield, X } from 'lucide-react';
+import { Key, Lock, Folder } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { useWorkspace } from '../contexts/WorkspaceContext';
 import { toast } from 'react-hot-toast';
 import ConfirmModal from '../components/ConfirmModal';
-
-interface Password {
-  id: string;
-  title: string;
-  username: string | null;
-  url: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface PasswordDetail extends Password {
-  password: string;
-  notes: string | null;
-  workspace_id: string;
-  created_by: number;
-}
+import PasswordTree from '../components/PasswordTree';
+import PasswordForm, { PasswordFormData } from '../components/PasswordForm';
+import PasswordDetailView from '../components/PasswordDetailView';
+import { api } from '../services/api';
+import { websocket } from '../services/websocket';
+import { Tag as TagType, PasswordItem, PasswordDetail } from '../types';
+import { DndContext, DragEndEvent, DragOverlay, DragStartEvent } from '@dnd-kit/core';
 
 const VaultPage: React.FC = () => {
   const { user } = useAuth();
-  const [workspaces, setWorkspaces] = useState<any[]>([]);
-  const [currentWorkspace, setCurrentWorkspace] = useState<string>('');
-  const [passwords, setPasswords] = useState<Password[]>([]);
+  const { currentWorkspaceId: currentWorkspace, userPermission } = useWorkspace();
+  const [tree, setTree] = useState<PasswordItem[]>([]);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [selectedPassword, setSelectedPassword] = useState<PasswordDetail | null>(null);
-  const [showPassword, setShowPassword] = useState(false);
+  const [selected, setSelected] = useState<PasswordItem[]>([]);
+  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showForm, setShowForm] = useState(false);
@@ -38,184 +31,783 @@ const VaultPage: React.FC = () => {
     return saved ? parseInt(saved, 10) : 320;
   });
   const [isResizing, setIsResizing] = useState(false);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [allTags, setAllTags] = useState<TagType[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [passwordTags, setPasswordTags] = useState<Record<string, TagType[]>>({});
+  const [pendingSelection, setPendingSelection] = useState<string | null>(null);
+  const prevTreeRef = React.useRef<PasswordItem[] | null>(null);
+  const lastLocalChangeAtRef = React.useRef<number>(0);
 
   // Save sidebar width to localStorage
   useEffect(() => {
     localStorage.setItem('vaultSidebarWidth', sidebarWidth.toString());
   }, [sidebarWidth]);
 
-  // Form state
-  const [formData, setFormData] = useState({
-    title: '',
-    username: '',
-    password: '',
-    url: '',
-    notes: ''
-  });
-
-  // Fetch workspaces
-  useEffect(() => {
-    fetchWorkspaces();
+  const fetchTree = useCallback(async (workspaceId: string) => {
+    if (!workspaceId) return;
+    setIsLoading(true);
+    try {
+      console.log('Fetching password tree for workspace:', workspaceId);
+      const result = await api.getPasswordTree(workspaceId);
+      console.log('Tree result:', result);
+      if (result.success) {
+        setTree(result.tree || []);
+        prevTreeRef.current = result.tree || [];
+        console.log('Tree set:', result.tree || []);
+      } else {
+        console.error('Failed to load tree:', result);
+        setTree([]);
+      }
+    } catch (error) {
+      console.error('Error loading tree:', error);
+      toast.error('Error loading passwords: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      setTree([]);
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
 
-  // Fetch passwords when workspace changes
+  // Fetch tree when workspace changes or when workspaces are loaded
   useEffect(() => {
-    if (currentWorkspace) {
-      // Réinitialiser la sélection et le formulaire lors du changement de workspace
+    if (currentWorkspace && currentWorkspace !== '') {
       setSelectedPassword(null);
       setShowForm(false);
       setEditingId(null);
-      resetForm();
-      // Passer explicitement le workspace pour éviter les problèmes de closure
-      fetchPasswords(currentWorkspace);
+      setSelectedTags([]);
+      fetchTree(currentWorkspace);
+      loadAllTags();
     }
-  }, [currentWorkspace]);
+  }, [currentWorkspace, fetchTree]);
 
-  const fetchWorkspaces = async () => {
+  // Load tags for a password
+  const loadPasswordTags = useCallback(async (passwordId: string) => {
+    if (passwordTags[passwordId]) return; // Already loaded
     try {
-      const response = await fetch('/api/workspaces');
-      const data = await response.json();
-      if (data.success) {
-        // Filtrer les workspaces pour ne garder que ceux avec permission read, write ou admin
-        const accessibleWorkspaces = data.workspaces.filter((ws: any) => 
-          ws.user_permission && ws.user_permission !== 'none'
-        );
-        
-        setWorkspaces(accessibleWorkspaces);
-        if (accessibleWorkspaces.length > 0) {
-          setCurrentWorkspace(accessibleWorkspaces[0].id);
-        } else {
-          toast.error('Aucun workspace accessible pour le vault');
-        }
+      const result = await api.getPasswordTags(passwordId);
+      if (result.success) {
+        setPasswordTags(prev => ({ ...prev, [passwordId]: result.tags }));
       }
     } catch (error) {
-      toast.error('Erreur lors du chargement des workspaces');
+      console.error('Error loading password tags:', error);
     }
-  };
-
-  const fetchPasswords = async (workspaceId?: string) => {
-    const wsId = workspaceId || currentWorkspace;
-    if (!wsId) return;
-    
-    setIsLoading(true);
-    try {
-      const response = await fetch(`/api/vault/passwords?workspace_id=${wsId}`);
-      
-      if (!response.ok) {
-        if (response.status === 403) {
-          toast.error('Accès refusé à ce workspace');
-          setPasswords([]);
-        } else {
-          toast.error('Erreur lors du chargement des mots de passe');
-        }
-        return;
-      }
-      
-      const data = await response.json();
-      if (data.success) {
-        setPasswords(data.passwords);
-      }
-    } catch (error) {
-      console.error('Fetch passwords error:', error);
-      toast.error('Erreur de connexion au serveur');
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  }, [passwordTags]);
 
   const fetchPasswordDetail = async (id: string) => {
     try {
-      const response = await fetch(`/api/vault/passwords/${id}`);
-      const data = await response.json();
-      if (data.success) {
-        setSelectedPassword(data.password);
-        setShowPassword(false);
+      const result = await api.getPassword(id);
+      if (result.success) {
+        setSelectedPassword(result.password);
+        loadPasswordTags(id);
+      } else {
+        toast.error('Error loading password details');
       }
     } catch (error) {
-      toast.error('Erreur lors du chargement du mot de passe');
+      console.error('Error fetching password details:', error);
+      toast.error('Error loading password details');
     }
   };
 
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Flatten tree to get all nodes in order (for Shift+Click range selection)
+  const flattenTree = useCallback((nodes: PasswordItem[], result: PasswordItem[] = []): PasswordItem[] => {
+    for (const node of nodes) {
+      if (node.id !== 'root') {
+        result.push(node);
+      }
+      if (node.children && node.children.length > 0) {
+        flattenTree(node.children, result);
+      }
+    }
+    return result;
+  }, []);
+
+  const handleSelectAll = useCallback(() => {
+    const allNodes = flattenTree(tree);
+    setSelected(allNodes);
+    if (allNodes.length > 0) {
+      const lastIndex = allNodes.length - 1;
+      setLastSelectedIndex(lastIndex);
+    }
+  }, [tree, flattenTree]);
+
+  const handleSelectPassword = useCallback((item: PasswordItem, event?: React.MouseEvent) => {
+    const allNodes = flattenTree(tree);
+    const currentIndex = allNodes.findIndex(n => n.id === item.id);
+
+    if (event) {
+      const isCtrl = event.ctrlKey || event.metaKey;
+      const isShift = event.shiftKey;
+
+      if (isShift && lastSelectedIndex !== null && currentIndex !== -1) {
+        // Shift+Click: select range
+        const start = Math.min(lastSelectedIndex, currentIndex);
+        const end = Math.max(lastSelectedIndex, currentIndex);
+        const range = allNodes.slice(start, end + 1);
+        setSelected(range);
+        setLastSelectedIndex(currentIndex);
+      } else if (isCtrl && currentIndex !== -1) {
+        // Ctrl+Click: toggle selection
+        const isSelected = selected.some(s => s.id === item.id);
+        if (isSelected) {
+          setSelected(prev => prev.filter(s => s.id !== item.id));
+        } else {
+          setSelected(prev => [...prev, item]);
+        }
+        setLastSelectedIndex(currentIndex);
+      } else {
+        // Simple click: single selection
+        setSelected([item]);
+        setLastSelectedIndex(currentIndex);
+      }
+    } else {
+      // Called without event (programmatic): single selection
+      setSelected([item]);
+      setLastSelectedIndex(currentIndex);
+    }
+
+    // If it's a password, load it for viewing (only if single selection)
+    if (item.type === 'password' && (!event || (!event.ctrlKey && !event.metaKey && !event.shiftKey))) {
+      fetchPasswordDetail(item.id);
+    }
+  }, [tree, flattenTree, lastSelectedIndex, selected, fetchPasswordDetail]);
+
+  // Setup WebSocket connection for password tree changes
+  useEffect(() => {
+    websocket.connect();
+
+    const unsubscribeTreeChanged = websocket.onVaultTreeChanged(async () => {
+      // Reload current workspace when tree changes
+      try {
+        const result = await api.getPasswordTree(currentWorkspace);
+
+        // Build quick lookup maps to detect changes
+        const flatten = (
+          nodes: PasswordItem[],
+          parentId: string | null = 'root',
+          acc: Record<string, { id: string; name: string; parent_id: string | null; type: string; updated_at?: string | null }> = {}
+        ) => {
+          for (const n of nodes) {
+            acc[n.id] = { id: n.id, name: n.name, parent_id: (n as any).parent_id ?? parentId, type: n.type, updated_at: (n as any).updated_at ?? null };
+            if (n.children && n.children.length) flatten(n.children, n.id, acc);
+          }
+          return acc;
+        };
+
+        const prevMap = prevTreeRef.current ? flatten(prevTreeRef.current) : {};
+        const nextMap = flatten(result.tree || []);
+
+        const created: Array<{ id: string; name: string; type: string }> = [];
+        const movedOrRenamed: Array<{ id: string; name: string; type: string }> = [];
+        const contentUpdated: Array<{ id: string; name: string; type: string }> = [];
+        const deleted: Array<{ id: string; name: string; type: string; path: string }> = [];
+
+        // Helper to build full path for an item
+        const buildPath = (itemId: string, treeData: PasswordItem[], parentPath: string = ''): string | null => {
+          for (const node of treeData) {
+            const currentPath = parentPath ? `${parentPath}/${node.name}` : node.name;
+            if (node.id === itemId) {
+              return currentPath;
+            }
+            if (node.children && node.children.length > 0) {
+              const found = buildPath(itemId, node.children, currentPath);
+              if (found) return found;
+            }
+          }
+          return null;
+        };
+
+        // Detect deletions (present in prevMap but not in nextMap)
+        for (const id in prevMap) {
+          if (!nextMap[id]) {
+            const prev = prevMap[id];
+            // Build path from previous tree
+            const path = prevTreeRef.current ? buildPath(id, prevTreeRef.current) : prev.name;
+            deleted.push({ 
+              id, 
+              name: prev.name, 
+              type: prev.type, 
+              path: path || prev.name 
+            });
+          }
+        }
+
+        // Detect creations, moves, renames, and content updates
+        for (const id in nextMap) {
+          if (!prevMap[id]) {
+            created.push({ id, name: nextMap[id].name, type: nextMap[id].type });
+          } else {
+            const prev = prevMap[id];
+            const nxt = nextMap[id];
+            if (prev.parent_id !== nxt.parent_id || prev.name !== nxt.name) {
+              movedOrRenamed.push({ id, name: nxt.name, type: nxt.type });
+            } else {
+              // Detect content/timestamp changes for passwords
+              if (nxt.type === 'password' && prev.updated_at !== nxt.updated_at) {
+                contentUpdated.push({ id, name: nxt.name, type: nxt.type });
+              }
+            }
+          }
+        }
+
+        // Toast component with 25s progress and action button
+        const ToastChange: React.FC<{ title: string; subtitle?: string; onView: () => void }> = ({ title, subtitle, onView }) => {
+          const [start, setStart] = React.useState(false);
+          React.useEffect(() => {
+            const t = setTimeout(() => setStart(true), 10);
+            return () => clearTimeout(t);
+          }, []);
+          return (
+            <div className="pointer-events-auto w-[360px] rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 text-blue-600 dark:text-blue-400">
+                  <Key size={16} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{title}</div>
+                  {subtitle ? (
+                    <div className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">{subtitle}</div>
+                  ) : null}
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      onClick={onView}
+                      className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400 dark:border-blue-400 dark:text-blue-300 dark:hover:bg-blue-900/30"
+                    >
+                      Voir
+                    </button>
+                  </div>
+                </div>
+                <button
+                  onClick={() => toast.dismiss()}
+                  className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="mt-3 h-1 w-full overflow-hidden rounded bg-gray-200 dark:bg-gray-700">
+                <div
+                  className="h-full bg-blue-600 transition-[width] dark:bg-blue-400"
+                  style={{
+                    width: start ? '0%' : '100%',
+                    transitionDuration: '25s',
+                    transitionTimingFunction: 'linear',
+                  }}
+                />
+              </div>
+            </div>
+          );
+        };
+
+        // Helper: expand path to node and select it
+        const expandToAndSelect = async (id: string, treeData: PasswordItem[]) => {
+          const findPath = (nodes: PasswordItem[], targetId: string, path: string[] = []): string[] | null => {
+            for (const n of nodes) {
+              const newPath = [...path, n.id];
+              if (n.id === targetId) return newPath;
+              if (n.children) {
+                const p = findPath(n.children, targetId, newPath);
+                if (p) return p;
+              }
+            }
+            return null;
+          };
+          const path = findPath(treeData, id);
+          if (path) {
+            setExpanded(prev => {
+              const next: Record<string, boolean> = { ...prev };
+              // Expand all parents in path except the item itself
+              for (let i = 0; i < path.length - 1; i++) {
+                next[path[i]] = true;
+              }
+              return next;
+            });
+            // Find node object to pass to selection
+            const findNode = (nodes: PasswordItem[], targetId: string): PasswordItem | null => {
+              for (const n of nodes) {
+                if (n.id === targetId) return n;
+                if (n.children) {
+                  const f = findNode(n.children, targetId);
+                  if (f) return f;
+                }
+              }
+              return null;
+            };
+            const node = findNode(treeData, id);
+            if (node) {
+              await handleSelectPassword(node);
+            }
+          }
+        };
+
+        // Show up to 5 toasts to prevent flooding. Skip if this client just performed a local change.
+        const justDidLocalChange = Date.now() - lastLocalChangeAtRef.current < 2000;
+        if (!justDidLocalChange) {
+          const showLimited = <T,>(arr: T[]) => arr.slice(0, 5);
+
+          for (const ch of showLimited(created)) {
+            toast.custom(
+              <ToastChange
+                title={`Nouveau ${ch.type === 'folder' ? 'dossier' : 'mot de passe'} : ${ch.name}`}
+                onView={() => expandToAndSelect(ch.id, result.tree || [])}
+              />,
+              { duration: 25000 }
+            );
+          }
+          for (const ch of showLimited(movedOrRenamed)) {
+            toast.custom(
+              <ToastChange
+                title={`${ch.type === 'folder' ? 'Dossier' : 'Mot de passe'} mis à jour : ${ch.name}`}
+                subtitle="Renommé ou déplacé"
+                onView={() => expandToAndSelect(ch.id, result.tree || [])}
+              />,
+              { duration: 25000 }
+            );
+          }
+          for (const ch of showLimited(contentUpdated)) {
+            toast.custom(
+              <ToastChange
+                title={`Mot de passe mis à jour : ${ch.name}`}
+                subtitle="Contenu enregistré"
+                onView={() => expandToAndSelect(ch.id, result.tree || [])}
+              />,
+              { duration: 25000 }
+            );
+          }
+
+          // Toast for deletions (without "Voir" button)
+          for (const del of showLimited(deleted)) {
+            const ToastDelete: React.FC<{ title: string; path: string }> = ({ title, path }) => {
+              const [start, setStart] = React.useState(false);
+              React.useEffect(() => {
+                const t = setTimeout(() => setStart(true), 10);
+                return () => clearTimeout(t);
+              }, []);
+              return (
+                <div className="pointer-events-auto w-[360px] rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 text-red-600 dark:text-red-400">
+                      <Trash2 size={16} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{title}</div>
+                      <div className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">{path}</div>
+                    </div>
+                    <button
+                      onClick={() => toast.dismiss()}
+                      className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <div className="mt-3 h-1 w-full overflow-hidden rounded bg-gray-200 dark:bg-gray-700">
+                    <div
+                      className="h-full bg-red-600 transition-[width] dark:bg-red-400"
+                      style={{
+                        width: start ? '0%' : '100%',
+                        transitionDuration: '25s',
+                        transitionTimingFunction: 'linear',
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            };
+            toast.custom(
+              <ToastDelete
+                title={`${del.type === 'folder' ? 'Dossier' : 'Mot de passe'} supprimé : ${del.name}`}
+                path={del.path}
+              />,
+              { duration: 25000 }
+            );
+          }
+        }
+
+        setTree(result.tree || []);
+        prevTreeRef.current = result.tree || [];
+      } catch (err) {
+        console.error('Error reloading tree:', err);
+      }
+    });
+
+    return () => {
+      unsubscribeTreeChanged();
+      websocket.disconnect();
+    };
+  }, [currentWorkspace, handleSelectPassword]);
+
+  // Load all tags for filter
+  const loadAllTags = async () => {
+    try {
+      const result = await api.getPasswordTagSuggestions('', 100);
+      if (result.success) {
+        setAllTags(result.tags);
+      }
+    } catch (error) {
+      console.error('Error loading tags:', error);
+    }
+  };
+
+
+  const handleToggleExpand = useCallback((id: string) => {
+    setExpanded(prev => ({ ...prev, [id]: !prev[id] }));
+  }, []);
+
+  const handleExpandAll = useCallback(() => {
+    const expandAllNodes = (nodes: PasswordItem[], acc: Record<string, boolean> = {}): Record<string, boolean> => {
+      nodes.forEach(node => {
+        if (node.type === 'folder' && node.children) {
+          acc[node.id] = true;
+          expandAllNodes(node.children, acc);
+        }
+      });
+      return acc;
+    };
+    setExpanded({ root: true, ...expandAllNodes(tree) });
+  }, [tree]);
+
+  const handleCollapseAll = useCallback(() => {
+    setExpanded({});
+  }, []);
+
+  // Auto-select pending folder/password after tree is updated
+  useEffect(() => {
+    if (pendingSelection && tree.length > 0) {
+      const findAndSelectItem = (nodes: PasswordItem[], targetId: string): boolean => {
+        for (const node of nodes) {
+          if (node.id === targetId) {
+            handleSelectPassword(node); // This will set selected
+            setPendingSelection(null);
+            return true;
+          }
+          if (node.children) {
+            // Expand parent to show the item
+            if (node.type === 'folder') {
+              setExpanded(prev => ({ ...prev, [node.id]: true }));
+            }
+            if (findAndSelectItem(node.children, targetId)) {
+              return true;
+            }
+          }
+        }
+        return false;
+      };
+      findAndSelectItem(tree, pendingSelection);
+    }
+  }, [pendingSelection, tree, handleSelectPassword]);
+
+  const handleCreatePassword = useCallback(async (parentId: string, name: string) => {
+    setEditingId(null);
+    setShowForm(true);
+    // Set initial data for form
+    setSelectedPassword({ 
+      id: 'new',
+      name: name,
+      type: 'password',
+      parent_id: parentId === 'root' ? null : parentId,
+      password: '',
+      created_by: 0,
+      title: name // Map name to title for form
+    } as any);
+  }, []);
+
+  const handleCreateFolder = useCallback(async (parentId: string, name: string) => {
+    if (!name || !name.trim()) {
+      toast.error('Le nom du dossier ne peut pas être vide');
+      return;
+    }
+
+    try {
+      lastLocalChangeAtRef.current = Date.now();
+      const result = await api.createPassword({
+        workspace_id: currentWorkspace,
+        title: name.trim(),
+        type: 'folder',
+        parent_id: parentId === 'root' ? null : parentId,
+        username: '', // Empty for folders
+        password: '' // Empty for folders
+      });
+
+      if (result.success) {
+        const newFolderId = result.id;
+        toast.success(`Dossier "${name.trim()}" créé`);
+        await fetchTree(currentWorkspace);
+
+        // Auto-expand parent folder if created inside a folder
+        if (parentId && parentId !== 'root') {
+          setExpanded(prev => ({ ...prev, [parentId]: true }));
+        }
+
+        // Mark folder for auto-selection after tree refresh
+        if (newFolderId) {
+          setPendingSelection(newFolderId);
+        }
+      } else {
+        toast.error((result as any).detail || 'Erreur lors de la création du dossier');
+      }
+    } catch (error: any) {
+      console.error('Error creating folder:', error);
+      const errorMessage = error.detail || error.message || error.toString() || 'Erreur lors de la création du dossier';
+      toast.error(errorMessage);
+    }
+  }, [currentWorkspace, fetchTree]);
+
+  const handleDelete = useCallback(async (id: string) => {
+    setSelected(prev => prev.filter(s => s.id !== id));
+    try {
+      lastLocalChangeAtRef.current = Date.now();
+      await api.deletePassword(id);
+      toast.success('Deleted');
+      await fetchTree(currentWorkspace);
+      if (selectedPassword?.id === id) {
+        setSelectedPassword(null);
+      }
+    } catch (error) {
+      toast.error('Error deleting');
+    }
+  }, [currentWorkspace, selectedPassword]);
+
+  const handleRename = useCallback(async (id: string, newName: string) => {
+    try {
+      lastLocalChangeAtRef.current = Date.now();
+      await api.renamePassword(id, newName);
+      toast.success('Renamed');
+      await fetchTree(currentWorkspace);
+    } catch (error) {
+      toast.error('Error renaming');
+    }
+  }, [currentWorkspace]);
+
+  const handleMove = useCallback(async (id: string, newParentId: string | null) => {
+    try {
+      lastLocalChangeAtRef.current = Date.now();
+      const result = await api.updatePassword(id, {
+        parent_id: newParentId === 'root' ? null : newParentId,
+      });
+      if (result.success) {
+        const findNode = (nodes: PasswordItem[], targetId: string): PasswordItem | null => {
+          for (const node of nodes) {
+            if (node.id === targetId) return node;
+            if (node.children) {
+              const found = findNode(node.children, targetId);
+              if (found) return found;
+            }
+          }
+          return null;
+        };
+        const activeNode = findNode(tree, id);
+        if (activeNode) {
+          toast.success(`"${activeNode.name}" déplacé`);
+        }
+        await fetchTree(currentWorkspace);
+      }
+    } catch (error) {
+      toast.error('Error moving');
+    }
+  }, [tree, currentWorkspace]);
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    setActiveId(event.active.id as string);
+  }, []);
+
+  const handleDragEnd = useCallback(async (event: DragEndEvent) => {
+    const { active, over } = event;
+    setActiveId(null);
+
+    if (!over || active.id === over.id) return;
+
+    try {
+      const findNode = (nodes: PasswordItem[], targetId: string): PasswordItem | null => {
+        for (const node of nodes) {
+          if (node.id === targetId) return node;
+          if (node.children) {
+            const found = findNode(node.children, targetId);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+
+      // Determine items to move
+      const activeIdStr = active.id as string;
+      const isMultiSelect = selected.some(item => item.id === activeIdStr);
+      const itemsToMove = isMultiSelect ? selected : [findNode(tree, activeIdStr)].filter((n): n is PasswordItem => n !== null);
+
+      if (itemsToMove.length === 0) return;
+
+      // Determine target
+      const targetId = over.id === 'root-drop-zone' ? 'root' : over.id as string;
+      let targetNode: PasswordItem | null = null;
+      
+      // Check if dropping on root zone or a folder
+      if (targetId === 'root') {
+        // Root drop
+      } else {
+        targetNode = findNode(tree, targetId);
+        if (!targetNode || targetNode.type !== 'folder') return;
+      }
+
+      // Execute moves
+      let successCount = 0;
+      const errors: string[] = [];
+
+      for (const item of itemsToMove) {
+        // Skip if moving into itself or if parent is already target
+        if (item.id === targetId) continue;
+        if (item.parent_id === targetId || (item.parent_id === null && targetId === 'root')) continue;
+
+        try {
+          const result = await handleMove(item.id, targetId === 'root' ? null : targetId);
+          if (result) successCount++; // Assuming handleMove returns boolean or truthy on success
+          else errors.push(item.name);
+        } catch (err) {
+          errors.push(item.name);
+        }
+      }
+
+      if (successCount > 0) {
+        const targetName = targetId === 'root' ? 'la racine' : `"${targetNode?.name}"`;
+        const message = itemsToMove.length === 1 
+          ? `"${itemsToMove[0].name}" déplacé vers ${targetName}`
+          : `${successCount} éléments déplacés vers ${targetName}`;
+        toast.success(message);
+      }
+
+      if (errors.length > 0) {
+        toast.error(`Erreur lors du déplacement de : ${errors.slice(0, 3).join(', ')}${errors.length > 3 ? '...' : ''}`);
+      }
+
+    } catch (error) {
+      console.error('Error in drag end:', error);
+    }
+  }, [tree, handleMove, selected]);
+
+  const handleAddPasswordTag = async (passwordId: string, name: string) => {
+    try {
+      const currentTags = passwordTags[passwordId] || [];
+      const newTags = [...currentTags.map(t => t.name), name];
+      lastLocalChangeAtRef.current = Date.now(); // Prevent echo
+      const result = await api.updatePasswordTags(passwordId, newTags);
+      if (result.success) {
+        setPasswordTags(prev => ({ ...prev, [passwordId]: result.tags }));
+        await loadAllTags();
+        toast.success('Tag ajouté');
+      }
+    } catch (error) {
+      toast.error('Erreur lors de l\'ajout du tag');
+      throw error;
+    }
+  };
+
+  const handleRemovePasswordTag = async (passwordId: string, tagId: string) => {
+    try {
+      const currentTags = passwordTags[passwordId] || [];
+      const newTags = currentTags.filter(t => t.id !== tagId).map(t => t.name);
+      lastLocalChangeAtRef.current = Date.now(); // Prevent echo
+      const result = await api.updatePasswordTags(passwordId, newTags);
+      if (result.success) {
+        setPasswordTags(prev => ({ ...prev, [passwordId]: result.tags }));
+        toast.success('Tag supprimé');
+      }
+    } catch (error) {
+      toast.error('Erreur lors de la suppression du tag');
+      throw error;
+    }
+  };
+
+  const handleCreate = async (formData: PasswordFormData, formTags: TagType[]) => {
     setIsLoading(true);
 
     try {
-      const response = await fetch('/api/vault/passwords', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...formData,
-          workspace_id: currentWorkspace
-        })
+      // Get parent_id from selectedPassword if it's a new password created from context menu
+      const parentId = selectedPassword && selectedPassword.id === 'new' 
+        ? selectedPassword.parent_id 
+        : null;
+
+      const result = await api.createPassword({
+        workspace_id: currentWorkspace,
+        title: formData.title,
+        username: formData.username,
+        password: formData.password,
+        url: formData.url || undefined,
+        notes: formData.notes || undefined,
+        type: 'password',
+        parent_id: parentId
       });
 
-      const data = await response.json();
-      
-      if (data.success) {
-        toast.success('Mot de passe créé avec succès');
-        setShowForm(false);
-        resetForm();
-        await fetchPasswords();
-        
-        // Afficher automatiquement le mot de passe créé
-        if (data.id) {
-          fetchPasswordDetail(data.id);
+      if (result.success) {
+        // Add tags if any were selected
+        if (formTags.length > 0 && result.id) {
+          try {
+            const tagNames = formTags.map(t => t.name);
+            await api.updatePasswordTags(result.id, tagNames);
+          } catch (error) {
+            console.error('Error adding tags:', error);
+            // Don't fail the creation if tags fail
+          }
         }
-      } else {
-        toast.error(data.detail || 'Erreur lors de la création');
+
+        toast.success('Password created');
+        setShowForm(false);
+        setSelectedPassword(null);
+        await fetchTree(currentWorkspace);
+
+        if (result.id) {
+          fetchPasswordDetail(result.id);
+        }
       }
-    } catch (error) {
-      toast.error('Erreur de connexion au serveur');
+    } catch (error: any) {
+      toast.error(error.detail || 'Error creating password');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleUpdate = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleUpdate = async (formData: PasswordFormData, formTags: TagType[]) => {
     if (!editingId) return;
 
     setIsLoading(true);
     try {
-      // N'envoyer que les champs non vides
-      const updateData: any = {
+      const result = await api.updatePassword(editingId, {
         title: formData.title,
         username: formData.username,
-        url: formData.url,
-        notes: formData.notes
-      };
-      
-      // N'inclure le mot de passe que s'il a été modifié
-      if (formData.password) {
-        updateData.password = formData.password;
-      }
-
-      const response = await fetch(`/api/vault/passwords/${editingId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updateData)
+        password: formData.password,
+        url: formData.url || undefined,
+        notes: formData.notes || undefined
       });
 
-      const data = await response.json();
-      
-      if (data.success) {
-        toast.success('Mot de passe modifié avec succès');
+      if (result.success) {
+        // Update tags if they were changed in the form
+        if (editingId) {
+          try {
+            const currentTags = passwordTags[editingId] || [];
+            const currentTagNames = currentTags.map(t => t.name.toLowerCase()).sort();
+            const formTagNames = formTags.map(t => t.name.toLowerCase()).sort();
+
+            // Only update if tags changed
+            if (JSON.stringify(currentTagNames) !== JSON.stringify(formTagNames)) {
+              const tagNames = formTags.map(t => t.name);
+              await api.updatePasswordTags(editingId, tagNames);
+            }
+          } catch (error) {
+            console.error('Error updating tags:', error);
+            // Don't fail the update if tags fail
+          }
+        }
+
+        toast.success('Password updated');
         setShowForm(false);
         const modifiedId = editingId;
         setEditingId(null);
-        resetForm();
-        await fetchPasswords();
-        
-        // Afficher automatiquement le mot de passe modifié
+        await fetchTree(currentWorkspace);
+
         if (modifiedId) {
           fetchPasswordDetail(modifiedId);
         }
       } else {
-        toast.error(data.detail || 'Erreur lors de la modification');
+        toast.error((result as any).detail || 'Erreur lors de la modification');
       }
-    } catch (error) {
-      toast.error('Erreur de connexion au serveur');
+    } catch (error: any) {
+      console.error('Error updating password:', error);
+      toast.error(error.detail || 'Erreur de connexion au serveur');
     } finally {
       setIsLoading(false);
     }
@@ -243,10 +835,10 @@ const VaultPage: React.FC = () => {
       }
 
       const data = await response.json();
-      
+
       if (data.success) {
-        toast.success('Mot de passe supprimé');
-        fetchPasswords();
+        toast.success('Password deleted');
+        fetchTree(currentWorkspace);
         if (selectedPassword?.id === id) {
           setSelectedPassword(null);
         }
@@ -263,65 +855,17 @@ const VaultPage: React.FC = () => {
   };
 
   const generatePassword = () => {
-    const length = 16;
-    const charset = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
-    let password = '';
-    for (let i = 0; i < length; i++) {
-      password += charset.charAt(Math.floor(Math.random() * charset.length));
-    }
-    setFormData({ ...formData, password });
+    // Not used in VaultPage anymore, handled in PasswordForm
   };
 
-  const startEdit = async (password: Password) => {
+  const startEdit = async (password: PasswordDetail) => {
     setEditingId(password.id);
-    
-    // Fetch full password details including notes
-    try {
-      const response = await fetch(`/api/vault/passwords/${password.id}`);
-      const data = await response.json();
-      
-      if (data.success && data.password) {
-        setFormData({
-          title: data.password.title,
-          username: data.password.username || '',
-          password: '', // Don't pre-fill password for security
-          url: data.password.url || '',
-          notes: data.password.notes || ''
-        });
-      } else {
-        // Fallback if fetch fails
-        setFormData({
-          title: password.title,
-          username: password.username || '',
-          password: '',
-          url: password.url || '',
-          notes: ''
-        });
-      }
-    } catch (error) {
-      console.error('Error fetching password details:', error);
-      // Fallback if fetch fails
-      setFormData({
-        title: password.title,
-        username: password.username || '',
-        password: '',
-        url: password.url || '',
-        notes: ''
-      });
-    }
-    
     setShowForm(true);
-  };
-
-  const resetForm = () => {
-    setFormData({
-      title: '',
-      username: '',
-      password: '',
-      url: '',
-      notes: ''
-    });
-    setEditingId(null);
+    
+    // Ensure we have the latest details including tags
+    if (!passwordTags[password.id]) {
+      await loadPasswordTags(password.id);
+    }
   };
 
   // Resizing handlers
@@ -353,129 +897,112 @@ const VaultPage: React.FC = () => {
     };
   }, [isResizing]);
 
-  const filteredPasswords = passwords.filter(p => {
-    const matchesSearch = p.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         (p.username && p.username.toLowerCase().includes(searchQuery.toLowerCase()));
-    return matchesSearch;
-  });
-
+  // Filter tree function (similar to DocumentsApp)
+  const filterTree = useCallback((nodes: PasswordItem[], query: string, tagIds: string[]): PasswordItem[] => {
+    const lowerQuery = query.trim().toLowerCase();
+    const hasTagFilter = tagIds.length > 0;
+    
+    const filterNode = (node: PasswordItem): PasswordItem | null => {
+      const nameMatches = !lowerQuery || node.name.toLowerCase().includes(lowerQuery);
+      
+      let tagMatches = true;
+      if (hasTagFilter && node.type === 'password') {
+        const nodeTagIds = (passwordTags[node.id] || []).map(t => t.id);
+        tagMatches = tagIds.some(tagId => nodeTagIds.includes(tagId));
+        if (!passwordTags[node.id]) {
+          loadPasswordTags(node.id);
+        }
+      }
+      
+      if (node.type === 'folder') {
+        // For folders, check children if they exist
+        if (node.children && node.children.length > 0) {
+          const filteredChildren = node.children
+            .map(child => filterNode(child))
+            .filter((child): child is PasswordItem => child !== null);
+          
+          // Show folder if name matches OR if it has matching children
+          if (nameMatches || filteredChildren.length > 0) {
+            return { ...node, children: filteredChildren };
+          }
+        } else {
+          // Folder without children: show if name matches
+          if (nameMatches) {
+            return { ...node, children: [] };
+          }
+        }
+      } else if (nameMatches && tagMatches) {
+        // For passwords, both name and tag must match
+        return node;
+      }
+      
+      return null;
+    };
+    
+    return nodes
+      .map(node => filterNode(node))
+      .filter((node): node is PasswordItem => node !== null);
+  }, [passwordTags, loadPasswordTags]);
+  
+  const filteredTree = filterTree(tree, searchQuery, selectedTags);
 
   return (
+    <React.Fragment>
     <div className="h-screen flex flex-col bg-gray-50 dark:bg-gray-900">
       <Header />
       
       <div className="flex-1 overflow-hidden flex" style={{ cursor: isResizing ? 'col-resize' : 'default' }}>
-        {/* Sidebar */}
-        <div className="bg-white dark:bg-gray-800 border-r dark:border-gray-700 flex flex-col" style={{ width: `${sidebarWidth}px`, minWidth: '250px', maxWidth: '600px' }}>
-          {/* Header */}
-          <div className="border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
-            <div className="p-4 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Key className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                <h2 className="text-lg font-bold text-gray-900 dark:text-white">Passwords</h2>
-              </div>
-              
-              {/* Permission Badge */}
-              {currentWorkspace && workspaces.find(ws => ws.id === currentWorkspace)?.user_permission && (
-                <div className="flex items-center gap-1.5 text-xs px-2 py-1 rounded">
-                  {workspaces.find(ws => ws.id === currentWorkspace)?.user_permission === 'admin' ? (
-                    <>
-                      <Shield className="w-3.5 h-3.5 text-red-600 dark:text-red-400" />
-                      <span className="font-medium text-red-900 dark:text-red-300">Admin</span>
-                    </>
-                  ) : workspaces.find(ws => ws.id === currentWorkspace)?.user_permission === 'write' ? (
-                    <>
-                      <Edit2 className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                      <span className="font-medium text-blue-900 dark:text-blue-300">RW</span>
-                    </>
+        {/* Password Tree */}
+        <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+          <PasswordTree
+            tree={filteredTree}
+            expanded={expanded}
+            selected={selected}
+            onToggleExpand={handleToggleExpand}
+            onExpandAll={handleExpandAll}
+            onCollapseAll={handleCollapseAll}
+            onSelect={handleSelectPassword}
+            onSelectAll={handleSelectAll}
+            onCreate={userPermission !== 'read' ? handleCreatePassword : undefined}
+            onCreateFolder={userPermission !== 'read' ? handleCreateFolder : undefined}
+            onDelete={userPermission !== 'read' ? handleDelete : undefined}
+            onRename={userPermission !== 'read' ? handleRename : undefined}
+            width={sidebarWidth}
+            readOnly={userPermission === 'read'}
+            userPermission={userPermission}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            onClearSearch={() => setSearchQuery('')}
+            allTags={allTags}
+            selectedTags={selectedTags}
+            onTagFilterChange={setSelectedTags}
+          />
+          <DragOverlay dropAnimation={null}>
+            {activeId ? (() => {
+              const findNode = (nodes: PasswordItem[], id: string): PasswordItem | null => {
+                for (const node of nodes) {
+                  if (node.id === id) return node;
+                  if (node.children) {
+                    const found = findNode(node.children, id);
+                    if (found) return found;
+                  }
+                }
+                return null;
+              };
+              const activeNode = findNode(tree, activeId);
+              return activeNode ? (
+                <div className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-xl px-4 py-2 flex items-center gap-2 cursor-grabbing">
+                  {activeNode.type === 'folder' ? (
+                    <Folder size={16} className="text-blue-600 dark:text-blue-400" />
                   ) : (
-                    <>
-                      <Eye className="w-3.5 h-3.5 text-gray-600 dark:text-gray-400" />
-                      <span className="font-medium text-gray-700 dark:text-gray-300">RO</span>
-                    </>
+                    <Key size={16} className="text-gray-600 dark:text-gray-400" />
                   )}
+                  <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{activeNode.name}</span>
                 </div>
-              )}
-            </div>
-            
-            {/* Workspace selector */}
-            <div className="px-4 pb-4">
-              <select
-                value={currentWorkspace}
-                onChange={(e) => setCurrentWorkspace(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                {workspaces.map((ws) => (
-                  <option key={ws.id} value={ws.id}>
-                    {ws.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Search and filters */}
-          <div className="p-4 border-b dark:border-gray-700 space-y-3">
-            <div className="relative flex items-center">
-              <Search className="absolute left-3 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none" />
-              <input
-                type="text"
-                placeholder="Rechercher..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-9 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-3 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-                  title="Effacer la recherche"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-
-            <button
-              onClick={() => { resetForm(); setShowForm(true); }}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              Nouveau mot de passe
-            </button>
-          </div>
-
-          {/* Password list */}
-          <div className="flex-1 overflow-y-auto">
-            {isLoading ? (
-              <div className="p-4 text-center text-gray-500 dark:text-gray-400">Chargement...</div>
-            ) : filteredPasswords.length === 0 ? (
-              <div className="p-4 text-center text-gray-500 dark:text-gray-400">Aucun mot de passe</div>
-            ) : (
-              <div className="divide-y dark:divide-gray-700">
-                {filteredPasswords.map((password) => (
-                  <div
-                    key={password.id}
-                    onClick={() => fetchPasswordDetail(password.id)}
-                    className={`p-4 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${
-                      selectedPassword?.id === password.id ? 'bg-blue-50 dark:bg-blue-900/30' : ''
-                    }`}
-                  >
-                    <div className="flex items-start gap-3">
-                      <span className="text-2xl">🔐</span>
-                      <div className="flex-1 min-w-0">
-                        <h3 className="font-medium text-gray-900 dark:text-gray-100 truncate">{password.title}</h3>
-                        {password.username && (
-                          <p className="text-sm text-gray-500 dark:text-gray-400 truncate">{password.username}</p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
+              ) : null;
+            })() : null}
+          </DragOverlay>
+        </DndContext>
 
         {/* Resizer handle */}
         <div
@@ -489,224 +1016,46 @@ const VaultPage: React.FC = () => {
         {/* Main content */}
         <div className="flex-1 overflow-y-auto p-8 bg-gray-50 dark:bg-gray-900">
           {showForm ? (
-            <div className="max-w-2xl mx-auto bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-              <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-6">
-                {editingId ? 'Modifier le mot de passe' : 'Nouveau mot de passe'}
-              </h3>
-              
-              <form onSubmit={editingId ? handleUpdate : handleCreate} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Titre *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.title}
-                    onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Ex: MariaDB Production"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Nom d'utilisateur
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.username}
-                    onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Ex: admin"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Mot de passe {!editingId && '*'}
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      required={!editingId}
-                      value={formData.password}
-                      onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                      className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder={editingId ? "Laisser vide pour ne pas modifier" : "Mot de passe"}
-                    />
-                    <button
-                      type="button"
-                      onClick={generatePassword}
-                      className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-                    >
-                      Générer
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    URL
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.url}
-                    onChange={(e) => setFormData({ ...formData, url: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Ex: https://example.com"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Notes
-                  </label>
-                  <textarea
-                    value={formData.notes}
-                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                    rows={3}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Notes additionnelles..."
-                  />
-                </div>
-
-                <div className="flex gap-3 pt-4">
-                  <button
-                    type="submit"
-                    disabled={isLoading}
-                    className="flex-1 px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded hover:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 transition-colors"
-                  >
-                    {isLoading ? 'Enregistrement...' : editingId ? 'Modifier' : 'Créer'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setShowForm(false); resetForm(); }}
-                    className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-                  >
-                    Annuler
-                  </button>
-                </div>
-              </form>
-            </div>
+            <PasswordForm
+              isEditing={!!editingId}
+              workspaceId={currentWorkspace}
+              initialData={editingId && selectedPassword ? {
+                title: selectedPassword.name,
+                username: selectedPassword.username || '',
+                password: selectedPassword.password || '',
+                url: selectedPassword.url || '',
+                notes: selectedPassword.notes || ''
+              } : selectedPassword ? {
+                title: selectedPassword.name,
+                username: '',
+                password: '',
+                url: '',
+                notes: ''
+              } : undefined}
+              initialTags={editingId && selectedPassword ? passwordTags[selectedPassword.id] || [] : []}
+              allTags={allTags}
+              onSubmit={editingId ? handleUpdate : handleCreate}
+              onCancel={() => {
+                setShowForm(false);
+                if (editingId) {
+                  setEditingId(null);
+                } else {
+                  setSelectedPassword(null);
+                }
+              }}
+              isLoading={isLoading}
+            />
           ) : selectedPassword ? (
-            <div className="max-w-2xl mx-auto bg-white dark:bg-gray-800 rounded-lg shadow">
-              <div className="p-6 border-b dark:border-gray-700 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="text-3xl">🔐</span>
-                  <div>
-                    <h3 className="text-xl font-bold text-gray-800 dark:text-white">{selectedPassword.title}</h3>
-                  </div>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => startEdit(selectedPassword)}
-                    className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
-                    title="Modifier"
-                  >
-                    <Edit2 className="w-5 h-5" />
-                  </button>
-                  <button
-                    onClick={() => setDeleteConfirm({ id: selectedPassword.id, title: selectedPassword.title })}
-                    className="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors"
-                    title="Supprimer"
-                  >
-                    <Trash2 className="w-5 h-5" />
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-6 space-y-4">
-                {selectedPassword.username && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Nom d'utilisateur
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={selectedPassword.username}
-                        readOnly
-                        className="flex-1 px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-gray-100"
-                      />
-                      <button
-                        onClick={() => copyToClipboard(selectedPassword.username!, 'Nom d\'utilisateur')}
-                        className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
-                      >
-                        <Copy className="w-5 h-5" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Mot de passe
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      value={selectedPassword.password}
-                      readOnly
-                      className="flex-1 px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded font-mono text-gray-900 dark:text-gray-100"
-                    />
-                    <button
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
-                    >
-                      {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                    </button>
-                    <button
-                      onClick={() => copyToClipboard(selectedPassword.password, 'Mot de passe')}
-                      className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
-                    >
-                      <Copy className="w-5 h-5" />
-                    </button>
-                  </div>
-                </div>
-
-                {selectedPassword.url && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      URL
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={selectedPassword.url}
-                        readOnly
-                        className="flex-1 px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-gray-100"
-                      />
-                      <button
-                        onClick={() => copyToClipboard(selectedPassword.url!, 'URL')}
-                        className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
-                      >
-                        <Copy className="w-5 h-5" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {selectedPassword.notes && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                      Notes
-                    </label>
-                    <textarea
-                      value={selectedPassword.notes}
-                      readOnly
-                      rows={3}
-                      className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-gray-100"
-                    />
-                  </div>
-                )}
-
-                <div className="pt-4 border-t dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400">
-                  <p>Créé le : {new Date(selectedPassword.created_at).toLocaleString('fr-FR')}</p>
-                  <p>Modifié le : {new Date(selectedPassword.updated_at).toLocaleString('fr-FR')}</p>
-                </div>
-              </div>
-            </div>
+            <PasswordDetailView
+              password={selectedPassword}
+              tags={passwordTags[selectedPassword.id] || []}
+              allTags={allTags}
+              onEdit={() => startEdit(selectedPassword)}
+              onDelete={() => setDeleteConfirm({ id: selectedPassword.id, title: selectedPassword.name })}
+              onAddTag={(name) => handleAddPasswordTag(selectedPassword.id, name)}
+              onRemoveTag={(tagId) => handleRemovePasswordTag(selectedPassword.id, tagId)}
+              readOnly={userPermission === 'read'}
+            />
           ) : (
             <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-500">
               <div className="text-center">
@@ -717,9 +1066,10 @@ const VaultPage: React.FC = () => {
           )}
         </div>
       </div>
+    </div>
 
-      {/* Confirm Delete Modal */}
-      <ConfirmModal
+    {/* Confirm Delete Modal */}
+    <ConfirmModal
         isOpen={deleteConfirm !== null}
         title="Supprimer le mot de passe"
         message={`Voulez-vous vraiment supprimer "${deleteConfirm?.title}" ? Cette action est irréversible.`}
@@ -729,7 +1079,7 @@ const VaultPage: React.FC = () => {
         onConfirm={confirmDelete}
         onCancel={() => setDeleteConfirm(null)}
       />
-    </div>
+    </React.Fragment>
   );
 };
 

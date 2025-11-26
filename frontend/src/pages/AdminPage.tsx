@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { UserPlus, Trash2, Edit2, Shield, User as UserIcon } from 'lucide-react';
+import { UserPlus, Trash2, Edit2, Shield, User as UserIcon, LayoutGrid } from 'lucide-react';
 import Header from '../components/layout/Header';
 import { useAuth } from '../contexts/AuthContext';
+import { useSettings } from '../contexts/SettingsContext';
 import { useNavigate } from 'react-router-dom';
 
 interface User {
@@ -14,6 +15,7 @@ interface User {
 
 const AdminPage: React.FC = () => {
   const { user: currentUser } = useAuth();
+  const { modules, updateModules, isLoading: settingsLoading } = useSettings();
   const navigate = useNavigate();
   const [users, setUsers] = useState<User[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -27,6 +29,22 @@ const AdminPage: React.FC = () => {
     password: '',
     role: 'user' as 'admin' | 'user',
   });
+
+  // Handle Escape key to close modals
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showCreateModal || editingUser) {
+          setShowCreateModal(false);
+          setEditingUser(null);
+          setFormData({ username: '', email: '', password: '', role: 'user' });
+        }
+      }
+    };
+    
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [showCreateModal, editingUser]);
 
   useEffect(() => {
     if (currentUser?.role !== 'admin') {
@@ -112,7 +130,18 @@ const AdminPage: React.FC = () => {
     });
   };
 
-  if (loading) {
+  const handleToggleModule = async (module: keyof typeof modules) => {
+    try {
+      await updateModules({
+        ...modules,
+        [module]: !modules[module]
+      });
+    } catch (error) {
+      console.error('Error updating module settings:', error);
+    }
+  };
+
+  if (loading || settingsLoading) {
     return (
       <div className="h-screen flex flex-col bg-gray-50 dark:bg-gray-900">
         <Header />
@@ -129,6 +158,76 @@ const AdminPage: React.FC = () => {
       
       <div className="flex-1 overflow-auto p-8">
         <div className="max-w-6xl mx-auto">
+          {/* Module Configuration Section */}
+          <div className="mb-12">
+            <div className="flex items-center gap-3 mb-6">
+              <LayoutGrid className="w-8 h-8 text-blue-600 dark:text-blue-400" />
+              <div>
+                <h2 className="text-2xl font-bold text-gray-800 dark:text-white">Module Configuration</h2>
+                <p className="text-gray-600 dark:text-gray-400 mt-1">Enable or disable application modules</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Documents Module */}
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Documents</h3>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      className="sr-only peer"
+                      checked={modules.documents}
+                      onChange={() => handleToggleModule('documents')}
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Markdown documentation management system. Organize files in folders and edit with rich text editor.
+                </p>
+              </div>
+
+              {/* Tasks Module */}
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Tasks</h3>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      className="sr-only peer"
+                      checked={modules.tasks}
+                      onChange={() => handleToggleModule('tasks')}
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Project management and task tracking. Manage todos, assignees, due dates, and workflows.
+                </p>
+              </div>
+
+              {/* Passwords Module */}
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Passwords</h3>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      className="sr-only peer"
+                      checked={modules.passwords}
+                      onChange={() => handleToggleModule('passwords')}
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Secure password vault. Store and share credentials safely with team members.
+                </p>
+              </div>
+            </div>
+          </div>
+
           <div className="flex items-center justify-between mb-8">
             <div>
               <h2 className="text-3xl font-bold text-gray-800 dark:text-white">User Management</h2>

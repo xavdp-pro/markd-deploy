@@ -38,6 +38,29 @@ const GroupsAdmin: React.FC = () => {
   const [groupMembers, setGroupMembers] = useState<GroupUser[]>([]);
   const [addingMember, setAddingMember] = useState(false);
 
+  // Handle Escape key to close modals
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (managingMembers) {
+          setManagingMembers(null);
+          setAddingMember(false);
+        }
+        if (creating) {
+          setCreating(false);
+          setFormData({ name: '', description: '' });
+        }
+        if (editing) {
+          setEditing(null);
+          setFormData({ name: '', description: '' });
+        }
+      }
+    };
+    
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [managingMembers, creating, editing]);
+
   useEffect(() => {
     loadGroups();
     loadAllUsers();

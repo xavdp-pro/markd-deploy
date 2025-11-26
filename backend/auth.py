@@ -164,6 +164,78 @@ async def get_current_user_info(request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/users/me/groups")
+async def get_my_groups_and_permissions(request: Request):
+    """Get current user's groups and workspace permissions"""
+    try:
+        token = request.cookies.get("markd_auth")
+        if not token:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("user_id")
+        
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+        
+        # Get user's groups
+        groups_query = """
+            SELECT ugt.id, ugt.name, ugt.description
+            FROM user_groups ug
+            JOIN user_groups_table ugt ON ug.group_id = ugt.id
+            WHERE ug.user_id = %s
+            ORDER BY ugt.name
+        """
+        groups = db.execute_query(groups_query, (user_id,))
+        
+        # Get user's workspace permissions via groups
+        permissions_query = """
+            SELECT DISTINCT
+                w.id as workspace_id,
+                w.name as workspace_name,
+                w.description as workspace_description,
+                MAX(
+                    CASE gwp.permission_level
+                        WHEN 'admin' THEN 3
+                        WHEN 'write' THEN 2
+                        WHEN 'read' THEN 1
+                        ELSE 0
+                    END
+                ) as max_level,
+                (SELECT gwp2.permission_level 
+                 FROM group_workspace_permissions gwp2
+                 JOIN user_groups ug2 ON gwp2.group_id = ug2.group_id
+                 WHERE ug2.user_id = %s 
+                   AND gwp2.workspace_id = w.id
+                 ORDER BY 
+                    CASE gwp2.permission_level
+                        WHEN 'admin' THEN 3
+                        WHEN 'write' THEN 2
+                        WHEN 'read' THEN 1
+                        ELSE 0
+                    END DESC
+                 LIMIT 1) as permission_level
+            FROM user_groups ug
+            JOIN group_workspace_permissions gwp ON ug.group_id = gwp.group_id
+            JOIN workspaces w ON gwp.workspace_id = w.id
+            WHERE ug.user_id = %s
+            GROUP BY w.id, w.name, w.description
+            ORDER BY w.name
+        """
+        permissions = db.execute_query(permissions_query, (user_id, user_id))
+        
+        return {
+            "success": True,
+            "groups": groups,
+            "workspaces": permissions
+        }
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/admin/users")
 async def get_users():
     """Get all users (admin only)"""
@@ -206,17 +278,57 @@ async def create_user(user: CreateUserRequest):
         result = db.execute_query(id_query)
         user_id = result[0]['id'] if result else None
         
-        # Automatically add user to ALL group
+        # Automatically add user to default groups based on role
         if user_id:
             try:
-                add_to_all_query = """
-                    INSERT INTO user_groups (user_id, group_id)
-                    VALUES (%s, 'all')
-                    ON DUPLICATE KEY UPDATE user_id=user_id
+                # Add user to "ALL" group (business group)
+                all_group_query = """
+                    SELECT id FROM user_groups_table WHERE name = 'ALL' LIMIT 1
                 """
-                db.execute_update(add_to_all_query, (user_id,))
+                all_group = db.execute_query(all_group_query)
+                if all_group:
+                    add_to_all_query = """
+                        INSERT INTO user_groups (user_id, group_id)
+                                VALUES (%s, %s)
+                        ON DUPLICATE KEY UPDATE user_id=user_id
+                    """
+                    db.execute_update(add_to_all_query, (user_id, all_group[0]['id']))
+                
+                # Fetch default "Users" group
+                default_group_query = """
+                    SELECT id FROM user_groups_table
+                    WHERE name = %s
+                    LIMIT 1
+                """
+                default_group = db.execute_query(default_group_query, ('Users',))
+
+                if default_group:
+                    add_to_default_query = """
+                        INSERT INTO user_groups (user_id, group_id)
+                        VALUES (%s, %s)
+                        ON DUPLICATE KEY UPDATE user_id=user_id
+                    """
+                    db.execute_update(add_to_default_query, (user_id, default_group[0]['id']))
+
+                # If the new user is an admin, also add to Administrators group
+                if user.role == 'admin':
+                    admin_group_query = """
+                        SELECT id FROM user_groups_table
+                        WHERE name = %s
+                        LIMIT 1
+                    """
+                    admin_group = db.execute_query(admin_group_query, ('Administrators',))
+                    if admin_group:
+                        db.execute_update(
+                            """
+                            INSERT INTO user_groups (user_id, group_id)
+                            VALUES (%s, %s)
+                            ON DUPLICATE KEY UPDATE user_id=user_id
+                            """,
+                            (user_id, admin_group[0]['id'])
+                        )
             except Exception as e:
-                print(f"Warning: Could not add user to ALL group: {e}")
+                print(f"Warning: Could not assign default groups to user {user_id}: {e}")
         
         return {"success": True, "user_id": user_id}
     except HTTPException:

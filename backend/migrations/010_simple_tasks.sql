@@ -59,3 +59,5 @@ INSERT INTO tasks (id, name, type, parent_id, content, status, priority) VALUES
 SELECT 'Simple task management tables created' as '';
 SHOW TABLES LIKE 'task%';
 
+
+

@@ -1,50 +1,56 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  File,
+  Key,
   Folder,
   FolderOpen,
   Plus,
   Trash2,
   Edit2,
   Copy,
-  Download,
   Shield,
   Eye,
-  Upload,
   ChevronRight,
   ChevronDown,
-  Lock,
-  Unlock,
   GripVertical,
   Search,
   X,
   Maximize2,
   Minimize2,
 } from 'lucide-react';
-import { Document, Tag as TagType } from '../types';
+import { PasswordItem, Tag as TagType } from '../types';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { useAuth } from '../contexts/AuthContext';
 import ConfirmModal from './ConfirmModal';
 import InputModal from './InputModal';
 import TagFilter from './TagFilter';
 
-interface DocumentTreeProps {
-  tree: Document[];
+interface PasswordItem {
+  id: string;
+  name: string;
+  type: 'folder' | 'password';
+  parent_id?: string | null;
+  username?: string | null;
+  url?: string | null;
+  notes?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  workspace_id?: string;
+  children?: PasswordItem[];
+}
+
+interface PasswordTreeProps {
+  tree: PasswordItem[];
   expanded: Record<string, boolean>;
-  selected: Document[];
+  selected: PasswordItem[];
   onToggleExpand: (id: string) => void;
   onExpandAll?: () => void;
   onCollapseAll?: () => void;
-  onSelect: (doc: Document, event?: React.MouseEvent) => void;
+  onSelect: (item: PasswordItem, event?: React.MouseEvent) => void;
   onSelectAll?: () => void;
   onCreate?: (parentId: string, name: string) => void;
   onCreateFolder?: (parentId: string, name: string) => void;
   onDelete?: (id: string) => void;
   onRename?: (id: string, newName: string) => void;
-  onCopy: (id: string) => void;
-  onDownload: (doc: Document) => void;
-  onUpload?: (parentId: string, file: File) => void;
-  onUnlock?: (id: string) => void;
   width?: number;
   readOnly?: boolean;
   userPermission?: string;
@@ -60,16 +66,12 @@ interface DocumentTreeProps {
 interface ContextMenuProps {
   x: number;
   y: number;
-  node: Document;
+  node: PasswordItem;
   onClose: () => void;
   onCreate?: (parentId: string, name: string) => void;
   onCreateFolder?: (parentId: string, name: string) => void;
   onDelete?: (id: string) => void;
   onRename?: (id: string, newName: string) => void;
-  onCopy: (id: string) => void;
-  onDownload: (doc: Document) => void;
-  onUpload?: (parentId: string, file: File) => void;
-  onUnlock?: (id: string) => void;
   readOnly?: boolean;
 }
 
@@ -82,12 +84,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
   onCreateFolder,
   onDelete,
   onRename,
-  onCopy,
-  onDownload,
-  onUpload,
-  onUnlock,
 }) => {
-  const { user } = useAuth();
   const menuRef = useRef<HTMLDivElement>(null);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -142,8 +139,8 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             onClick={() => {
               setInputModal({
                 isOpen: true,
-                title: 'Nouveau document',
-                label: 'Nom du document',
+                title: 'Nouveau mot de passe',
+                label: 'Nom du mot de passe',
                 defaultValue: '',
                 onConfirm: (name) => {
                   onCreate(node.id, name);
@@ -155,7 +152,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
           >
             <Plus size={14} />
-            Ajouter un document
+            Ajouter un mot de passe
           </button>
           <button
             onClick={() => {
@@ -175,22 +172,6 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
           >
             <Folder size={14} />
             Créer un dossier
-          </button>
-          <button
-            onClick={() => handleAction(() => {
-              const input = document.createElement('input');
-              input.type = 'file';
-              input.accept = '.md,.txt';
-              input.onchange = (event) => {
-                const file = (event.target as HTMLInputElement).files?.[0];
-                if (file) onUpload(node.id, file);
-              };
-              input.click();
-            })}
-            className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
-          >
-            <Upload size={14} />
-            Importer
           </button>
           <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
         </>
@@ -219,126 +200,12 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             <Edit2 size={14} />
             Renommer
           </button>
-          <button
-            onClick={() => handleAction(() => onCopy(node.id))}
-            className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
-          >
-            <Copy size={14} />
-            Copier
-          </button>
-          {node.type === 'file' && (
-            <button
-              onClick={() => handleAction(() => onDownload(node))}
-              className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
-            >
-              <Download size={14} />
-              Télécharger
-            </button>
-          )}
-          {node.type === 'file' && node.locked_by && onUnlock && (() => {
-            const storedUser = localStorage.getItem('markd_user');
-            const currentUserId = storedUser ? JSON.parse(storedUser).id : null;
-            const isOwner = node.locked_by?.user_id === currentUserId;
-            const isAdmin = user?.role === 'admin';
-            
-            if (isAdmin) {
-              return (
-                <button
-                  onClick={() => {
-                    setConfirmModal({
-                      isOpen: true,
-                      title: 'Déverrouiller le document',
-                      message: `Voulez-vous déverrouiller "${node.name}" (verrouillé par ${node.locked_by?.user_name}) ?`,
-                      onConfirm: () => {
-                        onUnlock(node.id);
-                        setConfirmModal(null);
-                        onClose();
-                      }
-                    });
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-orange-50 text-orange-600 flex items-center gap-2"
-                >
-                  <Unlock size={14} />
-                  Unlock (Admin)
-                </button>
-              );
-            } else if (isOwner) {
-              return (
-                <button
-                  onClick={() => {
-                    setConfirmModal({
-                      isOpen: true,
-                      title: 'Débloquer le document',
-                      message: `Voulez-vous débloquer "${node.name}" ?`,
-                      onConfirm: () => {
-                        onUnlock(node.id);
-                        setConfirmModal(null);
-                        onClose();
-                      }
-                    });
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-orange-50 text-orange-600 flex items-center gap-2"
-                >
-                  <Unlock size={14} />
-                  Débloquer mon fichier
-                </button>
-              );
-            } else {
-              return (
-                <button
-                  onClick={async () => {
-                    try {
-                      // Fetch admins
-                      const res = await fetch('/api/admin/users?role=admin', { credentials: 'include' });
-                      let admins: Array<{ username: string; email?: string }> = [];
-                      if (res.ok) {
-                        const data = await res.json();
-                        if (data && data.success && Array.isArray(data.users)) {
-                          admins = data.users.map((u: any) => ({ username: u.username, email: u.email }));
-                        }
-                      }
-                      const adminLines = admins.length
-                        ? admins.map(a => `- ${a.username}${a.email ? ' (' + a.email + ')' : ''}`).join('\n')
-                        : '- Aucun administrateur trouvé';
-                      const lockedBy = node.locked_by?.user_name || 'Utilisateur inconnu';
-                      const lockedAt = (node.locked_by as any)?.locked_at || null;
-                      const when = lockedAt ? `\nHeure du verrou: ${lockedAt}` : '';
-                      setConfirmModal({
-                        isOpen: true,
-                        title: 'Déverrouillage non autorisé',
-                        message: `Ce document est en cours d’édition par ${lockedBy}.${when}\n\nVeuillez contacter un administrateur pour le déverrouiller:\n${adminLines}`,
-                        onConfirm: () => {
-                          setConfirmModal(null);
-                          onClose();
-                        }
-                      });
-                    } catch (e) {
-                      setConfirmModal({
-                        isOpen: true,
-                        title: 'Déverrouillage non autorisé',
-                        message: 'Ce document est verrouillé. Veuillez contacter un administrateur.',
-                        onConfirm: () => {
-                          setConfirmModal(null);
-                          onClose();
-                        }
-                      });
-                    }
-                  }}
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-orange-50 text-orange-600 flex items-center gap-2"
-                >
-                  <Unlock size={14} />
-                  Déverrouiller (contacter admin)
-                </button>
-              );
-            }
-            return null;
-          })()}
           <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
           <button
             onClick={() => {
               setConfirmModal({
                 isOpen: true,
-                title: 'Supprimer le document',
+                title: 'Supprimer le mot de passe',
                 message: `Voulez-vous vraiment supprimer "${node.name}" ?`,
                 onConfirm: () => {
                   onDelete(node.id);
@@ -381,20 +248,18 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
 };
 
 interface TreeNodeProps {
-  node: Document;
+  node: PasswordItem;
   level: number;
   expanded: Record<string, boolean>;
-  selected: Document[];
+  selected: PasswordItem[];
   onToggleExpand: (id: string) => void;
-  onSelect: (doc: Document, event?: React.MouseEvent) => void;
+  onExpandAll?: () => void;
+  onCollapseAll?: () => void;
+  onSelect: (item: PasswordItem, event?: React.MouseEvent) => void;
   onCreate: (parentId: string, name: string) => void;
   onCreateFolder: (parentId: string, name: string) => void;
   onDelete: (id: string) => void;
   onRename: (id: string, newName: string) => void;
-  onCopy: (id: string) => void;
-  onDownload: (doc: Document) => void;
-  onUpload: (parentId: string, file: File) => void;
-  onUnlock?: (id: string) => void;
 }
 
 const TreeNode: React.FC<TreeNodeProps> = ({
@@ -408,10 +273,6 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   onCreateFolder,
   onDelete,
   onRename,
-  onCopy,
-  onDownload,
-  onUpload,
-  onUnlock,
 }) => {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const isExpanded = expanded[node.id];
@@ -474,7 +335,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
         <div
           className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
           onClick={(e) => {
-            if (node.type === 'file') {
+            if (node.type === 'password') {
               onSelect(node, e);
             } else {
               // For folders, only toggle expand on simple click, but allow selection with Ctrl/Shift
@@ -493,16 +354,10 @@ const TreeNode: React.FC<TreeNodeProps> = ({
               <Folder size={16} className="text-yellow-600 dark:text-yellow-500 flex-shrink-0" />
             )
           ) : (
-            <File size={16} className="text-blue-600 dark:text-blue-400 flex-shrink-0" />
+            <Key size={16} className="text-blue-600 dark:text-blue-400 flex-shrink-0" />
           )}
           <div className="flex items-center gap-1.5 flex-1 min-w-0 text-sm">
             <span className="truncate text-gray-900 dark:text-gray-100">{node.name}</span>
-            {node.locked_by && (
-              <span className="flex items-center gap-0.5 text-red-600 text-[10px] whitespace-nowrap flex-shrink-0 font-medium">
-                <Lock size={10} className="flex-shrink-0" />
-                <span>by {node.locked_by.user_name}</span>
-              </span>
-            )}
           </div>
         </div>
       </div>
@@ -517,10 +372,6 @@ const TreeNode: React.FC<TreeNodeProps> = ({
           onCreateFolder={onCreateFolder}
           onDelete={onDelete}
           onRename={onRename}
-          onCopy={onCopy}
-          onDownload={onDownload}
-          onUpload={onUpload}
-          onUnlock={onUnlock}
         />
       )}
 
@@ -539,10 +390,6 @@ const TreeNode: React.FC<TreeNodeProps> = ({
               onCreateFolder={onCreateFolder}
               onDelete={onDelete}
               onRename={onRename}
-              onCopy={onCopy}
-              onDownload={onDownload}
-              onUpload={onUpload}
-              onUnlock={onUnlock}
             />
           ))}
         </div>
@@ -551,7 +398,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   );
 };
 
-const DocumentTree: React.FC<DocumentTreeProps> = ({
+const PasswordTree: React.FC<PasswordTreeProps> = ({
   tree,
   expanded,
   selected,
@@ -564,10 +411,6 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
   onCreateFolder,
   onDelete,
   onRename,
-  onCopy,
-  onDownload,
-  onUpload,
-  onUnlock,
   width = 320,
   userPermission,
   workspaceSelector,
@@ -592,9 +435,10 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
     onConfirm: () => void;
   } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   
   // Flatten tree for Ctrl+A selection
-  const flattenTree = useCallback((nodes: Document[], result: Document[] = []): Document[] => {
+  const flattenTree = useCallback((nodes: PasswordItem[], result: PasswordItem[] = []): PasswordItem[] => {
     for (const node of nodes) {
       if (node.id !== 'root') {
         result.push(node);
@@ -612,6 +456,7 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
+    e.stopPropagation();
     setContextMenu({ x: e.clientX, y: e.clientY });
   };
 
@@ -620,10 +465,28 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
   };
 
   useEffect(() => {
-    const handleClickOutside = () => closeContextMenu();
-    document.addEventListener('click', handleClickOutside);
-    return () => document.removeEventListener('click', handleClickOutside);
-  }, []);
+    if (!contextMenu) return;
+    
+    const handleClickOutside = (e: MouseEvent) => {
+      // Don't close if clicking inside the menu
+      if (menuRef.current && menuRef.current.contains(e.target as Node)) {
+        return;
+      }
+      // Don't close if a modal is open
+      if (inputModal) return;
+      closeContextMenu();
+    };
+    
+    // Use a small delay to allow the menu click to be processed first
+    const timeoutId = setTimeout(() => {
+      document.addEventListener('click', handleClickOutside, true);
+    }, 0);
+    
+    return () => {
+      clearTimeout(timeoutId);
+      document.removeEventListener('click', handleClickOutside, true);
+    };
+  }, [contextMenu, inputModal]);
 
   // Handle F2 key for renaming, Delete key for deletion, and Ctrl+A for select all
   useEffect(() => {
@@ -660,12 +523,23 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
       }
       // Check if Delete is pressed and at least one element is selected
       if ((event.key === 'Delete' || event.key === 'Backspace') && selected.length > 0 && onDelete) {
+        // Ignore if an input or textarea is focused to avoid accidental deletions while typing
+        const activeElement = document.activeElement;
+        if (
+          activeElement && 
+          (activeElement.tagName === 'INPUT' || 
+           activeElement.tagName === 'TEXTAREA' || 
+           activeElement.isContentEditable)
+        ) {
+          return;
+        }
+
         const firstSelected = selected[0];
         if (firstSelected.id !== 'root') {
           event.preventDefault();
           event.stopPropagation();
           const itemName = firstSelected.name;
-          const itemType = firstSelected.type === 'folder' ? 'dossier' : 'document';
+          const itemType = firstSelected.type === 'folder' ? 'dossier' : 'mot de passe';
           const count = selected.length;
           const message = count > 1 
             ? `Êtes-vous sûr de vouloir supprimer ${count} éléments ?`
@@ -690,13 +564,13 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [selected, onRename, onDelete, tree, flattenTree, onSelect]);
+  }, [selected, onRename, onDelete, onSelectAll]);
 
   return (
     <div className="bg-white dark:bg-gray-800 border-r dark:border-gray-700 flex flex-col h-full" style={{ width: `${width}px`, minWidth: '200px', maxWidth: '600px' }}>
-      <div className="border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex-shrink-0">
+      <div className="border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
         <div className="p-4 flex items-center justify-between">
-          <h2 className="font-bold text-lg text-gray-900 dark:text-white">Documents</h2>
+          <h2 className="font-bold text-lg text-gray-900 dark:text-white">Passwords</h2>
           
           {/* Permission Badge */}
           {userPermission && (
@@ -750,17 +624,18 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
                 </button>
               )}
             </div>
+            
           </div>
         )}
       </div>
       <div className="flex-1 flex flex-col overflow-y-auto min-h-0 relative">
-        {/* Expand/Collapse buttons - positioned top right of the tree area, aligned with tree items */}
+        {/* Expand/Collapse buttons - positioned top right of the tree area */}
         {onExpandAll && onCollapseAll && (
           <div className="absolute top-[14px] right-2 z-10 flex items-center gap-1">
             <button
               type="button"
               onClick={onExpandAll}
-              className="p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm shadow-sm"
+              className="p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm"
               title="Développer tout l'arbre"
             >
               <Maximize2 size={14} />
@@ -768,7 +643,7 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
             <button
               type="button"
               onClick={onCollapseAll}
-              className="p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm shadow-sm"
+              className="p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm"
               title="Réduire tout l'arbre"
             >
               <Minimize2 size={14} />
@@ -789,10 +664,6 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
               onCreateFolder={onCreateFolder}
               onDelete={onDelete}
               onRename={onRename}
-              onCopy={onCopy}
-              onDownload={onDownload}
-              onUpload={onUpload}
-              onUnlock={onUnlock}
             />
           ))}
         </div>
@@ -807,18 +678,18 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
             {isRootOver ? (
               <>
                 <div className="mb-1">📁 Déposer à la racine</div>
-                <div className="text-xs">Le fichier/dossier sera déplacé ici</div>
+                <div className="text-xs">Le mot de passe/dossier sera déplacé ici</div>
               </>
             ) : (
               <>
                 <div className="mb-1">Clic droit pour créer</div>
-                <div className="text-xs">document ou dossier</div>
+                <div className="text-xs">mot de passe ou dossier</div>
               </>
             )}
           </div>
         </div>
       </div>
-      
+
       {/* Tag filter - sticky at the bottom */}
       {onTagFilterChange && (
         <TagFilter
@@ -830,45 +701,57 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
       
       {contextMenu && (
         <div
+          ref={menuRef}
           className="fixed bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 z-50 min-w-[160px]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
         >
           <button
-            onClick={() => {
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
               if (!onCreate) return;
-              setInputModal({
-                isOpen: true,
-                title: 'Nouveau document',
-                label: 'Nom du document',
-                defaultValue: '',
-                onConfirm: (name) => {
-                  onCreate('root', name);
-                  setInputModal(null);
-                  closeContextMenu();
-                }
-              });
+              closeContextMenu();
+              // Use setTimeout to ensure the menu is closed before opening the modal
+              setTimeout(() => {
+                setInputModal({
+                  isOpen: true,
+                  title: 'Nouveau mot de passe',
+                  label: 'Nom du mot de passe',
+                  defaultValue: '',
+                  onConfirm: (name) => {
+                    onCreate('root', name);
+                    setInputModal(null);
+                  }
+                });
+              }, 0);
             }}
             className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
             disabled={!onCreate}
           >
             <Plus size={14} />
-            Ajouter un document
+            Ajouter un mot de passe
           </button>
           <button
-            onClick={() => {
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
               if (!onCreateFolder) return;
-              setInputModal({
-                isOpen: true,
-                title: 'Nouveau dossier',
-                label: 'Nom du dossier',
-                defaultValue: '',
-                onConfirm: (name) => {
-                  onCreateFolder('root', name);
-                  setInputModal(null);
-                  closeContextMenu();
-                }
-              });
+              closeContextMenu();
+              // Use setTimeout to ensure the menu is closed before opening the modal
+              setTimeout(() => {
+                setInputModal({
+                  isOpen: true,
+                  title: 'Nouveau dossier',
+                  label: 'Nom du dossier',
+                  defaultValue: '',
+                  onConfirm: (name) => {
+                    onCreateFolder('root', name);
+                    setInputModal(null);
+                  }
+                });
+              }, 0);
             }}
             className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
           >
@@ -903,4 +786,4 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
   );
 };
 
-export default DocumentTree;
+export default PasswordTree;
