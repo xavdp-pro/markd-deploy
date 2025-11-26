@@ -100,6 +100,12 @@ class ApiService {
     });
   }
 
+  async heartbeatDocument(id: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/documents/${id}/heartbeat`, {
+      method: 'POST',
+    });
+  }
+
   // Document tags
   async getDocumentTags(documentId: string): Promise<{ success: boolean; tags: Tag[] }> {
     return this.request(`/documents/${documentId}/tags`);

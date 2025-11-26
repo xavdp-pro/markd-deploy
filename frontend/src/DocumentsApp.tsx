@@ -519,6 +519,24 @@ function App() {
     const unsubscribeLock = websocket.onLockUpdate((documentId, lockInfo) => {
       // Update tree with new lock info
       setTree(prevTree => {
+        // Notify if someone else locked it
+        if (lockInfo && String(lockInfo.user_id) !== getUserId()) {
+          const findName = (nodes: Document[]): string | null => {
+            for (const n of nodes) {
+              if (n.id === documentId) return n.name;
+              if (n.children) {
+                const found = findName(n.children);
+                if (found) return found;
+              }
+            }
+            return null;
+          };
+          const name = findName(prevTree);
+          if (name) {
+            toast(`${lockInfo.user_name} édite "${name}"`, { icon: '🔒', duration: 3000 });
+          }
+        }
+
         const updateLock = (docs: Document[]): Document[] => {
           return docs.map(doc => {
             if (doc.id === documentId) {
@@ -544,7 +562,27 @@ function App() {
       unsubscribeLock();
       websocket.disconnect();
     };
-  }, [currentWorkspace, selected]);
+  }, [currentWorkspace, selected, getUserId]);
+
+  // Heartbeat loop for locked documents
+  useEffect(() => {
+    if (!editMode || selected.length !== 1) return;
+    
+    const activeDoc = selected[0];
+    const currentUserId = getUserId();
+    
+    // Only heartbeat if we own the lock
+    if (activeDoc.locked_by?.user_id && String(activeDoc.locked_by.user_id) === currentUserId) {
+      // Send initial heartbeat
+      api.heartbeatDocument(activeDoc.id).catch(console.error);
+
+      const interval = setInterval(() => {
+        api.heartbeatDocument(activeDoc.id).catch(console.error);
+      }, 60000); // Every minute
+      
+      return () => clearInterval(interval);
+    }
+  }, [editMode, selected, getUserId]);
 
   // Toast on content updates coming from other users
 

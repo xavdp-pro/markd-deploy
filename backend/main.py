@@ -8,7 +8,7 @@ import uvicorn
 import os
 from dotenv import load_dotenv
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import db
 import sys
 import shutil
@@ -20,6 +20,9 @@ from activity_logger import log_activity
 sys.setrecursionlimit(10000)
 
 load_dotenv()
+
+# Constants
+LOCK_TIMEOUT_MINUTES = 30
 
 # JWT Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
@@ -1182,27 +1185,67 @@ async def lock_document(document_id: str, lock_req: LockRequest):
     """Lock document for editing"""
     try:
         # Check if already locked
-        check_query = "SELECT user_id, user_name FROM document_locks WHERE document_id = %s"
+        check_query = "SELECT user_id, user_name, locked_at FROM document_locks WHERE document_id = %s"
         existing = db.execute_query(check_query, (document_id,))
         
         if existing:
-            return {
-                "success": False,
-                "message": "Document already locked",
-                "locked_by": existing[0]
-            }
+            locked_at = existing[0]['locked_at']
+            # Check if lock is expired
+            if locked_at and (datetime.now() - locked_at) > timedelta(minutes=LOCK_TIMEOUT_MINUTES):
+                # Lock expired, delete it
+                delete_query = "DELETE FROM document_locks WHERE document_id = %s"
+                db.execute_update(delete_query, (document_id,))
+            elif existing[0]['user_id'] != lock_req.user_id:
+                # Valid lock by another user
+                return {
+                    "success": False,
+                    "message": "Document already locked",
+                    "locked_by": existing[0]
+                }
+            else:
+                # Locked by same user, update timestamp
+                update_query = "UPDATE document_locks SET locked_at = NOW() WHERE document_id = %s"
+                db.execute_update(update_query, (document_id,))
+                return {"success": True, "message": "Lock refreshed"}
         
         # Create lock
         query = """
-            INSERT INTO document_locks (document_id, user_id, user_name)
-            VALUES (%s, %s, %s)
+            INSERT INTO document_locks (document_id, user_id, user_name, locked_at)
+            VALUES (%s, %s, %s, NOW())
         """
         db.execute_update(query, (document_id, lock_req.user_id, lock_req.user_name))
         
-        lock_info = {"user_id": lock_req.user_id, "user_name": lock_req.user_name}
+        lock_info = {
+            "user_id": lock_req.user_id, 
+            "user_name": lock_req.user_name,
+            "locked_at": datetime.now().isoformat()
+        }
         await broadcast_lock_update(document_id, lock_info)
         
         return {"success": True, "message": "Document locked"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/documents/{document_id}/heartbeat")
+async def heartbeat_document(document_id: str, user: Dict = Depends(get_current_user)):
+    """Update lock timestamp to prevent expiration"""
+    try:
+        user_id = str(user['id'])
+        # Check if user owns the lock
+        check_query = "SELECT user_id FROM document_locks WHERE document_id = %s"
+        existing = db.execute_query(check_query, (document_id,))
+        
+        if not existing:
+            return {"success": False, "message": "Document not locked"}
+            
+        if str(existing[0]['user_id']) != user_id:
+            return {"success": False, "message": "Lock owned by another user"}
+            
+        # Update timestamp
+        query = "UPDATE document_locks SET locked_at = NOW() WHERE document_id = %s"
+        db.execute_update(query, (document_id,))
+        
+        return {"success": True, "message": "Heartbeat received"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
