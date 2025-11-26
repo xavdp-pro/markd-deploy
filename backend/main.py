@@ -386,6 +386,73 @@ async def broadcast_lock_update(document_id: str, lock_info: Optional[Dict] = No
         'locked_by': lock_info
     })
 
+# Presence Management
+connected_users: Dict[str, Dict] = {} # sid -> user_info
+document_presence: Dict[str, Dict[str, Dict]] = {} # document_id -> {sid: user_info}
+
+@sio.event
+async def connect(sid, environ):
+    # print(f"Client connected: {sid}")
+    pass
+
+@sio.event
+async def disconnect(sid):
+    # print(f"Client disconnected: {sid}")
+    # Remove user from presence
+    if sid in connected_users:
+        del connected_users[sid]
+    
+    # Remove from all documents
+    for doc_id, users in document_presence.items():
+        if sid in users:
+            del users[sid]
+            # Broadcast updated list
+            await sio.emit('presence_updated', {
+                'document_id': doc_id,
+                'users': list(users.values())
+            }, room=f"doc_{doc_id}")
+
+@sio.event
+async def join_document(sid, data):
+    """Join a document room for presence"""
+    document_id = data.get('document_id')
+    user_info = data.get('user')
+    
+    if not document_id or not user_info:
+        return
+        
+    sio.enter_room(sid, f"doc_{document_id}")
+    
+    if document_id not in document_presence:
+        document_presence[document_id] = {}
+        
+    # Store user presence with sid as key to handle multiple tabs/devices
+    document_presence[document_id][sid] = user_info
+    connected_users[sid] = user_info
+    
+    # Broadcast to room
+    await sio.emit('presence_updated', {
+        'document_id': document_id,
+        'users': list(document_presence[document_id].values())
+    }, room=f"doc_{document_id}")
+
+@sio.event
+async def leave_document(sid, data):
+    """Leave a document room"""
+    document_id = data.get('document_id')
+    if not document_id:
+        return
+        
+    sio.leave_room(sid, f"doc_{document_id}")
+    
+    if document_id in document_presence and sid in document_presence[document_id]:
+        del document_presence[document_id][sid]
+        
+        await sio.emit('presence_updated', {
+            'document_id': document_id,
+            'users': list(document_presence[document_id].values())
+        }, room=f"doc_{document_id}")
+
 @sio.event
 async def task_activity_updated(sid, data):
     """Broadcast task activity updates to all clients except sender"""

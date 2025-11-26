@@ -30,6 +30,7 @@ class WebSocketService {
   // Vault (Passwords) callbacks
   private vaultTreeChangedCallbacks: Set<VaultTreeChangedCallback> = new Set();
   private vaultItemUpdatedCallbacks: Set<VaultItemUpdatedCallback> = new Set();
+  private vaultLockUpdateCallbacks: Set<LockUpdateCallback> = new Set();
 
   connect() {
     if (this.socket?.connected) {
@@ -88,6 +89,10 @@ class WebSocketService {
     this.socket.on('vault_item_updated', (data: { password_id: string; name?: string | null }) => {
       this.vaultItemUpdatedCallbacks.forEach(cb => cb(data));
     });
+
+    this.socket.on('vault_lock_updated', (data: { password_id: string; locked_by: LockInfo | null }) => {
+      this.vaultLockUpdateCallbacks.forEach(cb => cb(data.password_id, data.locked_by));
+    });
   }
 
   disconnect() {
@@ -110,41 +115,41 @@ class WebSocketService {
 
   onTreeUpdate(callback: TreeUpdateCallback) {
     this.treeUpdateCallbacks.add(callback);
-    return () => this.treeUpdateCallbacks.delete(callback);
+    return () => { this.treeUpdateCallbacks.delete(callback); };
   }
 
   onTreeChanged(callback: TreeChangedCallback) {
     this.treeChangedCallbacks.add(callback);
-    return () => this.treeChangedCallbacks.delete(callback);
+    return () => { this.treeChangedCallbacks.delete(callback); };
   }
 
   onLockUpdate(callback: LockUpdateCallback) {
     this.lockUpdateCallbacks.add(callback);
-    return () => this.lockUpdateCallbacks.delete(callback);
+    return () => { this.lockUpdateCallbacks.delete(callback); };
   }
 
   onUserEditing(callback: UserEditingCallback) {
     this.userEditingCallbacks.add(callback);
-    return () => this.userEditingCallbacks.delete(callback);
+    return () => { this.userEditingCallbacks.delete(callback); };
   }
   onDocumentUpdated(callback: DocumentUpdatedCallback) {
     this.documentUpdatedCallbacks.add(callback);
-    return () => this.documentUpdatedCallbacks.delete(callback);
+    return () => { this.documentUpdatedCallbacks.delete(callback); };
   }
 
   onTaskTreeChanged(callback: TaskTreeChangedCallback) {
     this.taskTreeChangedCallbacks.add(callback);
-    return () => this.taskTreeChangedCallbacks.delete(callback);
+    return () => { this.taskTreeChangedCallbacks.delete(callback); };
   }
 
   onTaskLockUpdate(callback: TaskLockUpdateCallback) {
     this.taskLockUpdateCallbacks.add(callback);
-    return () => this.taskLockUpdateCallbacks.delete(callback);
+    return () => { this.taskLockUpdateCallbacks.delete(callback); };
   }
 
   onTaskActivityUpdate(callback: TaskActivityUpdateCallback) {
     this.taskActivityCallbacks.add(callback);
-    return () => this.taskActivityCallbacks.delete(callback);
+    return () => { this.taskActivityCallbacks.delete(callback); };
   }
 
   notifyDocumentUpdated(documentId: string, name?: string) {
@@ -166,12 +171,17 @@ class WebSocketService {
   // Vault (Passwords) methods
   onVaultTreeChanged(callback: VaultTreeChangedCallback) {
     this.vaultTreeChangedCallbacks.add(callback);
-    return () => this.vaultTreeChangedCallbacks.delete(callback);
+    return () => { this.vaultTreeChangedCallbacks.delete(callback); };
   }
 
   onVaultItemUpdated(callback: VaultItemUpdatedCallback) {
     this.vaultItemUpdatedCallbacks.add(callback);
-    return () => this.vaultItemUpdatedCallbacks.delete(callback);
+    return () => { this.vaultItemUpdatedCallbacks.delete(callback); };
+  }
+
+  onVaultLockUpdate(callback: LockUpdateCallback) {
+    this.vaultLockUpdateCallbacks.add(callback);
+    return () => { this.vaultLockUpdateCallbacks.delete(callback); };
   }
 
   notifyVaultTreeChanged() {

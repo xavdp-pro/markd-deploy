@@ -89,3 +89,11 @@ async def broadcast_vault_item_updated(password_id: str, name: Optional[str] = N
             'name': name,
             'user_id': user_id
         })
+
+async def broadcast_vault_lock_update(password_id: str, lock_info: Optional[Dict] = None):
+    """Broadcast vault lock status change"""
+    if sio:
+        await sio.emit('vault_lock_updated', {
+            'password_id': password_id,
+            'locked_by': lock_info
+        })

@@ -3,11 +3,15 @@ from pydantic import BaseModel
 from typing import Optional, Dict, List, Any
 from database import db
 from encryption_service import encryption
-from websocket_broadcasts import broadcast_vault_tree_update, broadcast_vault_item_updated
+from websocket_broadcasts import broadcast_vault_tree_update, broadcast_vault_item_updated, broadcast_vault_lock_update
 import uuid
 import json
+from datetime import datetime, timedelta
 
 router = APIRouter()
+
+# Constants
+LOCK_TIMEOUT_MINUTES = 30
 
 # Import get_current_user from auth
 from auth import get_current_user
@@ -98,18 +102,24 @@ def build_password_tree(parent_id: Optional[str] = None, workspace_id: str = 'de
     # Order: folders first (type='folder'), then files (type='password')
     if parent_id is None:
         query = """
-            SELECT id, title as name, type, parent_id, username, url, notes, created_at, updated_at, workspace_id
-            FROM password_vault
-            WHERE parent_id IS NULL AND workspace_id = %s
-            ORDER BY CASE WHEN type = 'folder' THEN 0 ELSE 1 END, title ASC
+            SELECT pv.id, pv.title as name, pv.type, pv.parent_id, pv.username, pv.url, pv.notes, 
+                   pv.created_at, pv.updated_at, pv.workspace_id,
+                   pl.user_id as locked_user_id, pl.user_name as locked_user_name, pl.locked_at as locked_at
+            FROM password_vault pv
+            LEFT JOIN password_locks pl ON pv.id = pl.password_id
+            WHERE pv.parent_id IS NULL AND pv.workspace_id = %s
+            ORDER BY CASE WHEN pv.type = 'folder' THEN 0 ELSE 1 END, pv.title ASC
         """
         params = (workspace_id,)
     else:
         query = """
-            SELECT id, title as name, type, parent_id, username, url, notes, created_at, updated_at, workspace_id
-            FROM password_vault
-            WHERE parent_id = %s AND workspace_id = %s
-            ORDER BY CASE WHEN type = 'folder' THEN 0 ELSE 1 END, title ASC
+            SELECT pv.id, pv.title as name, pv.type, pv.parent_id, pv.username, pv.url, pv.notes, 
+                   pv.created_at, pv.updated_at, pv.workspace_id,
+                   pl.user_id as locked_user_id, pl.user_name as locked_user_name, pl.locked_at as locked_at
+            FROM password_vault pv
+            LEFT JOIN password_locks pl ON pv.id = pl.password_id
+            WHERE pv.parent_id = %s AND pv.workspace_id = %s
+            ORDER BY CASE WHEN pv.type = 'folder' THEN 0 ELSE 1 END, pv.title ASC
         """
         params = (parent_id, workspace_id)
     
@@ -119,6 +129,27 @@ def build_password_tree(parent_id: Optional[str] = None, workspace_id: str = 'de
     for item in items:
         item_dict = dict(item)
         
+        # Format lock info
+        if item_dict.get('locked_user_id'):
+            # Check if lock is expired
+            locked_at = item_dict.get('locked_at')
+            if locked_at and (datetime.now() - locked_at) > timedelta(minutes=LOCK_TIMEOUT_MINUTES):
+                 # Lock expired, ignore it (will be cleaned up by cron or next lock attempt)
+                 item_dict['locked_by'] = None
+            else:
+                item_dict['locked_by'] = {
+                    'user_id': item_dict['locked_user_id'],
+                    'user_name': item_dict['locked_user_name'],
+                    'locked_at': locked_at.isoformat() if locked_at else None
+                }
+        else:
+            item_dict['locked_by'] = None
+            
+        # Remove flattened columns
+        item_dict.pop('locked_user_id', None)
+        item_dict.pop('locked_user_name', None)
+        item_dict.pop('locked_at', None)
+
         # Convert datetime objects to ISO format strings
         if item_dict.get('created_at'):
             item_dict['created_at'] = item_dict['created_at'].isoformat()
@@ -150,6 +181,10 @@ class PasswordUpdate(BaseModel):
     url: Optional[str] = None
     notes: Optional[str] = None
     parent_id: Optional[str] = None
+
+class LockRequest(BaseModel):
+    user_id: str
+    user_name: str
 
 # Helper: Check workspace permission (same logic as documents)
 def get_workspace_permission(user_id: int, workspace_id: str, user_role: str = None) -> str:
@@ -538,5 +573,110 @@ async def get_password_tag_suggestions(query: str = "", limit: int = 20, current
                 (limit,)
             )
         return {"success": True, "tags": [dict(row) for row in results]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===== Lock Management =====
+
+@router.post("/api/passwords/{password_id}/lock")
+async def lock_password(password_id: str, lock_req: LockRequest):
+    """Lock password for editing"""
+    try:
+        # Check if already locked
+        check_query = "SELECT user_id, user_name, locked_at FROM password_locks WHERE password_id = %s"
+        existing = db.execute_query(check_query, (password_id,))
+        
+        if existing:
+            locked_at = existing[0]['locked_at']
+            # Check if lock is expired
+            if locked_at and (datetime.now() - locked_at) > timedelta(minutes=LOCK_TIMEOUT_MINUTES):
+                # Lock expired, delete it
+                delete_query = "DELETE FROM password_locks WHERE password_id = %s"
+                db.execute_update(delete_query, (password_id,))
+            elif existing[0]['user_id'] != lock_req.user_id:
+                # Valid lock by another user
+                return {
+                    "success": False,
+                    "message": "Password already locked",
+                    "locked_by": existing[0]
+                }
+            else:
+                # Locked by same user, update timestamp
+                update_query = "UPDATE password_locks SET locked_at = NOW() WHERE password_id = %s"
+                db.execute_update(update_query, (password_id,))
+                return {"success": True, "message": "Lock refreshed"}
+        
+        # Create lock
+        query = """
+            INSERT INTO password_locks (password_id, user_id, user_name, locked_at)
+            VALUES (%s, %s, %s, NOW())
+        """
+        db.execute_update(query, (password_id, lock_req.user_id, lock_req.user_name))
+        
+        lock_info = {
+            "user_id": lock_req.user_id, 
+            "user_name": lock_req.user_name,
+            "locked_at": datetime.now().isoformat()
+        }
+        await broadcast_vault_lock_update(password_id, lock_info)
+        
+        return {"success": True, "message": "Password locked"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/api/passwords/{password_id}/heartbeat")
+async def heartbeat_password(password_id: str, current_user: Dict = Depends(get_current_user)):
+    """Update lock timestamp to prevent expiration"""
+    try:
+        user_id = str(current_user['id'])
+        # Check if user owns the lock
+        check_query = "SELECT user_id FROM password_locks WHERE password_id = %s"
+        existing = db.execute_query(check_query, (password_id,))
+        
+        if not existing:
+            return {"success": False, "message": "Password not locked"}
+            
+        if str(existing[0]['user_id']) != user_id:
+            return {"success": False, "message": "Lock owned by another user"}
+            
+        # Update timestamp
+        query = "UPDATE password_locks SET locked_at = NOW() WHERE password_id = %s"
+        db.execute_update(query, (password_id,))
+        
+        return {"success": True, "message": "Heartbeat received"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/api/passwords/{password_id}/lock")
+async def unlock_password(password_id: str, user_id: str):
+    """Unlock password"""
+    try:
+        query = "DELETE FROM password_locks WHERE password_id = %s AND user_id = %s"
+        affected = db.execute_update(query, (password_id, user_id))
+        
+        if affected == 0:
+            return {"success": False, "message": "Lock not found or not owned by user"}
+        
+        await broadcast_vault_lock_update(password_id, None)
+        
+        return {"success": True, "message": "Password unlocked"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/api/passwords/{password_id}/force-unlock")
+async def force_unlock_password(password_id: str):
+    """Force unlock password (admin only)"""
+    try:
+        # Delete any existing lock regardless of user
+        query = "DELETE FROM password_locks WHERE password_id = %s"
+        affected = db.execute_update(query, (password_id,))
+        
+        if affected == 0:
+            return {"success": False, "message": "Password not locked"}
+        
+        await broadcast_vault_lock_update(password_id, None)
+        
+        return {"success": True, "message": "Password unlocked forcedly"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

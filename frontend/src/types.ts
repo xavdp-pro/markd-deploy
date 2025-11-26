@@ -25,6 +25,11 @@ export interface PasswordItem {
   updated_at?: string;
   workspace_id?: string;
   children?: PasswordItem[];
+  locked_by?: {
+    user_id: string;
+    user_name: string;
+    locked_at?: string;
+  } | null;
 }
 
 export interface PasswordDetail extends PasswordItem {

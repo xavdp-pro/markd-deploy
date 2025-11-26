@@ -383,6 +383,32 @@ class ApiService {
     });
   }
 
+  // Password Locking
+  async lockPassword(id: string, user: { id: string; username: string }): Promise<{ success: boolean; message: string }> {
+    return this.request(`/passwords/${id}/lock`, {
+      method: 'POST',
+      body: JSON.stringify({ user_id: user.id, user_name: user.username }),
+    });
+  }
+
+  async unlockPassword(id: string, userId: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/passwords/${id}/lock?user_id=${userId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async forceUnlockPassword(id: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/passwords/${id}/force-unlock`, {
+      method: 'POST',
+    });
+  }
+
+  async heartbeatPassword(id: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/passwords/${id}/heartbeat`, {
+      method: 'POST',
+    });
+  }
+
   // Password tags
   async getPasswordTags(passwordId: string): Promise<{ success: boolean; tags: Tag[] }> {
     return this.request(`/vault/passwords/${passwordId}/tags`);

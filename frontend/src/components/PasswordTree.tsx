@@ -6,7 +6,6 @@ import {
   Plus,
   Trash2,
   Edit2,
-  Copy,
   Shield,
   Eye,
   ChevronRight,
@@ -16,27 +15,13 @@ import {
   X,
   Maximize2,
   Minimize2,
+  Lock,
 } from 'lucide-react';
 import { PasswordItem, Tag as TagType } from '../types';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
-import { useAuth } from '../contexts/AuthContext';
 import ConfirmModal from './ConfirmModal';
 import InputModal from './InputModal';
 import TagFilter from './TagFilter';
-
-interface PasswordItem {
-  id: string;
-  name: string;
-  type: 'folder' | 'password';
-  parent_id?: string | null;
-  username?: string | null;
-  url?: string | null;
-  notes?: string | null;
-  created_at?: string;
-  updated_at?: string;
-  workspace_id?: string;
-  children?: PasswordItem[];
-}
 
 interface PasswordTreeProps {
   tree: PasswordItem[];
@@ -122,11 +107,6 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
     };
   }, [onClose]);
 
-  const handleAction = (action: () => void) => {
-    action();
-    onClose();
-  };
-
   return (
     <div
       ref={menuRef}
@@ -143,7 +123,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
                 label: 'Nom du mot de passe',
                 defaultValue: '',
                 onConfirm: (name) => {
-                  onCreate(node.id, name);
+                  if (onCreate) onCreate(node.id, name);
                   setInputModal(null);
                   onClose();
                 }
@@ -162,7 +142,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
                 label: 'Nom du dossier',
                 defaultValue: '',
                 onConfirm: (name) => {
-                  onCreateFolder(node.id, name);
+                  if (onCreateFolder) onCreateFolder(node.id, name);
                   setInputModal(null);
                   onClose();
                 }
@@ -187,7 +167,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
                 label: 'Nouveau nom',
                 defaultValue: node.name,
                 onConfirm: (newName) => {
-                  if (newName.trim()) {
+                  if (newName.trim() && onRename) {
                     onRename(node.id, newName);
                     setInputModal(null);
                     onClose();
@@ -208,7 +188,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
                 title: 'Supprimer le mot de passe',
                 message: `Voulez-vous vraiment supprimer "${node.name}" ?`,
                 onConfirm: () => {
-                  onDelete(node.id);
+                  if (onDelete) onDelete(node.id);
                   setConfirmModal(null);
                   onClose();
                 }
@@ -256,10 +236,10 @@ interface TreeNodeProps {
   onExpandAll?: () => void;
   onCollapseAll?: () => void;
   onSelect: (item: PasswordItem, event?: React.MouseEvent) => void;
-  onCreate: (parentId: string, name: string) => void;
-  onCreateFolder: (parentId: string, name: string) => void;
-  onDelete: (id: string) => void;
-  onRename: (id: string, newName: string) => void;
+  onCreate?: (parentId: string, name: string) => void;
+  onCreateFolder?: (parentId: string, name: string) => void;
+  onDelete?: (id: string) => void;
+  onRename?: (id: string, newName: string) => void;
 }
 
 const TreeNode: React.FC<TreeNodeProps> = ({
@@ -358,6 +338,12 @@ const TreeNode: React.FC<TreeNodeProps> = ({
           )}
           <div className="flex items-center gap-1.5 flex-1 min-w-0 text-sm">
             <span className="truncate text-gray-900 dark:text-gray-100">{node.name}</span>
+            {node.locked_by && (
+              <div className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400" title={`Verrouillé par ${node.locked_by.user_name}`}>
+                <Lock size={12} />
+                <span className="hidden sm:inline truncate max-w-[80px]">{node.locked_by.user_name}</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -524,7 +510,7 @@ const PasswordTree: React.FC<PasswordTreeProps> = ({
       // Check if Delete is pressed and at least one element is selected
       if ((event.key === 'Delete' || event.key === 'Backspace') && selected.length > 0 && onDelete) {
         // Ignore if an input or textarea is focused to avoid accidental deletions while typing
-        const activeElement = document.activeElement;
+        const activeElement = document.activeElement as HTMLElement;
         if (
           activeElement && 
           (activeElement.tagName === 'INPUT' || 

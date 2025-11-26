@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Header from '../components/layout/Header';
-import { Key, Lock, Folder } from 'lucide-react';
+import { Key, Lock, Folder, X, Trash2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useWorkspace } from '../contexts/WorkspaceContext';
 import { toast } from 'react-hot-toast';
@@ -15,7 +15,7 @@ import { DndContext, DragEndEvent, DragOverlay, DragStartEvent } from '@dnd-kit/
 
 const VaultPage: React.FC = () => {
   const { user } = useAuth();
-  const { currentWorkspaceId: currentWorkspace, userPermission } = useWorkspace();
+  const { currentWorkspace, userPermission } = useWorkspace();
   const [tree, setTree] = useState<PasswordItem[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [selectedPassword, setSelectedPassword] = useState<PasswordDetail | null>(null);
@@ -38,6 +38,106 @@ const VaultPage: React.FC = () => {
   const [pendingSelection, setPendingSelection] = useState<string | null>(null);
   const prevTreeRef = React.useRef<PasswordItem[] | null>(null);
   const lastLocalChangeAtRef = React.useRef<number>(0);
+
+  // WebSocket lock listener
+  useEffect(() => {
+    const unsubscribe = websocket.onVaultLockUpdate((passwordId, lockInfo) => {
+        // Update tree state to show lock
+        setTree(prevTree => {
+            const updateNode = (nodes: PasswordItem[]): PasswordItem[] => {
+                return nodes.map(node => {
+                    if (node.id === passwordId) {
+                        return { ...node, locked_by: lockInfo };
+                    }
+                    if (node.children) {
+                        return { ...node, children: updateNode(node.children) };
+                    }
+                    return node;
+                });
+            };
+            const newTree = updateNode(prevTree);
+            
+            // Notify if locked by someone else
+            if (lockInfo && user && String(lockInfo.user_id) !== String(user.id)) {
+                const findName = (nodes: PasswordItem[]): string | null => {
+                    for (const n of nodes) {
+                        if (n.id === passwordId) return n.name;
+                        if (n.children) {
+                            const found = findName(n.children);
+                            if (found) return found;
+                        }
+                    }
+                    return null;
+                };
+                const name = findName(prevTree);
+                if (name) toast(`${lockInfo.user_name} édite "${name}"`, { icon: '🔒' });
+            }
+            return newTree;
+        });
+    });
+    return unsubscribe;
+  }, [user]);
+
+  // Heartbeat loop
+  useEffect(() => {
+    if (!editingId || !user) return;
+    
+    api.heartbeatPassword(editingId).catch(console.error);
+    
+    const interval = setInterval(() => {
+        api.heartbeatPassword(editingId).catch(console.error);
+    }, 60000);
+    
+    return () => clearInterval(interval);
+  }, [editingId, user]);
+
+  const handleStartEditing = async () => {
+    if (!selectedPassword || !user) return;
+    
+    // Check lock in tree
+    const findNode = (nodes: PasswordItem[], id: string): PasswordItem | null => {
+        for (const node of nodes) {
+            if (node.id === id) return node;
+            if (node.children) {
+                const found = findNode(node.children, id);
+                if (found) return found;
+            }
+        }
+        return null;
+    };
+    const node = findNode(tree, selectedPassword.id);
+    
+    if (node?.locked_by && String(node.locked_by.user_id) !== String(user.id)) {
+        // Check if lock is expired client-side or assume server handles it?
+        // Server handles it, but we might want to block UI.
+        // Let's try to lock anyway, server will reject if valid lock exists.
+    }
+
+    try {
+        const res = await api.lockPassword(selectedPassword.id, { id: String(user.id), username: user.username });
+        if (!res.success) {
+            toast.error(res.message);
+            return;
+        }
+        setEditingId(selectedPassword.id);
+        setShowForm(true);
+    } catch (e) {
+        console.error(e);
+        toast.error("Impossible de verrouiller le mot de passe");
+    }
+  };
+
+  const handleCancelEditing = async () => {
+    if (editingId && user) {
+        await api.unlockPassword(editingId, String(user.id));
+    }
+    setShowForm(false);
+    if (editingId) {
+        setEditingId(null);
+    } else {
+        setSelectedPassword(null);
+    }
+  };
 
   // Save sidebar width to localStorage
   useEffect(() => {
@@ -796,6 +896,12 @@ const VaultPage: React.FC = () => {
         toast.success('Password updated');
         setShowForm(false);
         const modifiedId = editingId;
+        
+        // Unlock
+        if (modifiedId && user) {
+            await api.unlockPassword(modifiedId, String(user.id));
+        }
+        
         setEditingId(null);
         await fetchTree(currentWorkspace);
 
@@ -846,25 +952,6 @@ const VaultPage: React.FC = () => {
     } catch (error) {
       console.error('Delete error:', error);
       toast.error('Erreur de connexion au serveur');
-    }
-  };
-
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success(`${label} copié dans le presse-papier`);
-  };
-
-  const generatePassword = () => {
-    // Not used in VaultPage anymore, handled in PasswordForm
-  };
-
-  const startEdit = async (password: PasswordDetail) => {
-    setEditingId(password.id);
-    setShowForm(true);
-    
-    // Ensure we have the latest details including tags
-    if (!passwordTags[password.id]) {
-      await loadPasswordTags(password.id);
     }
   };
 
@@ -1035,14 +1122,7 @@ const VaultPage: React.FC = () => {
               initialTags={editingId && selectedPassword ? passwordTags[selectedPassword.id] || [] : []}
               allTags={allTags}
               onSubmit={editingId ? handleUpdate : handleCreate}
-              onCancel={() => {
-                setShowForm(false);
-                if (editingId) {
-                  setEditingId(null);
-                } else {
-                  setSelectedPassword(null);
-                }
-              }}
+              onCancel={handleCancelEditing}
               isLoading={isLoading}
             />
           ) : selectedPassword ? (
@@ -1050,7 +1130,7 @@ const VaultPage: React.FC = () => {
               password={selectedPassword}
               tags={passwordTags[selectedPassword.id] || []}
               allTags={allTags}
-              onEdit={() => startEdit(selectedPassword)}
+              onEdit={handleStartEditing}
               onDelete={() => setDeleteConfirm({ id: selectedPassword.id, title: selectedPassword.name })}
               onAddTag={(name) => handleAddPasswordTag(selectedPassword.id, name)}
               onRemoveTag={(tagId) => handleRemovePasswordTag(selectedPassword.id, tagId)}
