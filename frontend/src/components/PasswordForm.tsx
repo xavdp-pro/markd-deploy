@@ -30,7 +30,7 @@ const PasswordForm: React.FC<PasswordFormProps> = ({
   onCancel,
   isLoading = false,
   isEditing = false,
-  workspaceId
+  // workspaceId
 }) => {
   const [formData, setFormData] = useState<PasswordFormData>({
     title: '',

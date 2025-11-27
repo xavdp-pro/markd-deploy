@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS document_locks (
+    document_id VARCHAR(36) PRIMARY KEY,
+    user_id INT NOT NULL,
+    user_name VARCHAR(255) NOT NULL,
+    locked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_heartbeat TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+);

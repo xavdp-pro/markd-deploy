@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { FileEdit, Lock } from 'lucide-react';
+import { FileEdit, Lock, Unlock, Link } from 'lucide-react';
+import toast from 'react-hot-toast';
 import MDEditor from '@uiw/react-md-editor';
 import { Task, TaskTimelineItem, TaskComment, TaskTag, TaskAssignee, TaskFile, TaskChecklistItem } from '../types';
 import TaskMetadataPanel from './TaskMetadataPanel';
@@ -7,12 +8,17 @@ import TaskTimeline from './TaskTimeline';
 import TaskComments from './TaskComments';
 import TaskFiles from './TaskFiles';
 import TaskChecklist from './TaskChecklist';
+import PresenceAvatars from './PresenceAvatars';
 
 interface TaskViewerProps {
   task: Task;
   onEdit: () => void;
   canEdit?: boolean;
   lockedByOther?: boolean;
+  currentUserId?: string;
+  presenceUsers?: Array<{ id: string; username: string }>;
+  onUnlock?: () => void;
+  isEditing?: boolean;
   onStatusChange?: (status: string) => void;
   onPriorityChange?: (priority: 'low' | 'medium' | 'high') => void;
   onDueDateChange?: (isoDate: string | null) => void;
@@ -49,6 +55,10 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
   onEdit,
   canEdit = true,
   lockedByOther = false,
+  // currentUserId,
+  presenceUsers,
+  onUnlock,
+  isEditing = false,
   onStatusChange,
   onPriorityChange,
   onDueDateChange,
@@ -80,6 +90,7 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
   onUpdateChecklistItem,
 }) => {
   const isLockedByMe = task.locked_by !== null && !lockedByOther;
+  const canUnlock = isLockedByMe && !isEditing;
   const [activeTab, setActiveTab] = useState<'details' | 'checklist' | 'timeline' | 'comments' | 'files'>('details');
   const commentCount = comments.length;
   const checklistCount = checklistItems.length;
@@ -87,6 +98,12 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
   
   // Detect dark mode
   const isDarkMode = typeof window !== 'undefined' && window.document.documentElement.classList.contains('dark');
+
+  const copyLinkToClipboard = () => {
+    const url = `${window.location.origin}${window.location.pathname}#task=${task.id}`;
+    navigator.clipboard.writeText(url);
+    toast.success('Lien copié ! Vous pouvez le coller dans un document Markdown ou une autre tâche');
+  };
 
   useEffect(() => {
     setActiveTab(commentCount > 0 ? 'comments' : 'details');
@@ -116,23 +133,46 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
           </div>
         </div>
         
-        {canEdit && (
+        <div className="flex items-center gap-3">
+          {presenceUsers && presenceUsers.length > 0 && (
+            <PresenceAvatars users={presenceUsers} />
+          )}
           <button
-            onClick={onEdit}
-            disabled={lockedByOther}
-            className={`
-              flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all
-              ${lockedByOther
-                ? 'cursor-not-allowed bg-gray-100 text-gray-400 dark:bg-gray-800 dark:text-gray-600'
-                : 'bg-blue-600 text-white shadow-sm hover:bg-blue-700 hover:shadow active:translate-y-0.5 dark:bg-blue-600 dark:hover:bg-blue-500'
-              }
-            `}
-            title={isLockedByMe ? 'Reprendre l\'édition' : lockedByOther ? `Verrouillé par ${task.locked_by?.user_name}` : 'Éditer la tâche'}
+            onClick={copyLinkToClipboard}
+            className="px-3 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors flex items-center gap-2"
+            title="Copier le lien vers cette tâche pour le coller ailleurs"
           >
-            <FileEdit size={16} />
-            {isLockedByMe ? 'Reprendre' : 'Éditer'}
+            <Link className="w-4 h-4" />
+            Copier le lien
           </button>
-        )}
+          {canUnlock && onUnlock && (
+            <button
+              onClick={onUnlock}
+              className="px-3 py-2 text-sm text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded transition-colors flex items-center gap-2"
+              title="Retirer mon verrou"
+            >
+              <Unlock className="w-4 h-4" />
+              Déverrouiller
+            </button>
+          )}
+          {canEdit && (
+            <button
+              onClick={onEdit}
+              disabled={lockedByOther}
+              className={`
+                flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all
+                ${lockedByOther
+                  ? 'cursor-not-allowed bg-gray-100 text-gray-400 dark:bg-gray-800 dark:text-gray-600'
+                  : 'bg-blue-600 text-white shadow-sm hover:bg-blue-700 hover:shadow active:translate-y-0.5 dark:bg-blue-600 dark:hover:bg-blue-500'
+                }
+              `}
+              title={isLockedByMe ? 'Reprendre l\'édition' : lockedByOther ? `Verrouillé par ${task.locked_by?.user_name}` : 'Éditer la tâche'}
+            >
+              <FileEdit size={16} />
+              {isLockedByMe ? 'Reprendre' : 'Éditer'}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-1 gap-6 overflow-hidden p-6">

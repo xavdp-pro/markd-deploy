@@ -82,7 +82,9 @@ const UserMultiSelect: React.FC<UserMultiSelectProps> = ({
               >
                 <span>{user.username}</span>
                 {responsibleUserId === user.id && (
-                  <Crown size={14} className="text-yellow-500" title="Responsible" />
+                  <div title="Responsible">
+                    <Crown size={14} className="text-yellow-500" />
+                  </div>
                 )}
                 {responsibleUserId !== user.id && (
                   <button

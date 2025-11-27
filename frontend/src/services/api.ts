@@ -328,6 +328,12 @@ class ApiService {
     });
   }
 
+  async heartbeatTask(id: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/tasks/${id}/heartbeat`, {
+      method: 'POST',
+    });
+  }
+
   // ===== Password Vault Operations =====
   async getPasswordTree(workspaceId: string = 'demo'): Promise<{ success: boolean; tree: any[]; workspace_name?: string }> {
     return this.request(`/vault/tree?workspace_id=${workspaceId}`);

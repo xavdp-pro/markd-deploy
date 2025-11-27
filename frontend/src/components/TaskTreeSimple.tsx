@@ -10,7 +10,6 @@ import {
   ChevronRight,
   ChevronDown,
   Lock,
-  GripVertical,
   Search,
   X,
 } from 'lucide-react';
@@ -32,7 +31,7 @@ interface TaskTreeProps {
   onRename?: (id: string, newName: string) => void;
   onCopy: (id: string) => void;
   onUnlock?: (id: string) => void;
-  width?: number;
+  // width?: number;
   readOnly?: boolean;
   userPermission?: string;
   workspaceSelector?: React.ReactNode;
@@ -227,9 +226,10 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
         <InputModal
           isOpen={inputModal.isOpen}
           title={inputModal.title}
+          label={inputModal.label}
           placeholder={inputModal.label}
           defaultValue={inputModal.defaultValue}
-          onClose={() => setInputModal(null)}
+          onCancel={() => setInputModal(null)}
           onConfirm={inputModal.onConfirm}
         />
       )}
@@ -239,9 +239,9 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
           isOpen={confirmModal.isOpen}
           title={confirmModal.title}
           message={confirmModal.message}
-          onClose={() => setConfirmModal(null)}
+          onCancel={() => setConfirmModal(null)}
           onConfirm={confirmModal.onConfirm}
-          confirmStyle="danger"
+          variant="danger"
         />
       )}
     </div>
@@ -260,7 +260,7 @@ const TaskTree: React.FC<TaskTreeProps> = ({
   onRename,
   onCopy,
   onUnlock,
-  width,
+  // width,
   readOnly = false,
   userPermission = 'read',
   workspaceSelector,
@@ -316,7 +316,6 @@ const TaskTree: React.FC<TaskTreeProps> = ({
             setNodeRef(el);
             setDropRef(el);
           }}
-          style={style}
           className={`group flex items-center gap-2 py-1 px-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer ${
             isSelected ? 'bg-blue-50 dark:bg-blue-900/20' : ''
           } ${isOver ? 'bg-blue-100 dark:bg-blue-800/30' : ''}`}
@@ -370,7 +369,9 @@ const TaskTree: React.FC<TaskTreeProps> = ({
 
           {/* Lock indicator */}
           {node.locked_by && (
-            <Lock size={14} className="text-orange-500 flex-shrink-0" title={`Locked by ${node.locked_by.user_name}`} />
+            <span title={`Locked by ${node.locked_by.user_name}`} className="flex items-center">
+              <Lock size={14} className="text-orange-500 flex-shrink-0" />
+            </span>
           )}
         </div>
 
@@ -482,8 +483,9 @@ const TaskTree: React.FC<TaskTreeProps> = ({
         <InputModal
           isOpen={inputModal.isOpen}
           title={inputModal.title}
+          label={inputModal.label}
           placeholder={inputModal.label}
-          onClose={() => setInputModal(null)}
+          onCancel={() => setInputModal(null)}
           onConfirm={inputModal.onConfirm}
         />
       )}

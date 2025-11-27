@@ -6,6 +6,7 @@ import { Task, SessionState, TaskTimelineItem, TaskComment, TaskTag, TaskAssigne
 import { api } from './services/api';
 import { websocket } from './services/websocket';
 import { useWorkspace } from './contexts/WorkspaceContext';
+import { useAuth } from './contexts/AuthContext';
 import TaskTree from './components/TaskTree';
 import TaskViewer from './components/TaskViewer';
 import TaskEditor from './components/TaskEditor';
@@ -29,10 +30,12 @@ const loadTaskSessionState = (): TaskSessionState | null => {
 };
 
 function TasksApp() {
+  const { user } = useAuth();
   const { currentWorkspace, userPermission } = useWorkspace();
   const canWrite = userPermission === 'write' || userPermission === 'admin';
 
   const [tree, setTree] = useState<Task[]>([]);
+  const [presence, setPresence] = useState<Record<string, Array<{ id: string; username: string }>>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({ root: true });
   const [selected, setSelected] = useState<Task[]>([]);
   const [editMode, setEditMode] = useState(false);
@@ -59,7 +62,7 @@ function TasksApp() {
   const [files, setFiles] = useState<TaskFile[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [checklistItems, setChecklistItems] = useState<TaskChecklistItem[]>([]);
-  const [checklistLoading, setChecklistLoading] = useState(false);
+  const [checklistLoading, _setChecklistLoading] = useState(false);
   const [isKanbanModalOpen, setIsKanbanModalOpen] = useState(false);
   const [taskTagsMap, setTaskTagsMap] = useState<Record<string, TaskTag[]>>({});
   const [pendingSelection, setPendingSelection] = useState<string | null>(null);
@@ -214,12 +217,68 @@ function TasksApp() {
   const handleSelectTask = useCallback((task: Task) => {
     setSelected([task]);
     if (task.type === 'task') {
+      window.location.hash = `task=${task.id}`;
       setEditContent(task.content || '');
       refreshTaskActivity(task.id); refreshTaskTags(task.id); refreshTaskAssignees(task.id); refreshTaskFiles(task.id); refreshTaskChecklist(task.id);
     }
   }, [refreshTaskActivity, refreshTaskTags, refreshTaskAssignees, refreshTaskFiles, refreshTaskChecklist]);
 
   const handleSelectAll = useCallback(() => { setSelected(tree); }, [tree]);
+
+  const expandToAndSelect = useCallback(async (id: string, treeDataLocal: Task[]) => {
+    const findPath = (nodes: Task[], targetId: string, path: string[] = []): string[] | null => {
+      for (const n of nodes) {
+        const newPath = [...path, n.id];
+        if (n.id === targetId) return newPath;
+        if (n.children) {
+          const p = findPath(n.children, targetId, newPath);
+          if (p) return p;
+        }
+      }
+      return null;
+    };
+    const path = findPath(treeDataLocal, id);
+    if (path) {
+      setExpanded(prev => {
+        const next: Record<string, boolean> = { ...prev };
+        for (let i = 0; i < path.length - 1; i++) {
+          next[path[i]] = true;
+        }
+        return next;
+      });
+      const node = (() => {
+        const walk = (nodes: Task[]): Task | null => {
+          for (const n of nodes) {
+            if (n.id === id) return n;
+            if (n.children) {
+              const f = walk(n.children);
+              if (f) return f;
+            }
+          }
+          return null;
+        };
+        return walk(treeDataLocal);
+      })();
+      if (node) handleSelectTask(node);
+    }
+  }, [handleSelectTask]);
+
+  // Handle URL hash
+  useEffect(() => {
+    if (tree.length === 0) return;
+    const handleHashChange = async () => {
+      const hash = window.location.hash;
+      if (hash.startsWith('#task=')) {
+        const taskId = hash.replace('#task=', '');
+        if (taskId) {
+          await expandToAndSelect(taskId, tree);
+        }
+      }
+    };
+    handleHashChange();
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [tree, expandToAndSelect]);
 
   const handleCreateTask = useCallback(async (parentId: string, name: string) => {
     try {
@@ -246,6 +305,22 @@ function TasksApp() {
   const handleCopy = useCallback(async (id: string) => {
     try { await api.copyTask(id); toast.success('Copié'); await refreshTree(); } catch (e) { toast.error('Erreur copie'); }
   }, [refreshTree]);
+
+  const handleUnlock = useCallback(async () => {
+    if (selected.length !== 1) return;
+    const task = selected[0];
+    
+    // Use user from context or fallback to local helper
+    const userId = user?.id ? String(user.id) : getUserId();
+    
+    try {
+      await api.unlockTask(task.id, userId);
+      toast.success('Verrou retiré');
+    } catch (e) {
+      console.error(e);
+      toast.error('Impossible de retirer le verrou');
+    }
+  }, [selected, user, getUserId]);
 
   const handleForceUnlock = useCallback(async (id: string) => {
     try { await api.unlockTask(id, 'force'); toast.success('Déverrouillé'); await refreshTree(); } catch (e) { toast.error('Erreur déverrouillage'); }
@@ -300,9 +375,9 @@ function TasksApp() {
     if (selected.length === 0) return;
     try { const r = await api.updateTaskTags(selected[0].id, taskTags.filter(t => t.id !== tagId).map(t => t.name)); setTaskTags(r.tags); toast.success('Tag supprimé'); } catch (e) { toast.error('Erreur suppression tag'); }
   };
-  const handleAssignmentsChange = async (assigneeIds: number[], respId: number | null) => {
+  const handleAssignmentsChange = async (assigneeIds: number[], respId?: number) => {
     if (selected.length === 0) return;
-    try { const r = await api.updateTaskAssignees(selected[0].id, { assignee_ids: assigneeIds, responsible_id: respId }); setAssignees(r.assignees); setResponsibleId(r.responsible_id ?? null); toast.success('Assignations mises à jour'); } catch (e) { toast.error('Erreur mise à jour assignations'); }
+    try { const r = await api.updateTaskAssignees(selected[0].id, { assignee_ids: assigneeIds, responsible_id: respId ?? null }); setAssignees(r.assignees); setResponsibleId(r.responsible_id ?? null); toast.success('Assignations mises à jour'); } catch (e) { toast.error('Erreur mise à jour assignations'); }
   };
   const handleAddTimelineEntry = async (entry: { title: string; description?: string }) => {
     if (selected.length === 0) return;
@@ -350,14 +425,39 @@ function TasksApp() {
 
   useEffect(() => {
     websocket.connect();
+
+    const unsubPresence = websocket.onPresenceUpdate((docId, users) => {
+      setPresence(prev => ({ ...prev, [docId]: users }));
+    });
+
     const unsub1 = websocket.onTaskTreeChanged(async () => { await refreshTree(); });
     const unsub2 = websocket.onTaskLockUpdate((taskId, lockInfo) => {
       setTree(p => { const upd = (nodes: Task[]): Task[] => nodes.map(n => n.id === taskId ? { ...n, locked_by: lockInfo } : n.children ? { ...n, children: upd(n.children) } : n); return upd(p); });
       setSelected(p => p.map(t => t.id === taskId ? { ...t, locked_by: lockInfo } : t));
     });
     const unsub3 = websocket.onTaskActivityUpdate((taskId) => { if (selected.some(s => s.id === taskId)) { refreshTaskActivity(taskId); refreshTaskTags(taskId); refreshTaskAssignees(taskId); refreshTaskFiles(taskId); refreshTaskChecklist(taskId); } });
-    return () => { unsub1(); unsub2(); unsub3(); websocket.disconnect(); };
+    return () => { unsubPresence(); unsub1(); unsub2(); unsub3(); websocket.disconnect(); };
   }, [refreshTree, refreshTaskActivity, refreshTaskTags, refreshTaskAssignees, refreshTaskFiles, refreshTaskChecklist, selected]);
+
+  // Presence join/leave
+  useEffect(() => {
+    if (!user) return;
+    const taskId = selected.length === 1 ? selected[0].id : null;
+    if (taskId) websocket.joinDocument(taskId); // Reusing document logic for tasks presence
+    return () => { if (taskId) websocket.leaveDocument(taskId); };
+  }, [selected, user]);
+
+  // Heartbeat
+  useEffect(() => {
+    if (!editMode || selected.length !== 1) return;
+    const task = selected[0];
+    const userId = user?.id ? String(user.id) : getUserId();
+    if (task.locked_by?.user_id && String(task.locked_by.user_id) === userId) {
+      api.heartbeatTask(task.id).catch(console.error);
+      const i = setInterval(() => api.heartbeatTask(task.id).catch(console.error), 60000);
+      return () => clearInterval(i);
+    }
+  }, [editMode, selected, user, getUserId]);
 
   // Auto-select pending item
   useEffect(() => {
@@ -387,7 +487,12 @@ function TasksApp() {
             </div>
           ) : (
             <div className="flex flex-1 flex-col">
-              <TaskViewer task={selected[0]} onEdit={handleEdit} canEdit={selected[0].type === 'task' && canWrite} lockedByOther={Boolean(selected[0].locked_by && selected[0].locked_by.user_id !== getUserId())} onStatusChange={handleStatusChange} onPriorityChange={handlePriorityChange} onDueDateChange={handleDueDateChange} tags={taskTags} availableTags={availableTags} onAddTag={canWrite ? handleAddTag : undefined} onRemoveTag={canWrite ? handleRemoveTag : undefined} assignees={assignees} responsibleId={responsibleId} onAssigneesChange={canWrite ? handleAssignmentsChange : undefined} workspaceId={currentWorkspace} timeline={timeline} timelineLoading={timelineLoading} onAddTimelineEntry={canWrite ? handleAddTimelineEntry : undefined} comments={comments} commentsLoading={commentsLoading} onAddComment={canWrite ? handleAddComment : undefined} canCollaborate={canWrite} files={files} filesLoading={filesLoading} onUploadFile={canWrite ? handleUploadFile : undefined} onDeleteFile={canWrite ? handleDeleteFile : undefined} onUpdateFileNote={canWrite ? handleUpdateFileNote : undefined} checklistItems={checklistItems} checklistLoading={checklistLoading} onAddChecklistItem={canWrite ? handleAddChecklistItem : undefined} onToggleChecklistItem={canWrite ? handleToggleChecklistItem : undefined} onDeleteChecklistItem={canWrite ? handleDeleteChecklistItem : undefined} onUpdateChecklistItem={canWrite ? handleUpdateChecklistItem : undefined} />
+              <TaskViewer task={selected[0]} onEdit={handleEdit} canEdit={selected[0].type === 'task' && canWrite} lockedByOther={Boolean(selected[0].locked_by && selected[0].locked_by.user_id !== getUserId())} onStatusChange={handleStatusChange} onPriorityChange={handlePriorityChange} onDueDateChange={handleDueDateChange} tags={taskTags} availableTags={availableTags} onAddTag={canWrite ? handleAddTag : undefined} onRemoveTag={canWrite ? handleRemoveTag : undefined} assignees={assignees} responsibleId={responsibleId} onAssigneesChange={canWrite ? handleAssignmentsChange : undefined} workspaceId={currentWorkspace} timeline={timeline} timelineLoading={timelineLoading} onAddTimelineEntry={canWrite ? handleAddTimelineEntry : undefined} comments={comments} commentsLoading={commentsLoading} onAddComment={canWrite ? handleAddComment : undefined} canCollaborate={canWrite} files={files} filesLoading={filesLoading} onUploadFile={canWrite ? handleUploadFile : undefined} onDeleteFile={canWrite ? handleDeleteFile : undefined} onUpdateFileNote={canWrite ? handleUpdateFileNote : undefined} checklistItems={checklistItems} checklistLoading={checklistLoading} onAddChecklistItem={canWrite ? handleAddChecklistItem : undefined} onToggleChecklistItem={canWrite ? handleToggleChecklistItem : undefined} onDeleteChecklistItem={canWrite ? handleDeleteChecklistItem : undefined} onUpdateChecklistItem={canWrite ? handleUpdateChecklistItem : undefined}
+                presenceUsers={presence[selected[0].id]}
+                onUnlock={handleUnlock}
+                isEditing={false}
+                currentUserId={user?.id ? String(user.id) : getUserId()}
+              />
             </div>
           )
         ) : (

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { TaskTimelineItem } from '../types';
-import { Loader2, Circle, Clock, User, Activity } from 'lucide-react';
+import { Loader2, Clock, Activity } from 'lucide-react';
 
 interface TaskTimelineProps {
   items: TaskTimelineItem[];
@@ -72,7 +72,7 @@ const TaskTimeline: React.FC<TaskTimelineProps> = ({ items, loading = false, can
           </div>
         ) : (
           <div className="relative border-l-2 border-gray-100 ml-3 dark:border-gray-800 space-y-8">
-            {items.map((item, index) => (
+            {items.map((item) => (
               <div key={item.id} className="relative pl-8">
                 {/* Timeline dot */}
                 <div className="absolute -left-[9px] top-0 flex h-5 w-5 items-center justify-center rounded-full border-4 border-white bg-blue-500 dark:border-gray-900"></div>

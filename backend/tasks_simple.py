@@ -1032,5 +1032,28 @@ async def unlock_task(task_id: str, user_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/tasks/{task_id}/heartbeat")
+async def heartbeat_task(task_id: str, user: Dict = Depends(get_current_user)):
+    """Update lock timestamp to prevent expiration"""
+    try:
+        user_id = str(user['id'])
+        # Check if user owns the lock
+        check_query = "SELECT user_id FROM task_locks WHERE task_id = %s"
+        existing = db.execute_query(check_query, (task_id,))
+        
+        if not existing:
+            return {"success": False, "message": "Task not locked"}
+            
+        if str(existing[0]['user_id']) != user_id:
+            return {"success": False, "message": "Lock owned by another user"}
+        
+        # Update heartbeat timestamp
+        query = "UPDATE task_locks SET last_heartbeat = NOW() WHERE task_id = %s AND user_id = %s"
+        db.execute_update(query, (task_id, user_id))
+        
+        return {"success": True, "message": "Heartbeat updated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 

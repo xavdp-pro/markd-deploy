@@ -401,7 +401,7 @@ const TaskTreeNode: React.FC<TaskTreeNodeProps> = ({
         style={nodeStyle}
         onContextMenu={handleContextMenu}
         onClick={(e) => {
-          if (node.type === 'file' || node.type === 'task') {
+          if (node.type === 'task') {
             onSelect(node, e);
           } else {
             // For folders, only toggle expand on simple click, but allow selection with Ctrl/Shift
@@ -598,6 +598,18 @@ const TaskTree: React.FC<TaskTreeProps> = ({
   // Handle F2 key for renaming, Delete key for deletion, and Ctrl+A for select all
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Ignore keyboard events when user is typing in an input, textarea, or contenteditable element
+      const target = event.target as HTMLElement;
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable ||
+        target.closest('[contenteditable="true"]') ||
+        target.closest('.w-md-editor') // MDEditor wrapper
+      ) {
+        return;
+      }
+
       // Ctrl+A: Select all
       if ((event.ctrlKey || event.metaKey) && event.key === 'a') {
         event.preventDefault();

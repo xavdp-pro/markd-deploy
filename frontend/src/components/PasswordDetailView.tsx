@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Eye, EyeOff, Copy, Edit2, Trash2, Tag, Lock } from 'lucide-react';
+import { Eye, EyeOff, Copy, Edit2, Trash2, Tag, Unlock, Link } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { PasswordDetail, Tag as TagType } from '../types';
 import TagSelector from './TagSelector';
+import PresenceAvatars from './PresenceAvatars';
 
 interface PasswordDetailViewProps {
   password: PasswordDetail;
@@ -13,6 +14,11 @@ interface PasswordDetailViewProps {
   onAddTag: (name: string) => Promise<void> | void;
   onRemoveTag: (tagId: string) => Promise<void> | void;
   readOnly?: boolean; // If true, hides Edit/Delete buttons and prevents tag changes
+  presenceUsers?: Array<{ id: string; username: string }>;
+  lockedBy?: { user_id: string; user_name: string } | null;
+  currentUserId?: string;
+  onUnlock?: () => void;
+  isEditing?: boolean;
 }
 
 const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
@@ -24,6 +30,11 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
   onAddTag,
   onRemoveTag,
   readOnly = false,
+  presenceUsers,
+  lockedBy,
+  currentUserId,
+  onUnlock,
+  isEditing = false,
 }) => {
   const [showPassword, setShowPassword] = useState(false);
 
@@ -31,6 +42,17 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
     navigator.clipboard.writeText(text);
     toast.success(`${label} copié dans le presse-papier`);
   };
+
+  const copyLinkToClipboard = () => {
+    const url = `${window.location.origin}${window.location.pathname}#vault=${password.id}`;
+    navigator.clipboard.writeText(url);
+    toast.success('Lien copié ! Vous pouvez le coller dans un document Markdown');
+  };
+
+  // Check if current user can unlock
+  const canUnlock = lockedBy && currentUserId && 
+                    String(lockedBy.user_id) === String(currentUserId) && 
+                    !isEditing;
 
   return (
     <div className="max-w-2xl mx-auto bg-white dark:bg-gray-800 rounded-lg shadow">
@@ -42,24 +64,47 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
               <h3 className="text-xl font-bold text-gray-800 dark:text-white">{password.name}</h3>
             </div>
           </div>
-          {!readOnly && (
-            <div className="flex gap-2">
+          <div className="flex items-center gap-3">
+            {presenceUsers && presenceUsers.length > 0 && (
+              <PresenceAvatars users={presenceUsers} />
+            )}
+            <button
+              onClick={copyLinkToClipboard}
+              className="px-3 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors flex items-center gap-2"
+              title="Copier le lien vers ce mot de passe pour le coller dans un document Markdown"
+            >
+              <Link className="w-4 h-4" />
+              Copier le lien
+            </button>
+            {canUnlock && onUnlock && (
               <button
-                onClick={onEdit}
-                className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
-                title="Modifier"
+                onClick={onUnlock}
+                className="px-3 py-2 text-sm text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded transition-colors flex items-center gap-2"
+                title="Retirer mon verrou"
               >
-                <Edit2 className="w-5 h-5" />
+                <Unlock className="w-4 h-4" />
+                Déverrouiller
               </button>
-              <button
-                onClick={onDelete}
-                className="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors"
-                title="Supprimer"
-              >
-                <Trash2 className="w-5 h-5" />
-              </button>
-            </div>
-          )}
+            )}
+            {!readOnly && (
+              <div className="flex gap-2">
+                <button
+                  onClick={onEdit}
+                  className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+                  title="Modifier"
+                >
+                  <Edit2 className="w-5 h-5" />
+                </button>
+                <button
+                  onClick={onDelete}
+                  className="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors"
+                  title="Supprimer"
+                >
+                  <Trash2 className="w-5 h-5" />
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="space-y-4">

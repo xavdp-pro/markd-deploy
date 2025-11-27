@@ -159,3 +159,16 @@ export interface Workspace {
   description?: string;
   user_permission?: string;
 }
+
+export interface TaskStatus {
+  key: string;
+  label: string;
+  color: string;
+  type: 'todo' | 'in_progress' | 'done';
+}
+
+export interface Workflow {
+  id: number;
+  name: string;
+  statuses: TaskStatus[];
+}

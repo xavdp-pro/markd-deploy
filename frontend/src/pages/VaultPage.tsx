@@ -36,6 +36,7 @@ const VaultPage: React.FC = () => {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [passwordTags, setPasswordTags] = useState<Record<string, TagType[]>>({});
   const [pendingSelection, setPendingSelection] = useState<string | null>(null);
+  const [presence, setPresence] = useState<Record<string, Array<{ id: string; username: string }>>>({});
   const prevTreeRef = React.useRef<PasswordItem[] | null>(null);
   const lastLocalChangeAtRef = React.useRef<number>(0);
 
@@ -77,6 +78,41 @@ const VaultPage: React.FC = () => {
     });
     return unsubscribe;
   }, [user]);
+
+  // WebSocket presence listener
+  useEffect(() => {
+    const unsubscribe = websocket.onPresenceUpdate((documentId, users) => {
+      setPresence(prev => ({
+        ...prev,
+        [documentId]: users
+      }));
+    });
+    return unsubscribe;
+  }, []);
+
+  // Emit presence events when selection changes
+  useEffect(() => {
+    if (!user) return;
+
+    // Leave previous document if any
+    const prevPasswordId = selectedPassword?.id;
+    if (prevPasswordId) {
+      websocket.leaveDocument(prevPasswordId);
+    }
+
+    // Join new document if any
+    const currentPasswordId = selectedPassword?.id;
+    if (currentPasswordId) {
+      websocket.joinDocument(currentPasswordId);
+    }
+
+    // Cleanup on unmount
+    return () => {
+      if (selectedPassword?.id) {
+        websocket.leaveDocument(selectedPassword.id);
+      }
+    };
+  }, [selectedPassword?.id, user]);
 
   // Heartbeat loop
   useEffect(() => {
@@ -137,6 +173,35 @@ const VaultPage: React.FC = () => {
     } else {
         setSelectedPassword(null);
     }
+  };
+
+  const handleUnlock = async () => {
+    if (!selectedPassword || !user) return;
+    
+    try {
+      await api.unlockPassword(selectedPassword.id, String(user.id));
+      toast.success('Verrou retiré');
+      // Tree will be updated via WebSocket
+    } catch (e) {
+      console.error(e);
+      toast.error("Impossible de retirer le verrou");
+    }
+  };
+
+  // Helper to find lock info for current password
+  const findPasswordLockInfo = (passwordId: string) => {
+    const findNode = (nodes: PasswordItem[]): PasswordItem | null => {
+      for (const node of nodes) {
+        if (node.id === passwordId) return node;
+        if (node.children) {
+          const found: PasswordItem | null = findNode(node.children);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    const node = findNode(tree);
+    return node?.locked_by || null;
   };
 
   // Save sidebar width to localStorage
@@ -267,9 +332,65 @@ const VaultPage: React.FC = () => {
 
     // If it's a password, load it for viewing (only if single selection)
     if (item.type === 'password' && (!event || (!event.ctrlKey && !event.metaKey && !event.shiftKey))) {
+      window.location.hash = `vault=${item.id}`;
       fetchPasswordDetail(item.id);
     }
   }, [tree, flattenTree, lastSelectedIndex, selected, fetchPasswordDetail]);
+
+  const expandToAndSelect = useCallback(async (id: string, treeDataLocal: PasswordItem[]) => {
+    const findPath = (nodes: PasswordItem[], targetId: string, path: string[] = []): string[] | null => {
+      for (const n of nodes) {
+        const newPath = [...path, n.id];
+        if (n.id === targetId) return newPath;
+        if (n.children) {
+          const p = findPath(n.children, targetId, newPath);
+          if (p) return p;
+        }
+      }
+      return null;
+    };
+    const path = findPath(treeDataLocal, id);
+    if (path) {
+      setExpanded(prev => {
+        const next: Record<string, boolean> = { ...prev };
+        for (let i = 0; i < path.length - 1; i++) {
+          next[path[i]] = true;
+        }
+        return next;
+      });
+      const node = (() => {
+        const walk = (nodes: PasswordItem[]): PasswordItem | null => {
+          for (const n of nodes) {
+            if (n.id === id) return n;
+            if (n.children) {
+              const f = walk(n.children);
+              if (f) return f;
+            }
+          }
+          return null;
+        };
+        return walk(treeDataLocal);
+      })();
+      if (node) handleSelectPassword(node);
+    }
+  }, [handleSelectPassword]);
+
+  // Handle URL hash
+  useEffect(() => {
+    if (tree.length === 0) return;
+    const handleHashChange = async () => {
+      const hash = window.location.hash;
+      if (hash.startsWith('#vault=')) {
+        const passwordId = hash.replace('#vault=', '');
+        if (passwordId) {
+          await expandToAndSelect(passwordId, tree);
+        }
+      }
+    };
+    handleHashChange();
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [tree, expandToAndSelect]);
 
   // Setup WebSocket connection for password tree changes
   useEffect(() => {
@@ -719,7 +840,7 @@ const VaultPage: React.FC = () => {
         for (const node of nodes) {
           if (node.id === targetId) return node;
           if (node.children) {
-            const found = findNode(node.children, targetId);
+            const found: PasswordItem | null = findNode(node.children, targetId);
             if (found) return found;
           }
         }
@@ -755,9 +876,8 @@ const VaultPage: React.FC = () => {
         if (item.parent_id === targetId || (item.parent_id === null && targetId === 'root')) continue;
 
         try {
-          const result = await handleMove(item.id, targetId === 'root' ? null : targetId);
-          if (result) successCount++; // Assuming handleMove returns boolean or truthy on success
-          else errors.push(item.name);
+          await handleMove(item.id, targetId === 'root' ? null : targetId);
+          successCount++;
         } catch (err) {
           errors.push(item.name);
         }
@@ -1135,6 +1255,11 @@ const VaultPage: React.FC = () => {
               onAddTag={(name) => handleAddPasswordTag(selectedPassword.id, name)}
               onRemoveTag={(tagId) => handleRemovePasswordTag(selectedPassword.id, tagId)}
               readOnly={userPermission === 'read'}
+              presenceUsers={presence[selectedPassword.id]}
+              lockedBy={findPasswordLockInfo(selectedPassword.id)}
+              currentUserId={user?.id ? String(user.id) : undefined}
+              onUnlock={handleUnlock}
+              isEditing={editingId === selectedPassword.id}
             />
           ) : (
             <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-500">

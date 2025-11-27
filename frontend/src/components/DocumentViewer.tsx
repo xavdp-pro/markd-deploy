@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { FileEdit, Lock, Tag } from 'lucide-react';
+import { FileEdit, Lock, Unlock, Tag, Link } from 'lucide-react';
 import MDEditor from '@uiw/react-md-editor';
 import { Document, Tag as TagType } from '../types';
 import TagSelector from './TagSelector';
+import PresenceAvatars from './PresenceAvatars';
 import { api } from '../services/api';
 import toast from 'react-hot-toast';
 
@@ -10,16 +11,26 @@ interface DocumentViewerProps {
   document: Document;
   onEdit: () => void;
   currentUserId?: string;
+  presenceUsers?: Array<{ id: string; username: string }>;
+  onUnlock?: () => void;
+  isEditing?: boolean;
 }
 
-const DocumentViewer: React.FC<DocumentViewerProps> = ({ document, onEdit, currentUserId }) => {
+const DocumentViewer: React.FC<DocumentViewerProps> = ({ 
+  document, 
+  onEdit, 
+  currentUserId,
+  presenceUsers,
+  onUnlock,
+  isEditing = false
+}) => {
   const [tags, setTags] = useState<TagType[]>([]);
   const [availableTags, setAvailableTags] = useState<TagType[]>([]);
-  const [tagsLoading, setTagsLoading] = useState(false);
   
   // Check if document is locked by another user
-  const isLockedByOther = document.locked_by && String(document.locked_by.user_id) !== String(currentUserId);
-  const isLockedByMe = document.locked_by && String(document.locked_by.user_id) === String(currentUserId);
+  const isLockedByOther = Boolean(document.locked_by && String(document.locked_by.user_id) !== String(currentUserId));
+  const isLockedByMe = Boolean(document.locked_by && String(document.locked_by.user_id) === String(currentUserId));
+  const canUnlock = isLockedByMe && !isEditing;
   
   // Detect dark mode
   const isDarkMode = typeof window !== 'undefined' && window.document.documentElement.classList.contains('dark');
@@ -82,6 +93,12 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ document, onEdit, curre
     }
   };
   
+  const copyLinkToClipboard = () => {
+    const url = `${window.location.origin}${window.location.pathname}#doc=${document.id}`;
+    navigator.clipboard.writeText(url);
+    toast.success('Lien copié ! Vous pouvez le coller dans un document Markdown ou une tâche');
+  };
+  
   return (
     <>
       <div className="p-4 border-b bg-white dark:bg-gray-800 dark:border-gray-700">
@@ -91,7 +108,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ document, onEdit, curre
           {isLockedByOther && (
             <span className="flex items-center gap-1 text-sm text-red-600">
               <Lock size={14} />
-              Verrouillé par {document.locked_by.user_name}
+              Verrouillé par {document.locked_by?.user_name}
             </span>
           )}
           {isLockedByMe && (
@@ -101,19 +118,42 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({ document, onEdit, curre
             </span>
           )}
         </h2>
-        <button
-          onClick={onEdit}
-          disabled={isLockedByOther}
-          className={`px-4 py-2 rounded flex items-center gap-2 ${
-            isLockedByOther
-              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-              : 'bg-blue-600 text-white hover:bg-blue-700'
-          }`}
-          title={isLockedByMe ? 'Continuer l\'édition' : isLockedByOther ? `Verrouillé par ${document.locked_by?.user_name}` : 'Éditer le document'}
-        >
-          <FileEdit size={16} />
-          {isLockedByMe ? 'Continuer' : 'Éditer'}
-        </button>
+        <div className="flex items-center gap-3">
+          {presenceUsers && presenceUsers.length > 0 && (
+            <PresenceAvatars users={presenceUsers} />
+          )}
+          <button
+            onClick={copyLinkToClipboard}
+            className="px-3 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors flex items-center gap-2"
+            title="Copier le lien vers ce document pour le coller ailleurs"
+          >
+            <Link className="w-4 h-4" />
+            Copier le lien
+          </button>
+          {canUnlock && onUnlock && (
+            <button
+              onClick={onUnlock}
+              className="px-3 py-2 text-sm text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded transition-colors flex items-center gap-2"
+              title="Retirer mon verrou"
+            >
+              <Unlock className="w-4 h-4" />
+              Déverrouiller
+            </button>
+          )}
+          <button
+            onClick={onEdit}
+            disabled={isLockedByOther}
+            className={`px-4 py-2 rounded flex items-center gap-2 ${
+              isLockedByOther
+                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                : 'bg-blue-600 text-white hover:bg-blue-700'
+            }`}
+            title={isLockedByMe ? 'Continuer l\'édition' : isLockedByOther ? `Verrouillé par ${document.locked_by?.user_name}` : 'Éditer le document'}
+          >
+            <FileEdit size={16} />
+            {isLockedByMe ? 'Continuer' : 'Éditer'}
+          </button>
+        </div>
         </div>
         {document.type === 'file' && (
           <div className="mt-3">

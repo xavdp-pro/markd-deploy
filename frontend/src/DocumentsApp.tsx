@@ -5,6 +5,7 @@ import { api } from './services/api';
 import { websocket } from './services/websocket';
 import { sessionStorageService } from './services/sessionStorage';
 import { useWorkspace } from './contexts/WorkspaceContext';
+import { useAuth } from './contexts/AuthContext';
 import DocumentTree from './components/DocumentTree';
 import DocumentViewer from './components/DocumentViewer';
 import DocumentEditor from './components/DocumentEditor';
@@ -12,7 +13,8 @@ import { DndContext, DragEndEvent, DragOverlay, DragStartEvent } from '@dnd-kit/
 import { File, Folder, X, Trash2 } from 'lucide-react';
 
 function App() {
-  const { currentWorkspace, userPermission, loading: workspaceLoading } = useWorkspace();
+  const { user } = useAuth();
+  const { currentWorkspace, userPermission } = useWorkspace();
   const [tree, setTree] = useState<Document[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({ root: true });
   const [selected, setSelected] = useState<Document[]>([]);
@@ -21,6 +23,7 @@ function App() {
   const [editContent, setEditContent] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [presence, setPresence] = useState<Record<string, Array<{ id: string; username: string }>>>({});
   const [treeWidth, setTreeWidth] = useState(() => {
     const saved = localStorage.getItem('markd_tree_width');
     return saved ? parseInt(saved, 10) : 320;
@@ -34,6 +37,7 @@ function App() {
   const [pendingSelection, setPendingSelection] = useState<string | null>(null);
   const prevTreeRef = React.useRef<Document[] | null>(null);
   const lastLocalChangeAtRef = React.useRef<number>(0);
+  const processingHashRef = React.useRef<boolean>(false);
   
   // Load all tags for filter
   const loadAllTags = useCallback(async () => {
@@ -259,310 +263,28 @@ function App() {
     }
   }, [pendingSelection, tree]);
 
-  // Setup WebSocket connection
+
+  // Emit presence events when selection changes
   useEffect(() => {
-    websocket.connect();
+    if (!user) return;
 
-    const unsubscribeTreeChanged = websocket.onTreeChanged(async () => {
-      // Reload current workspace when tree changes
-      try {
-        const result = await api.getTree(currentWorkspace);
+    // Leave previous document(s)
+    // For now, we only track presence on single selection
+    
+    // Join new document if single selection
+    const currentDocumentId = selected.length === 1 ? selected[0].id : null;
+    
+    if (currentDocumentId) {
+      websocket.joinDocument(currentDocumentId);
+    }
 
-        // Build quick lookup maps to detect changes
-        const flatten = (
-          nodes: Document[],
-          parentId: string | null = 'root',
-          acc: Record<string, { id: string; name: string; parent_id: string | null; type: string; updated_at?: string | null }> = {}
-        ) => {
-          for (const n of nodes) {
-            acc[n.id] = { id: n.id, name: n.name, parent_id: (n as any).parent_id ?? parentId, type: n.type, updated_at: (n as any).updated_at ?? null };
-            if (n.children && n.children.length) flatten(n.children, n.id, acc);
-          }
-          return acc;
-        };
-
-        const prevMap = prevTreeRef.current ? flatten(prevTreeRef.current) : {};
-        const nextMap = flatten(result.tree);
-
-        const created: Array<{ id: string; name: string; type: string }> = [];
-        const movedOrRenamed: Array<{ id: string; name: string; type: string }> = [];
-        const contentUpdated: Array<{ id: string; name: string; type: string }> = [];
-        const deleted: Array<{ id: string; name: string; type: string; path: string }> = [];
-
-        // Helper to build full path for an item
-        const buildPath = (itemId: string, treeData: Document[], parentPath: string = ''): string | null => {
-          for (const node of treeData) {
-            const currentPath = parentPath ? `${parentPath}/${node.name}` : node.name;
-            if (node.id === itemId) {
-              return currentPath;
-            }
-            if (node.children && node.children.length > 0) {
-              const found = buildPath(itemId, node.children, currentPath);
-              if (found) return found;
-            }
-          }
-          return null;
-        };
-
-        // Detect deletions (present in prevMap but not in nextMap)
-        for (const id in prevMap) {
-          if (!nextMap[id]) {
-            const prev = prevMap[id];
-            // Build path from previous tree
-            const path = prevTreeRef.current ? buildPath(id, prevTreeRef.current) : prev.name;
-            deleted.push({ 
-              id, 
-              name: prev.name, 
-              type: prev.type, 
-              path: path || prev.name 
-            });
-          }
-        }
-
-        // Detect creations, moves, renames, and content updates
-        for (const id in nextMap) {
-          if (!prevMap[id]) {
-            created.push({ id, name: nextMap[id].name, type: nextMap[id].type });
-          } else {
-            const prev = prevMap[id];
-            const nxt = nextMap[id];
-            if (prev.parent_id !== nxt.parent_id || prev.name !== nxt.name) {
-              movedOrRenamed.push({ id, name: nxt.name, type: nxt.type });
-            } else {
-              // Detect content/timestamp changes for files
-              if (nxt.type === 'file' && prev.updated_at !== nxt.updated_at) {
-                contentUpdated.push({ id, name: nxt.name, type: nxt.type });
-              }
-            }
-          }
-        }
-
-        // Toast component with 25s progress and action button
-        const ToastChange: React.FC<{ title: string; subtitle?: string; onView: () => void }> = ({ title, subtitle, onView }) => {
-          const [start, setStart] = React.useState(false);
-          React.useEffect(() => {
-            const t = setTimeout(() => setStart(true), 10);
-            return () => clearTimeout(t);
-          }, []);
-          return (
-            <div className="pointer-events-auto w-[360px] rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700 dark:bg-gray-800">
-              <div className="flex items-start gap-3">
-                <div className="mt-0.5 text-blue-600 dark:text-blue-400">
-                  <Folder size={16} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{title}</div>
-                  {subtitle ? (
-                    <div className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">{subtitle}</div>
-                  ) : null}
-                  <div className="mt-2 flex items-center gap-2">
-                    <button
-                      onClick={onView}
-                      className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400 dark:border-blue-400 dark:text-blue-300 dark:hover:bg-blue-900/30"
-                    >
-                      Voir
-                    </button>
-                  </div>
-                </div>
-                <button
-                  onClick={() => toast.dismiss()}
-                  className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-              <div className="mt-3 h-1 w-full overflow-hidden rounded bg-gray-200 dark:bg-gray-700">
-                <div
-                  className="h-full bg-blue-600 transition-[width] dark:bg-blue-400"
-                  style={{
-                    width: start ? '0%' : '100%',
-                    transitionDuration: '25s',
-                    transitionTimingFunction: 'linear',
-                  }}
-                />
-              </div>
-            </div>
-          );
-        };
-
-        // Helper: expand path to node and select it
-        const expandToAndSelect = async (id: string, treeData: Document[]) => {
-          const findPath = (nodes: Document[], targetId: string, path: string[] = []): string[] | null => {
-            for (const n of nodes) {
-              const newPath = [...path, n.id];
-              if (n.id === targetId) return newPath;
-              if (n.children) {
-                const p = findPath(n.children, targetId, newPath);
-                if (p) return p;
-              }
-            }
-            return null;
-          };
-          const path = findPath(treeData, id);
-          if (path) {
-            setExpanded(prev => {
-              const next: Record<string, boolean> = { ...prev };
-              // Expand all parents in path except the item itself
-              for (let i = 0; i < path.length - 1; i++) {
-                next[path[i]] = true;
-              }
-              return next;
-            });
-            // Find node object to pass to selection
-            const findNode = (nodes: Document[], targetId: string): Document | null => {
-              for (const n of nodes) {
-                if (n.id === targetId) return n;
-                if (n.children) {
-                  const f = findNode(n.children, targetId);
-                  if (f) return f;
-                }
-              }
-              return null;
-            };
-            const node = findNode(treeData, id);
-            if (node) {
-              await handleSelectDocument(node);
-            }
-          }
-        };
-
-        // Show up to 5 toasts to prevent flooding. Skip if this client just performed a local change.
-        const justDidLocalChange = Date.now() - lastLocalChangeAtRef.current < 2000;
-        if (!justDidLocalChange) {
-        const showLimited = <T,>(arr: T[]) => arr.slice(0, 5);
-
-          for (const ch of showLimited(created)) {
-            toast.custom(
-              <ToastChange
-                title={`Nouveau ${ch.type === 'folder' ? 'dossier' : 'document'} : ${ch.name}`}
-                onView={() => expandToAndSelect(ch.id, result.tree)}
-              />,
-              { duration: 25000 }
-            );
-          }
-          for (const ch of showLimited(movedOrRenamed)) {
-            toast.custom(
-              <ToastChange
-                title={`${ch.type === 'folder' ? 'Dossier' : 'Document'} mis à jour : ${ch.name}`}
-                subtitle="Renommé ou déplacé"
-                onView={() => expandToAndSelect(ch.id, result.tree)}
-              />,
-              { duration: 25000 }
-            );
-          }
-          for (const ch of showLimited(contentUpdated)) {
-            toast.custom(
-              <ToastChange
-                title={`Document mis à jour : ${ch.name}`}
-                subtitle="Contenu enregistré"
-                onView={() => expandToAndSelect(ch.id, result.tree)}
-              />,
-              { duration: 25000 }
-            );
-          }
-          
-          // Toast for deletions (without "Voir" button)
-          for (const del of showLimited(deleted)) {
-            const ToastDelete: React.FC<{ title: string; path: string }> = ({ title, path }) => {
-              const [start, setStart] = React.useState(false);
-              React.useEffect(() => {
-                const t = setTimeout(() => setStart(true), 10);
-                return () => clearTimeout(t);
-              }, []);
-              return (
-                <div className="pointer-events-auto w-[360px] rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700 dark:bg-gray-800">
-                  <div className="flex items-start gap-3">
-                    <div className="mt-0.5 text-red-600 dark:text-red-400">
-                      <Trash2 size={16} />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{title}</div>
-                      <div className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">{path}</div>
-                    </div>
-                    <button
-                      onClick={() => toast.dismiss()}
-                      className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                  <div className="mt-3 h-1 w-full overflow-hidden rounded bg-gray-200 dark:bg-gray-700">
-                    <div
-                      className="h-full bg-red-600 transition-[width] dark:bg-red-400"
-                      style={{
-                        width: start ? '0%' : '100%',
-                        transitionDuration: '25s',
-                        transitionTimingFunction: 'linear',
-                      }}
-                    />
-                  </div>
-                </div>
-              );
-            };
-            toast.custom(
-              <ToastDelete
-                title={`${del.type === 'folder' ? 'Dossier' : 'Document'} supprimé : ${del.name}`}
-                path={del.path}
-              />,
-              { duration: 25000 }
-            );
-          }
-        }
-
-        setTree(result.tree);
-        prevTreeRef.current = result.tree;
-      } catch (err) {
-        console.error('Error reloading tree:', err);
-      }
-    });
-
-    const unsubscribeLock = websocket.onLockUpdate((documentId, lockInfo) => {
-      // Update tree with new lock info
-      setTree(prevTree => {
-        // Notify if someone else locked it
-        if (lockInfo && String(lockInfo.user_id) !== getUserId()) {
-          const findName = (nodes: Document[]): string | null => {
-            for (const n of nodes) {
-              if (n.id === documentId) return n.name;
-              if (n.children) {
-                const found = findName(n.children);
-                if (found) return found;
-              }
-            }
-            return null;
-          };
-          const name = findName(prevTree);
-          if (name) {
-            toast(`${lockInfo.user_name} édite "${name}"`, { icon: '🔒', duration: 3000 });
-          }
-        }
-
-        const updateLock = (docs: Document[]): Document[] => {
-          return docs.map(doc => {
-            if (doc.id === documentId) {
-              return { ...doc, locked_by: lockInfo };
-            }
-            if (doc.children) {
-              return { ...doc, children: updateLock(doc.children) };
-            }
-            return doc;
-          });
-        };
-        return updateLock(prevTree);
-      });
-
-      // Update selected documents if one is being locked/unlocked
-      setSelected(prev => prev.map(doc => 
-        doc.id === documentId ? { ...doc, locked_by: lockInfo } : doc
-      ));
-    });
-
+    // Cleanup: leave when selection changes or unmount
     return () => {
-      unsubscribeTreeChanged();
-      unsubscribeLock();
-      websocket.disconnect();
+      if (currentDocumentId) {
+        websocket.leaveDocument(currentDocumentId);
+      }
     };
-  }, [currentWorkspace, selected, getUserId]);
+  }, [selected, user]);
 
   // Heartbeat loop for locked documents
   useEffect(() => {
@@ -583,6 +305,110 @@ function App() {
       return () => clearInterval(interval);
     }
   }, [editMode, selected, getUserId]);
+
+  const handleSelectDocument = useCallback(async (doc: Document, event?: React.MouseEvent) => {
+    const allNodes = flattenTree(tree);
+    const currentIndex = allNodes.findIndex(n => n.id === doc.id);
+    
+    if (event) {
+      const isCtrl = event.ctrlKey || event.metaKey;
+      const isShift = event.shiftKey;
+      
+      if (isShift && lastSelectedIndex !== null && currentIndex !== -1) {
+        // Shift+Click: select range
+        const start = Math.min(lastSelectedIndex, currentIndex);
+        const end = Math.max(lastSelectedIndex, currentIndex);
+        const range = allNodes.slice(start, end + 1);
+        setSelected(range);
+        setLastSelectedIndex(currentIndex);
+      } else if (isCtrl && currentIndex !== -1) {
+        // Ctrl+Click: toggle selection
+        const isSelected = selected.some(s => s.id === doc.id);
+        if (isSelected) {
+          setSelected(prev => prev.filter(s => s.id !== doc.id));
+        } else {
+          setSelected(prev => [...prev, doc]);
+        }
+        setLastSelectedIndex(currentIndex);
+      } else {
+        // Simple click: single selection
+        setSelected([doc]);
+        setLastSelectedIndex(currentIndex);
+      }
+    } else {
+      // Called without event (programmatic): single selection
+      setSelected([doc]);
+      setLastSelectedIndex(currentIndex);
+    }
+    
+    // If it's a file, load it for editing (only if single selection)
+    if (doc.type === 'file' && (!event || (!event.ctrlKey && !event.metaKey && !event.shiftKey))) {
+      try {
+        // Set URL hash (skip if already processing from hash)
+        if (!processingHashRef.current) {
+          window.location.hash = `doc=${doc.id}`;
+        }
+
+        // If currently in edit mode, unlock the previous document (only if different)
+        if (editMode && selected.length > 0 && selected[0].id !== doc.id) {
+          const userId = getUserId();
+          await api.unlockDocument(selected[0].id, userId);
+          setEditMode(false);
+        }
+
+        // Get full document with latest content
+        const result = await api.getDocument(doc.id);
+        if (result.success) {
+          setEditContent(result.document.content || '');
+          // Only close edit mode if selecting a different document
+          if (selected.length === 0 || selected[0].id !== doc.id) {
+            setEditMode(false);
+          }
+        }
+      } catch (err) {
+        console.error('Error loading document:', err);
+        setError(err instanceof Error ? err.message : 'Failed to load document');
+      }
+    }
+  }, [editMode, selected, getUserId, tree, flattenTree, lastSelectedIndex]);
+
+  const expandToAndSelect = useCallback(async (id: string, treeDataLocal: Document[]) => {
+    const findPath = (nodes: Document[], targetId: string, path: string[] = []): string[] | null => {
+      for (const n of nodes) {
+        const newPath = [...path, n.id];
+        if (n.id === targetId) return newPath;
+        if (n.children) {
+          const p = findPath(n.children, targetId, newPath);
+          if (p) return p;
+        }
+      }
+      return null;
+    };
+    const path = findPath(treeDataLocal, id);
+    if (path) {
+      setExpanded(prev => {
+        const next: Record<string, boolean> = { ...prev };
+        for (let i = 0; i < path.length - 1; i++) {
+          next[path[i]] = true;
+        }
+        return next;
+      });
+      const node = (() => {
+        const walk = (nodes: Document[]): Document | null => {
+          for (const n of nodes) {
+            if (n.id === id) return n;
+            if (n.children) {
+              const f = walk(n.children);
+              if (f) return f;
+            }
+          }
+          return null;
+        };
+        return walk(treeDataLocal);
+      })();
+      if (node) await handleSelectDocument(node);
+    }
+  }, [handleSelectDocument]);
 
   // Toast on content updates coming from other users
 
@@ -656,64 +482,6 @@ function App() {
       setLastSelectedIndex(lastIndex);
     }
   }, [tree, flattenTree]);
-
-  const handleSelectDocument = useCallback(async (doc: Document, event?: React.MouseEvent) => {
-    const allNodes = flattenTree(tree);
-    const currentIndex = allNodes.findIndex(n => n.id === doc.id);
-    
-    if (event) {
-      const isCtrl = event.ctrlKey || event.metaKey;
-      const isShift = event.shiftKey;
-      
-      if (isShift && lastSelectedIndex !== null && currentIndex !== -1) {
-        // Shift+Click: select range
-        const start = Math.min(lastSelectedIndex, currentIndex);
-        const end = Math.max(lastSelectedIndex, currentIndex);
-        const range = allNodes.slice(start, end + 1);
-        setSelected(range);
-        setLastSelectedIndex(currentIndex);
-      } else if (isCtrl && currentIndex !== -1) {
-        // Ctrl+Click: toggle selection
-        const isSelected = selected.some(s => s.id === doc.id);
-        if (isSelected) {
-          setSelected(prev => prev.filter(s => s.id !== doc.id));
-        } else {
-          setSelected(prev => [...prev, doc]);
-        }
-        setLastSelectedIndex(currentIndex);
-      } else {
-        // Simple click: single selection
-        setSelected([doc]);
-        setLastSelectedIndex(currentIndex);
-      }
-    } else {
-      // Called without event (programmatic): single selection
-      setSelected([doc]);
-      setLastSelectedIndex(currentIndex);
-    }
-    
-    // If it's a file, load it for editing (only if single selection)
-    if (doc.type === 'file' && (!event || (!event.ctrlKey && !event.metaKey && !event.shiftKey))) {
-      try {
-        // If currently in edit mode, unlock the previous document
-        if (editMode && selected.length > 0) {
-          const userId = getUserId();
-          await api.unlockDocument(selected[0].id, userId);
-          setEditMode(false);
-        }
-
-        // Get full document with latest content
-        const result = await api.getDocument(doc.id);
-        if (result.success) {
-          setEditContent(result.document.content || '');
-          setEditMode(false);
-        }
-      } catch (err) {
-        console.error('Error loading document:', err);
-        setError(err instanceof Error ? err.message : 'Failed to load document');
-      }
-    }
-  }, [editMode, selected, getUserId, tree, flattenTree, lastSelectedIndex]);
 
   const handleCreateDocument = useCallback(async (parentId: string, name: string) => {
     try {
@@ -861,44 +629,6 @@ function App() {
           );
         };
 
-        const expandToAndSelect = async (id: string, treeDataLocal: Document[]) => {
-          const findPath = (nodes: Document[], targetId: string, path: string[] = []): string[] | null => {
-            for (const n of nodes) {
-              const newPath = [...path, n.id];
-              if (n.id === targetId) return newPath;
-              if (n.children) {
-                const p = findPath(n.children, targetId, newPath);
-                if (p) return p;
-              }
-            }
-            return null;
-          };
-          const path = findPath(treeDataLocal, id);
-          if (path) {
-            setExpanded(prev => {
-              const next: Record<string, boolean> = { ...prev };
-              for (let i = 0; i < path.length - 1; i++) {
-                next[path[i]] = true;
-              }
-              return next;
-            });
-            const node = (() => {
-              const walk = (nodes: Document[]): Document | null => {
-                for (const n of nodes) {
-                  if (n.id === id) return n;
-                  if (n.children) {
-                    const f = walk(n.children);
-                    if (f) return f;
-                  }
-                }
-                return null;
-              };
-              return walk(treeDataLocal);
-            })();
-            if (node) await handleSelectDocument(node);
-          }
-        };
-
         toast.custom(
           <ToastUpdated
             title={`Document mis à jour : ${docName || data.document_id}`}
@@ -913,7 +643,7 @@ function App() {
     return () => {
       unsubscribeUpdated();
     };
-  }, [currentWorkspace, handleSelectDocument]);
+  }, [currentWorkspace, expandToAndSelect]);
 
   const handleUpload = useCallback(async (parentId: string, file: File) => {
     try {
@@ -1006,6 +736,20 @@ function App() {
     }
   }, [selected, getUserId]);
 
+  const handleUnlock = useCallback(async () => {
+    if (selected.length !== 1) return;
+    const doc = selected[0];
+    const userId = getUserId();
+
+    try {
+      await api.unlockDocument(doc.id, userId);
+      toast.success('Verrou retiré');
+    } catch (err) {
+      console.error('Error unlocking:', err);
+      toast.error('Impossible de retirer le verrou');
+    }
+  }, [selected, getUserId]);
+
   const handleForceUnlock = useCallback(async (id: string) => {
     try {
       await api.forceUnlockDocument(id);
@@ -1037,6 +781,306 @@ function App() {
       toast.error('Échec du déverrouillage du document');
     }
   }, [selected]);
+
+  // Handle URL hash for deep linking
+  useEffect(() => {
+    if (loading || tree.length === 0) return;
+
+    const handleHashChange = async () => {
+      const hash = window.location.hash;
+      if (hash.startsWith('#doc=')) {
+        const docId = hash.replace('#doc=', '');
+        if (docId && selected.length > 0 && selected[0].id === docId) {
+          // Already selected, skip to avoid loop
+          return;
+        }
+        if (docId) {
+          processingHashRef.current = true;
+          await expandToAndSelect(docId, tree);
+          processingHashRef.current = false;
+        }
+      }
+    };
+
+    // Check initial hash
+    handleHashChange();
+
+    // Listen for changes
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [loading, tree, expandToAndSelect, selected]);
+
+  // Setup WebSocket connection
+  useEffect(() => {
+    websocket.connect();
+
+    const unsubscribePresence = websocket.onPresenceUpdate((documentId, users) => {
+      setPresence(prev => ({
+        ...prev,
+        [documentId]: users
+      }));
+    });
+
+    const unsubscribeTreeChanged = websocket.onTreeChanged(async () => {
+      // Reload current workspace when tree changes
+      try {
+        const result = await api.getTree(currentWorkspace);
+
+        // Build quick lookup maps to detect changes
+        const flatten = (
+          nodes: Document[],
+          parentId: string | null = 'root',
+          acc: Record<string, { id: string; name: string; parent_id: string | null; type: string; updated_at?: string | null }> = {}
+        ) => {
+          for (const n of nodes) {
+            acc[n.id] = { id: n.id, name: n.name, parent_id: (n as any).parent_id ?? parentId, type: n.type, updated_at: (n as any).updated_at ?? null };
+            if (n.children && n.children.length) flatten(n.children, n.id, acc);
+          }
+          return acc;
+        };
+
+        const prevMap = prevTreeRef.current ? flatten(prevTreeRef.current) : {};
+        const nextMap = flatten(result.tree);
+
+        const created: Array<{ id: string; name: string; type: string }> = [];
+        const movedOrRenamed: Array<{ id: string; name: string; type: string }> = [];
+        const contentUpdated: Array<{ id: string; name: string; type: string }> = [];
+        const deleted: Array<{ id: string; name: string; type: string; path: string }> = [];
+
+        // Helper to build full path for an item
+        const buildPath = (itemId: string, treeData: Document[], parentPath: string = ''): string | null => {
+          for (const node of treeData) {
+            const currentPath = parentPath ? `${parentPath}/${node.name}` : node.name;
+            if (node.id === itemId) {
+              return currentPath;
+            }
+            if (node.children && node.children.length > 0) {
+              const found = buildPath(itemId, node.children, currentPath);
+              if (found) return found;
+            }
+          }
+          return null;
+        };
+
+        // Detect deletions (present in prevMap but not in nextMap)
+        for (const id in prevMap) {
+          if (!nextMap[id]) {
+            const prev = prevMap[id];
+            // Build path from previous tree
+            const path = prevTreeRef.current ? buildPath(id, prevTreeRef.current) : prev.name;
+            deleted.push({ 
+              id, 
+              name: prev.name, 
+              type: prev.type, 
+              path: path || prev.name 
+            });
+          }
+        }
+
+        // Detect creations, moves, renames, and content updates
+        for (const id in nextMap) {
+          if (!prevMap[id]) {
+            created.push({ id, name: nextMap[id].name, type: nextMap[id].type });
+          } else {
+            const prev = prevMap[id];
+            const nxt = nextMap[id];
+            if (prev.parent_id !== nxt.parent_id || prev.name !== nxt.name) {
+              movedOrRenamed.push({ id, name: nxt.name, type: nxt.type });
+            } else {
+              // Detect content/timestamp changes for files
+              if (nxt.type === 'file' && prev.updated_at !== nxt.updated_at) {
+                contentUpdated.push({ id, name: nxt.name, type: nxt.type });
+              }
+            }
+          }
+        }
+
+        // Toast component with 25s progress and action button
+        const ToastChange: React.FC<{ title: string; subtitle?: string; onView: () => void }> = ({ title, subtitle, onView }) => {
+          const [start, setStart] = React.useState(false);
+          React.useEffect(() => {
+            const t = setTimeout(() => setStart(true), 10);
+            return () => clearTimeout(t);
+          }, []);
+          return (
+            <div className="pointer-events-auto w-[360px] rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 text-blue-600 dark:text-blue-400">
+                  <Folder size={16} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{title}</div>
+                  {subtitle ? (
+                    <div className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">{subtitle}</div>
+                  ) : null}
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      onClick={onView}
+                      className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400 dark:border-blue-400 dark:text-blue-300 dark:hover:bg-blue-900/30"
+                    >
+                      Voir
+                    </button>
+                  </div>
+                </div>
+                <button
+                  onClick={() => toast.dismiss()}
+                  className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="mt-3 h-1 w-full overflow-hidden rounded bg-gray-200 dark:bg-gray-700">
+                <div
+                  className="h-full bg-blue-600 transition-[width] dark:bg-blue-400"
+                  style={{
+                    width: start ? '0%' : '100%',
+                    transitionDuration: '25s',
+                    transitionTimingFunction: 'linear',
+                  }}
+                />
+              </div>
+            </div>
+          );
+        };
+
+        // Show up to 5 toasts to prevent flooding. Skip if this client just performed a local change.
+        const justDidLocalChange = Date.now() - lastLocalChangeAtRef.current < 2000;
+        if (!justDidLocalChange) {
+        const showLimited = <T,>(arr: T[]) => arr.slice(0, 5);
+
+          for (const ch of showLimited(created)) {
+            toast.custom(
+              <ToastChange
+                title={`Nouveau ${ch.type === 'folder' ? 'dossier' : 'document'} : ${ch.name}`}
+                onView={() => expandToAndSelect(ch.id, result.tree)}
+              />,
+              { duration: 25000 }
+            );
+          }
+          for (const ch of showLimited(movedOrRenamed)) {
+            toast.custom(
+              <ToastChange
+                title={`${ch.type === 'folder' ? 'Dossier' : 'Document'} mis à jour : ${ch.name}`}
+                subtitle="Renommé ou déplacé"
+                onView={() => expandToAndSelect(ch.id, result.tree)}
+              />,
+              { duration: 25000 }
+            );
+          }
+          for (const ch of showLimited(contentUpdated)) {
+            toast.custom(
+              <ToastChange
+                title={`Document mis à jour : ${ch.name}`}
+                subtitle="Contenu enregistré"
+                onView={() => expandToAndSelect(ch.id, result.tree)}
+              />,
+              { duration: 25000 }
+            );
+          }
+          
+          // Toast for deletions (without "Voir" button)
+          for (const del of showLimited(deleted)) {
+            const ToastDelete: React.FC<{ title: string; path: string }> = ({ title, path }) => {
+              const [start, setStart] = React.useState(false);
+              React.useEffect(() => {
+                const t = setTimeout(() => setStart(true), 10);
+                return () => clearTimeout(t);
+              }, []);
+              return (
+                <div className="pointer-events-auto w-[360px] rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 text-red-600 dark:text-red-400">
+                      <Trash2 size={16} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{title}</div>
+                      <div className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">{path}</div>
+                    </div>
+                    <button
+                      onClick={() => toast.dismiss()}
+                      className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <div className="mt-3 h-1 w-full overflow-hidden rounded bg-gray-200 dark:bg-gray-700">
+                    <div
+                      className="h-full bg-red-600 transition-[width] dark:bg-red-400"
+                      style={{
+                        width: start ? '0%' : '100%',
+                        transitionDuration: '25s',
+                        transitionTimingFunction: 'linear',
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            };
+            toast.custom(
+              <ToastDelete
+                title={`${del.type === 'folder' ? 'Dossier' : 'Document'} supprimé : ${del.name}`}
+                path={del.path}
+              />,
+              { duration: 25000 }
+            );
+          }
+        }
+
+        setTree(result.tree);
+        prevTreeRef.current = result.tree;
+      } catch (err) {
+        console.error('Error reloading tree:', err);
+      }
+    });
+
+    const unsubscribeLock = websocket.onLockUpdate((documentId, lockInfo) => {
+      // Update tree with new lock info
+      setTree(prevTree => {
+        // Notify if someone else locked it
+        if (lockInfo && String(lockInfo.user_id) !== getUserId()) {
+          const findName = (nodes: Document[]): string | null => {
+            for (const n of nodes) {
+              if (n.id === documentId) return n.name;
+              if (n.children) {
+                const found = findName(n.children);
+                if (found) return found;
+              }
+            }
+            return null;
+          };
+          const name = findName(prevTree);
+          if (name) {
+            toast(`${lockInfo.user_name} édite "${name}"`, { icon: '🔒', duration: 3000 });
+          }
+        }
+
+        const updateLock = (docs: Document[]): Document[] => {
+          return docs.map(doc => {
+            if (doc.id === documentId) {
+              return { ...doc, locked_by: lockInfo };
+            }
+            if (doc.children) {
+              return { ...doc, children: updateLock(doc.children) };
+            }
+            return doc;
+          });
+        };
+        return updateLock(prevTree);
+      });
+
+      // Update selected documents if one is being locked/unlocked
+      setSelected(prev => prev.map(doc => 
+        doc.id === documentId ? { ...doc, locked_by: lockInfo } : doc
+      ));
+    });
+
+    return () => {
+      unsubscribePresence();
+      unsubscribeTreeChanged();
+      unsubscribeLock();
+      websocket.disconnect();
+    };
+  }, [currentWorkspace, selected, expandToAndSelect]);
 
   // Drag and drop handlers
   const handleDragStart = useCallback((event: DragStartEvent) => {
@@ -1194,6 +1238,9 @@ function App() {
                   document={{...selected[0], content: editContent}}
                   onEdit={handleStartEdit}
                   currentUserId={getUserId()}
+                  presenceUsers={presence[selected[0].id]}
+                  onUnlock={handleUnlock}
+                  isEditing={true}
                 />
               </div>
               <div className="flex-1 flex flex-col">
@@ -1212,6 +1259,9 @@ function App() {
                 document={selected[0]}
                 onEdit={handleStartEdit}
                 currentUserId={getUserId()}
+                presenceUsers={presence[selected[0].id]}
+                onUnlock={handleUnlock}
+                isEditing={false}
               />
             </div>
           )

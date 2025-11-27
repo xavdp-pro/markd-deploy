@@ -1,5 +1,5 @@
 import { io, Socket } from 'socket.io-client';
-import { Document, LockInfo, Task } from '../types';
+import { Document, LockInfo } from '../types';
 
 type TreeUpdateCallback = (tree: Document[]) => void;
 type TreeChangedCallback = () => void;
@@ -14,6 +14,7 @@ type TaskActivityUpdateCallback = (taskId: string) => void;
 // Vault (Passwords) callbacks
 type VaultTreeChangedCallback = () => void;
 type VaultItemUpdatedCallback = (data: { password_id: string; name?: string | null }) => void;
+type PresenceUpdateCallback = (documentId: string, users: Array<{ id: string; username: string }>) => void;
 
 class WebSocketService {
   private socket: Socket | null = null;
@@ -31,6 +32,7 @@ class WebSocketService {
   private vaultTreeChangedCallbacks: Set<VaultTreeChangedCallback> = new Set();
   private vaultItemUpdatedCallbacks: Set<VaultItemUpdatedCallback> = new Set();
   private vaultLockUpdateCallbacks: Set<LockUpdateCallback> = new Set();
+  private presenceUpdateCallbacks: Set<PresenceUpdateCallback> = new Set();
 
   connect() {
     if (this.socket?.connected) {
@@ -92,6 +94,10 @@ class WebSocketService {
 
     this.socket.on('vault_lock_updated', (data: { password_id: string; locked_by: LockInfo | null }) => {
       this.vaultLockUpdateCallbacks.forEach(cb => cb(data.password_id, data.locked_by));
+    });
+
+    this.socket.on('presence_updated', (data: { document_id: string; users: Array<{ id: string; username: string }> }) => {
+      this.presenceUpdateCallbacks.forEach(cb => cb(data.document_id, data.users));
     });
   }
 
@@ -190,6 +196,19 @@ class WebSocketService {
 
   notifyVaultItemUpdated(passwordId: string, name?: string) {
     this.socket?.emit('vault_item_updated', { password_id: passwordId, name });
+  }
+
+  joinDocument(documentId: string) {
+    this.socket?.emit('join_document', { document_id: documentId });
+  }
+
+  leaveDocument(documentId: string) {
+    this.socket?.emit('leave_document', { document_id: documentId });
+  }
+
+  onPresenceUpdate(callback: PresenceUpdateCallback) {
+    this.presenceUpdateCallbacks.add(callback);
+    return () => { this.presenceUpdateCallbacks.delete(callback); };
   }
 }
 

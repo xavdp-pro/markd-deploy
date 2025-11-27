@@ -477,6 +477,18 @@ const PasswordTree: React.FC<PasswordTreeProps> = ({
   // Handle F2 key for renaming, Delete key for deletion, and Ctrl+A for select all
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Ignore keyboard events when user is typing in an input, textarea, or contenteditable element
+      const target = event.target as HTMLElement;
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable ||
+        target.closest('[contenteditable="true"]') ||
+        target.closest('.w-md-editor') // MDEditor wrapper
+      ) {
+        return;
+      }
+
       // Ctrl+A: Select all
       if ((event.ctrlKey || event.metaKey) && event.key === 'a') {
         event.preventDefault();
@@ -509,17 +521,6 @@ const PasswordTree: React.FC<PasswordTreeProps> = ({
       }
       // Check if Delete is pressed and at least one element is selected
       if ((event.key === 'Delete' || event.key === 'Backspace') && selected.length > 0 && onDelete) {
-        // Ignore if an input or textarea is focused to avoid accidental deletions while typing
-        const activeElement = document.activeElement as HTMLElement;
-        if (
-          activeElement && 
-          (activeElement.tagName === 'INPUT' || 
-           activeElement.tagName === 'TEXTAREA' || 
-           activeElement.isContentEditable)
-        ) {
-          return;
-        }
-
         const firstSelected = selected[0];
         if (firstSelected.id !== 'root') {
           event.preventDefault();

@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect } from 'react';
 import { Task } from '../types';
-import { X, CheckSquare, Clock, User, Calendar, Circle, CheckCircle, AlertCircle } from 'lucide-react';
+import { X, CheckSquare, Clock, User, Calendar, Circle, CheckCircle } from 'lucide-react';
 
 interface TaskKanbanModalProps {
   isOpen: boolean;

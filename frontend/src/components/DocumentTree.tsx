@@ -146,7 +146,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
                 label: 'Nom du document',
                 defaultValue: '',
                 onConfirm: (name) => {
-                  onCreate(node.id, name);
+                  if (onCreate) onCreate(node.id, name);
                   setInputModal(null);
                   onClose();
                 }
@@ -165,7 +165,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
                 label: 'Nom du dossier',
                 defaultValue: '',
                 onConfirm: (name) => {
-                  onCreateFolder(node.id, name);
+                  if (onCreateFolder) onCreateFolder(node.id, name);
                   setInputModal(null);
                   onClose();
                 }
@@ -177,20 +177,20 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             Créer un dossier
           </button>
           <button
-            onClick={() => handleAction(() => {
+            onClick={() => {
               const input = document.createElement('input');
               input.type = 'file';
               input.accept = '.md,.txt';
               input.onchange = (event) => {
                 const file = (event.target as HTMLInputElement).files?.[0];
-                if (file) onUpload(node.id, file);
+                if (file && onUpload) onUpload(node.id, file);
               };
               input.click();
-            })}
+            }}
             className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
           >
             <Upload size={14} />
-            Importer
+            Importer un fichier
           </button>
           <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
         </>
@@ -205,12 +205,10 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
                 title: 'Renommer',
                 label: 'Nouveau nom',
                 defaultValue: node.name,
-                onConfirm: (newName) => {
-                  if (newName.trim()) {
-                    onRename(node.id, newName);
-                    setInputModal(null);
-                    onClose();
-                  }
+                onConfirm: (name) => {
+                  if (onRename) onRename(node.id, name);
+                  setInputModal(null);
+                  onClose();
                 }
               });
             }}
@@ -250,7 +248,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
                       title: 'Déverrouiller le document',
                       message: `Voulez-vous déverrouiller "${node.name}" (verrouillé par ${node.locked_by?.user_name}) ?`,
                       onConfirm: () => {
-                        onUnlock(node.id);
+                        if (onUnlock) onUnlock(node.id);
                         setConfirmModal(null);
                         onClose();
                       }
@@ -271,7 +269,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
                       title: 'Débloquer le document',
                       message: `Voulez-vous débloquer "${node.name}" ?`,
                       onConfirm: () => {
-                        onUnlock(node.id);
+                        if (onUnlock) onUnlock(node.id);
                         setConfirmModal(null);
                         onClose();
                       }
@@ -333,51 +331,51 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             }
             return null;
           })()}
-          <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
-          <button
-            onClick={() => {
-              setConfirmModal({
-                isOpen: true,
-                title: 'Supprimer le document',
-                message: `Voulez-vous vraiment supprimer "${node.name}" ?`,
-                onConfirm: () => {
-                  onDelete(node.id);
-                  setConfirmModal(null);
-                  onClose();
-                }
-              });
-            }}
-            className="w-full px-3 py-2 text-left text-sm hover:bg-red-50 text-red-600 flex items-center gap-2"
-          >
-            <Trash2 size={14} />
-            Supprimer
-          </button>
-        </>
-      )}
-      
-      {confirmModal && (
-        <ConfirmModal
-          isOpen={confirmModal.isOpen}
-          title={confirmModal.title}
-          message={confirmModal.message}
-          onConfirm={confirmModal.onConfirm}
-          onCancel={() => setConfirmModal(null)}
-          variant="warning"
-        />
-      )}
-      
-      {inputModal && (
-        <InputModal
-          isOpen={inputModal.isOpen}
-          title={inputModal.title}
-          label={inputModal.label}
-          defaultValue={inputModal.defaultValue}
-          onConfirm={inputModal.onConfirm}
-          onCancel={() => setInputModal(null)}
-        />
-      )}
-    </div>
-  );
+        <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
+        <button
+          onClick={() => {
+            setConfirmModal({
+              isOpen: true,
+              title: 'Supprimer le document',
+              message: `Voulez-vous vraiment supprimer "${node.name}" ?`,
+              onConfirm: () => {
+                if (onDelete) onDelete(node.id);
+                setConfirmModal(null);
+                onClose();
+              }
+            });
+          }}
+          className="w-full px-3 py-2 text-left text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
+        >
+          <Trash2 size={14} />
+          Supprimer
+        </button>
+      </>
+    )}
+    
+    {confirmModal && (
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={() => setConfirmModal(null)}
+        variant="warning"
+      />
+    )}
+    
+    {inputModal && (
+      <InputModal
+        isOpen={inputModal.isOpen}
+        title={inputModal.title}
+        label={inputModal.label}
+        defaultValue={inputModal.defaultValue}
+        onConfirm={inputModal.onConfirm}
+        onCancel={() => setInputModal(null)}
+      />
+    )}
+  </div>
+);
 };
 
 interface TreeNodeProps {
@@ -387,13 +385,13 @@ interface TreeNodeProps {
   selected: Document[];
   onToggleExpand: (id: string) => void;
   onSelect: (doc: Document, event?: React.MouseEvent) => void;
-  onCreate: (parentId: string, name: string) => void;
-  onCreateFolder: (parentId: string, name: string) => void;
-  onDelete: (id: string) => void;
-  onRename: (id: string, newName: string) => void;
+  onCreate?: (parentId: string, name: string) => void;
+  onCreateFolder?: (parentId: string, name: string) => void;
+  onDelete?: (id: string) => void;
+  onRename?: (id: string, newName: string) => void;
   onCopy: (id: string) => void;
   onDownload: (doc: Document) => void;
-  onUpload: (parentId: string, file: File) => void;
+  onUpload?: (parentId: string, file: File) => void;
   onUnlock?: (id: string) => void;
 }
 
@@ -628,6 +626,18 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
   // Handle F2 key for renaming, Delete key for deletion, and Ctrl+A for select all
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Ignore keyboard events when user is typing in an input, textarea, or contenteditable element
+      const target = event.target as HTMLElement;
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable ||
+        target.closest('[contenteditable="true"]') ||
+        target.closest('.w-md-editor') // MDEditor wrapper
+      ) {
+        return;
+      }
+
       // Ctrl+A: Select all
       if ((event.ctrlKey || event.metaKey) && event.key === 'a') {
         event.preventDefault();
