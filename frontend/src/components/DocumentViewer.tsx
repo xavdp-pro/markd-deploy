@@ -99,6 +99,13 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
     toast.success('Lien copié ! Vous pouvez le coller dans un document Markdown ou une tâche');
   };
   
+  const copyMarkdownToClipboard = () => {
+    const url = `${window.location.origin}${window.location.pathname}#doc=${document.id}`;
+    const markdown = `📄 [${document.name}](${url})`;
+    navigator.clipboard.writeText(markdown);
+    toast.success('Lien Markdown copié !');
+  };
+  
   return (
     <>
       <div className="p-4 border-b bg-white dark:bg-gray-800 dark:border-gray-700">
@@ -129,6 +136,13 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
           >
             <Link className="w-4 h-4" />
             Copier le lien
+          </button>
+          <button
+            onClick={copyMarkdownToClipboard}
+            className="px-3 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors"
+            title="Copier le lien au format Markdown : 📄 [Nom](URL)"
+          >
+            Markdown
           </button>
           {canUnlock && onUnlock && (
             <button

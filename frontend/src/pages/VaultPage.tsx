@@ -39,6 +39,7 @@ const VaultPage: React.FC = () => {
   const [presence, setPresence] = useState<Record<string, Array<{ id: string; username: string }>>>({});
   const prevTreeRef = React.useRef<PasswordItem[] | null>(null);
   const lastLocalChangeAtRef = React.useRef<number>(0);
+  const processingHashRef = React.useRef<boolean>(false);
 
   // WebSocket lock listener
   useEffect(() => {
@@ -332,7 +333,10 @@ const VaultPage: React.FC = () => {
 
     // If it's a password, load it for viewing (only if single selection)
     if (item.type === 'password' && (!event || (!event.ctrlKey && !event.metaKey && !event.shiftKey))) {
-      window.location.hash = `vault=${item.id}`;
+      // Set URL hash (skip if already processing from hash)
+      if (!processingHashRef.current) {
+        window.location.hash = `vault=${item.id}`;
+      }
       fetchPasswordDetail(item.id);
     }
   }, [tree, flattenTree, lastSelectedIndex, selected, fetchPasswordDetail]);
@@ -382,15 +386,21 @@ const VaultPage: React.FC = () => {
       const hash = window.location.hash;
       if (hash.startsWith('#vault=')) {
         const passwordId = hash.replace('#vault=', '');
+        if (passwordId && selectedPassword?.id === passwordId) {
+          // Already selected, skip to avoid loop
+          return;
+        }
         if (passwordId) {
+          processingHashRef.current = true;
           await expandToAndSelect(passwordId, tree);
+          processingHashRef.current = false;
         }
       }
     };
     handleHashChange();
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [tree, expandToAndSelect]);
+  }, [tree, expandToAndSelect, selectedPassword]);
 
   // Setup WebSocket connection for password tree changes
   useEffect(() => {

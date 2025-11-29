@@ -67,6 +67,7 @@ function TasksApp() {
   const [taskTagsMap, setTaskTagsMap] = useState<Record<string, TaskTag[]>>({});
   const [pendingSelection, setPendingSelection] = useState<string | null>(null);
   const prevTreeRef = React.useRef<Task[] | null>(null);
+  const processingHashRef = React.useRef<boolean>(false);
 
   const getUserId = useCallback((): string => {
     const stored = localStorage.getItem('markd_user');
@@ -217,7 +218,10 @@ function TasksApp() {
   const handleSelectTask = useCallback((task: Task) => {
     setSelected([task]);
     if (task.type === 'task') {
-      window.location.hash = `task=${task.id}`;
+      // Set URL hash (skip if already processing from hash)
+      if (!processingHashRef.current) {
+        window.location.hash = `task=${task.id}`;
+      }
       setEditContent(task.content || '');
       refreshTaskActivity(task.id); refreshTaskTags(task.id); refreshTaskAssignees(task.id); refreshTaskFiles(task.id); refreshTaskChecklist(task.id);
     }
@@ -270,15 +274,21 @@ function TasksApp() {
       const hash = window.location.hash;
       if (hash.startsWith('#task=')) {
         const taskId = hash.replace('#task=', '');
+        if (taskId && selected.length > 0 && selected[0].id === taskId) {
+          // Already selected, skip to avoid loop
+          return;
+        }
         if (taskId) {
+          processingHashRef.current = true;
           await expandToAndSelect(taskId, tree);
+          processingHashRef.current = false;
         }
       }
     };
     handleHashChange();
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [tree, expandToAndSelect]);
+  }, [tree, expandToAndSelect, selected]);
 
   const handleCreateTask = useCallback(async (parentId: string, name: string) => {
     try {

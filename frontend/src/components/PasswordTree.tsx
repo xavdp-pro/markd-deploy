@@ -484,7 +484,12 @@ const PasswordTree: React.FC<PasswordTreeProps> = ({
         target.tagName === 'TEXTAREA' ||
         target.isContentEditable ||
         target.closest('[contenteditable="true"]') ||
-        target.closest('.w-md-editor') // MDEditor wrapper
+        target.closest('.w-md-editor') || // MDEditor wrapper
+        target.closest('.w-md-editor-text') || // MDEditor text area
+        target.closest('.w-md-editor-text-pre') || // MDEditor pre element
+        target.closest('.w-md-editor-text-input') || // MDEditor input
+        target.closest('[role="textbox"]') || // Any textbox role
+        target.closest('form') // Any form element
       ) {
         return;
       }

@@ -48,6 +48,13 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
     navigator.clipboard.writeText(url);
     toast.success('Lien copié ! Vous pouvez le coller dans un document Markdown');
   };
+  
+  const copyMarkdownToClipboard = () => {
+    const url = `${window.location.origin}${window.location.pathname}#vault=${password.id}`;
+    const markdown = `🔑 [${password.name}](${url})`;
+    navigator.clipboard.writeText(markdown);
+    toast.success('Lien Markdown copié !');
+  };
 
   // Check if current user can unlock
   const canUnlock = lockedBy && currentUserId && 
@@ -75,6 +82,13 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
             >
               <Link className="w-4 h-4" />
               Copier le lien
+            </button>
+            <button
+              onClick={copyMarkdownToClipboard}
+              className="px-3 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors"
+              title="Copier le lien au format Markdown : 🔑 [Nom](URL)"
+            >
+              Markdown
             </button>
             {canUnlock && onUnlock && (
               <button

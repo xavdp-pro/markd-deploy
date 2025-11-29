@@ -104,6 +104,13 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
     navigator.clipboard.writeText(url);
     toast.success('Lien copié ! Vous pouvez le coller dans un document Markdown ou une autre tâche');
   };
+  
+  const copyMarkdownToClipboard = () => {
+    const url = `${window.location.origin}${window.location.pathname}#task=${task.id}`;
+    const markdown = `✅ [${task.name}](${url})`;
+    navigator.clipboard.writeText(markdown);
+    toast.success('Lien Markdown copié !');
+  };
 
   useEffect(() => {
     setActiveTab(commentCount > 0 ? 'comments' : 'details');
@@ -144,6 +151,13 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
           >
             <Link className="w-4 h-4" />
             Copier le lien
+          </button>
+          <button
+            onClick={copyMarkdownToClipboard}
+            className="px-3 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors"
+            title="Copier le lien au format Markdown : ✅ [Nom](URL)"
+          >
+            Markdown
           </button>
           {canUnlock && onUnlock && (
             <button
@@ -240,7 +254,7 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
                   data-color-mode={isDarkMode ? 'dark' : 'light'}
                   previewOptions={{
                     className: 'p-8 h-full prose dark:prose-invert max-w-none font-sans',
-                    style: { backgroundColor: 'transparent' }
+                    style: { backgroundColor: 'transparent' },
                   }}
                   className="!border-0"
                 />
