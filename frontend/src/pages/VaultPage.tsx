@@ -210,6 +210,73 @@ const VaultPage: React.FC = () => {
     localStorage.setItem('vaultSidebarWidth', sidebarWidth.toString());
   }, [sidebarWidth]);
 
+  // Save selected password to sessionStorage
+  const saveSelectedPassword = useCallback((passwordId: string | null) => {
+    try {
+      sessionStorage.setItem('markd_passwords_selected_id', passwordId || '');
+    } catch (error) {
+      console.error('Error saving selected password:', error);
+    }
+  }, []);
+
+  // Load selected password from sessionStorage
+  const loadSelectedPassword = useCallback(async (passwordId: string, treeData: PasswordItem[]) => {
+    try {
+      // Find item in tree
+      const findItem = (nodes: PasswordItem[], targetId: string): PasswordItem | null => {
+        for (const node of nodes) {
+          if (node.id === targetId) return node;
+          if (node.children) {
+            const found = findItem(node.children, targetId);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+      
+      const item = findItem(treeData, passwordId);
+      if (!item) {
+        saveSelectedPassword(null);
+        return;
+      }
+      
+      // Expand parent folders
+      const findAndExpand = (nodes: PasswordItem[], targetId: string, path: string[] = []): boolean => {
+        for (const node of nodes) {
+          const newPath = [...path, node.id];
+          if (node.id === targetId) {
+            setExpanded(prev => {
+              const next = { ...prev };
+              for (let i = 0; i < newPath.length - 1; i++) {
+                next[newPath[i]] = true;
+              }
+              return next;
+            });
+            return true;
+          }
+          if (node.children) {
+            if (findAndExpand(node.children, targetId, newPath)) {
+              return true;
+            }
+          }
+        }
+        return false;
+      };
+      findAndExpand(treeData, passwordId);
+      
+      // Select the item
+      setSelected([item]);
+      
+      // If it's a password (not folder), load details
+      if (item.type === 'password') {
+        await fetchPasswordDetail(passwordId);
+      }
+    } catch (err) {
+      console.error('Error loading selected password:', err);
+      saveSelectedPassword(null);
+    }
+  }, [saveSelectedPassword]);
+
   const fetchTree = useCallback(async (workspaceId: string) => {
     if (!workspaceId) return;
     setIsLoading(true);
@@ -218,9 +285,16 @@ const VaultPage: React.FC = () => {
       const result = await api.getPasswordTree(workspaceId);
       console.log('Tree result:', result);
       if (result.success) {
-        setTree(result.tree || []);
-        prevTreeRef.current = result.tree || [];
-        console.log('Tree set:', result.tree || []);
+        const treeData = result.tree || [];
+        setTree(treeData);
+        prevTreeRef.current = treeData;
+        console.log('Tree set:', treeData);
+        
+        // Restore selected password from sessionStorage
+        const savedSelectedId = sessionStorage.getItem('markd_passwords_selected_id');
+        if (savedSelectedId && treeData.length > 0) {
+          await loadSelectedPassword(savedSelectedId, treeData);
+        }
       } else {
         console.error('Failed to load tree:', result);
         setTree([]);
@@ -232,7 +306,7 @@ const VaultPage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [loadSelectedPassword]);
 
   // Fetch tree when workspace changes or when workspaces are loaded
   useEffect(() => {
@@ -339,7 +413,12 @@ const VaultPage: React.FC = () => {
       }
       fetchPasswordDetail(item.id);
     }
-  }, [tree, flattenTree, lastSelectedIndex, selected, fetchPasswordDetail]);
+    
+    // Save selection to sessionStorage (only for single selection)
+    if (!event || (!event.ctrlKey && !event.metaKey && !event.shiftKey)) {
+      saveSelectedPassword(item.id);
+    }
+  }, [tree, flattenTree, lastSelectedIndex, selected, fetchPasswordDetail, saveSelectedPassword]);
 
   const expandToAndSelect = useCallback(async (id: string, treeDataLocal: PasswordItem[]) => {
     const findPath = (nodes: PasswordItem[], targetId: string, path: string[] = []): string[] | null => {

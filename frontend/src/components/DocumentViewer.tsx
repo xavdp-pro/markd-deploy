@@ -4,6 +4,7 @@ import MDEditor from '@uiw/react-md-editor';
 import { Document, Tag as TagType } from '../types';
 import TagSelector from './TagSelector';
 import PresenceAvatars from './PresenceAvatars';
+import MarkdownLinkHandler from './MarkdownLinkHandler';
 import { api } from '../services/api';
 import toast from 'react-hot-toast';
 
@@ -196,6 +197,9 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
           data-color-mode={isDarkMode ? 'dark' : 'light'}
           previewOptions={{
             className: 'p-8 h-full dark:bg-gray-900 dark:text-gray-100',
+            components: {
+              a: MarkdownLinkHandler,
+            },
           }}
         />
       </div>

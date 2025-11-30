@@ -9,6 +9,7 @@ import TaskComments from './TaskComments';
 import TaskFiles from './TaskFiles';
 import TaskChecklist from './TaskChecklist';
 import PresenceAvatars from './PresenceAvatars';
+import MarkdownLinkHandler from './MarkdownLinkHandler';
 
 interface TaskViewerProps {
   task: Task;
@@ -255,6 +256,9 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
                   previewOptions={{
                     className: 'p-8 h-full prose dark:prose-invert max-w-none font-sans',
                     style: { backgroundColor: 'transparent' },
+                    components: {
+                      a: MarkdownLinkHandler,
+                    },
                   }}
                   className="!border-0"
                 />

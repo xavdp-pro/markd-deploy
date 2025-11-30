@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { FileText, User, Settings, LogOut, Shield, Mail, FolderTree, Users, Sun, Moon, CheckSquare, ListChecks, Workflow, Tag, Lock, ChevronDown } from 'lucide-react';
+import { FileText, User, Settings, LogOut, Shield, Mail, FolderTree, Users, Sun, Moon, CheckSquare, ListChecks, Workflow, Tag, Lock, ChevronDown, Folder, Network } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSettings } from '../../contexts/SettingsContext';
 import { useWorkspace } from '../../contexts/WorkspaceContext';
@@ -151,6 +151,30 @@ const Header: React.FC = () => {
                 Passwords
               </button>
             )}
+            
+            <button
+              onClick={() => navigate('/files')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                location.pathname === '/files' 
+                  ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300' 
+                  : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+              }`}
+            >
+              <Folder size={16} />
+              Files
+            </button>
+            
+            <button
+              onClick={() => navigate('/schemas')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+                location.pathname === '/schemas' 
+                  ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300' 
+                  : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+              }`}
+            >
+              <Network size={16} />
+              Schemas
+            </button>
           </nav>
         </div>
 

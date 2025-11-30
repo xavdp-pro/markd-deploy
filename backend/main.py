@@ -52,6 +52,14 @@ app.include_router(groups_router)
 from vault import router as vault_router
 app.include_router(vault_router)
 
+# Include files router
+from files import router as files_router
+app.include_router(files_router)
+
+# Include schemas router
+from schemas import router as schemas_router
+app.include_router(schemas_router)
+
 # Include tasks router (simple version)
 from tasks_simple import router as tasks_router
 app.include_router(tasks_router)
@@ -85,6 +93,10 @@ set_sio(sio)
 # Create uploads directory if it doesn't exist
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
+
+# Create files upload directory if it doesn't exist
+FILES_UPLOAD_DIR = Path("uploads/files")
+FILES_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # ===== Pydantic Models =====
 

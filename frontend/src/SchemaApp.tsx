@@ -1,31 +1,28 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import toast from 'react-hot-toast';
-import { Document, Tag } from './types';
+import { SchemaItem, Tag, SchemaDetail, Device, Connection } from './types';
 import { api } from './services/api';
 import { websocket } from './services/websocket';
 import { sessionStorageService } from './services/sessionStorage';
 import { useWorkspace } from './contexts/WorkspaceContext';
-import { useAuth } from './contexts/AuthContext';
-import DocumentTree from './components/DocumentTree';
-import DocumentViewer from './components/DocumentViewer';
-import DocumentEditor from './components/DocumentEditor';
+import SchemaTree from './components/SchemaTree';
+import SchemaCanvas from './components/SchemaCanvas';
+import DevicePropertiesPanel from './components/DevicePropertiesPanel';
+import CustomTemplateEditor from './components/CustomTemplateEditor';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent } from '@dnd-kit/core';
-import { File, Folder, X, Trash2 } from 'lucide-react';
+import { Network, Folder, X, Trash2 } from 'lucide-react';
+import { DeviceTemplate, CustomDeviceTemplate } from './types';
 
-function App() {
-  const { user } = useAuth();
+function SchemaApp() {
   const { currentWorkspace, userPermission } = useWorkspace();
-  const [tree, setTree] = useState<Document[]>([]);
+  const [tree, setTree] = useState<SchemaItem[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({ root: true });
-  const [selected, setSelected] = useState<Document[]>([]);
+  const [selected, setSelected] = useState<SchemaItem[]>([]);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
-  const [editMode, setEditMode] = useState(false);
-  const [editContent, setEditContent] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [presence, setPresence] = useState<Record<string, Array<{ id: string; username: string }>>>({});
   const [treeWidth, setTreeWidth] = useState(() => {
-    const saved = localStorage.getItem('markd_tree_width');
+    const saved = localStorage.getItem('markd_schemas_tree_width');
     return saved ? parseInt(saved, 10) : 320;
   });
   const [isResizing, setIsResizing] = useState(false);
@@ -33,16 +30,24 @@ function App() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [allTags, setAllTags] = useState<Tag[]>([]);
-  const [documentTags, setDocumentTags] = useState<Record<string, Tag[]>>({});
+  const [schemaTags, setSchemaTags] = useState<Record<string, Tag[]>>({});
   const [pendingSelection, setPendingSelection] = useState<string | null>(null);
-  const prevTreeRef = React.useRef<Document[] | null>(null);
+  const [selectedSchema, setSelectedSchema] = useState<SchemaDetail | null>(null);
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [connections, setConnections] = useState<Connection[]>([]);
+  const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
+  const [showDevicePanel, setShowDevicePanel] = useState(false);
+  const [deviceTemplates, setDeviceTemplates] = useState<DeviceTemplate[]>([]);
+  const [showTemplateEditor, setShowTemplateEditor] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState<DeviceTemplate | CustomDeviceTemplate | null>(null);
+  const prevTreeRef = React.useRef<SchemaItem[] | null>(null);
   const lastLocalChangeAtRef = React.useRef<number>(0);
   const processingHashRef = React.useRef<boolean>(false);
   
   // Load all tags for filter
   const loadAllTags = useCallback(async () => {
     try {
-      const result = await api.getDocumentTagSuggestions('', 100);
+      const result = await api.getSchemaTagSuggestions('', 100);
       if (result.success) {
         setAllTags(result.tags);
       }
@@ -51,38 +56,37 @@ function App() {
     }
   }, []);
   
-  // Load tags for a document
-  const loadDocumentTags = useCallback(async (documentId: string) => {
-    if (documentTags[documentId]) return; // Already loaded
+  // Load tags for a schema
+  const loadSchemaTags = useCallback(async (schemaId: string) => {
+    if (schemaTags[schemaId]) return; // Already loaded
     try {
-      const result = await api.getDocumentTags(documentId);
+      const result = await api.getSchemaTags(schemaId);
       if (result.success) {
-        setDocumentTags(prev => ({ ...prev, [documentId]: result.tags }));
+        setSchemaTags(prev => ({ ...prev, [schemaId]: result.tags }));
       }
     } catch (error) {
-      console.error('Error loading document tags:', error);
+      console.error('Error loading schema tags:', error);
     }
-  }, [documentTags]);
+  }, [schemaTags]);
   
   // Filter tree based on search query and tags - Show results in their hierarchy
-  const filterTree = useCallback((nodes: Document[], query: string, tagIds: string[]): Document[] => {
+  const filterTree = useCallback((nodes: SchemaItem[], query: string, tagIds: string[]): SchemaItem[] => {
     const lowerQuery = query.trim().toLowerCase();
     const hasTagFilter = tagIds.length > 0;
     
-    const filterNode = (node: Document): Document | null => {
+    const filterNode = (node: SchemaItem): SchemaItem | null => {
       const nameMatches = !lowerQuery || node.name.toLowerCase().includes(lowerQuery);
       
-      // Check tag filter for files
+      // Check tag filter for schemas
       let tagMatches = true;
-      if (hasTagFilter && node.type === 'file') {
-        const tagsLoaded = documentTags[node.id] !== undefined;
+      if (hasTagFilter && node.type === 'schema') {
+        const tagsLoaded = schemaTags[node.id] !== undefined;
         if (tagsLoaded) {
-          const nodeTagIds = (documentTags[node.id] || []).map(t => t.id);
+          const nodeTagIds = (schemaTags[node.id] || []).map(t => t.id);
           tagMatches = tagIds.some(tagId => nodeTagIds.includes(tagId));
         } else {
-          // Tags not loaded yet, load them and include the file temporarily
-          // This prevents hiding files before their tags are loaded
-          loadDocumentTags(node.id);
+          // Tags not loaded yet, load them and include the schema temporarily
+          loadSchemaTags(node.id);
           tagMatches = true; // Include until tags are loaded
         }
       }
@@ -91,7 +95,7 @@ function App() {
         // Filter children recursively
         const filteredChildren = node.children
           .map(child => filterNode(child))
-          .filter((child): child is Document => child !== null);
+          .filter((child): child is SchemaItem => child !== null);
         
         // Keep folder if it matches OR has matching children
         if (nameMatches && filteredChildren.length > 0) {
@@ -101,7 +105,7 @@ function App() {
           };
         }
       } else if (nameMatches && tagMatches) {
-        // Keep file if it matches search and tags
+        // Keep schema if it matches search and tags
         return node;
       }
       
@@ -110,13 +114,13 @@ function App() {
     
     return nodes
       .map(node => filterNode(node))
-      .filter((node): node is Document => node !== null);
-  }, [documentTags, loadDocumentTags]);
+      .filter((node): node is SchemaItem => node !== null);
+  }, [schemaTags, loadSchemaTags]);
   
   // Auto-expand folders when searching or filtering by tags
   useEffect(() => {
     if (searchQuery.trim() || selectedTags.length > 0) {
-      const expandAll = (nodes: Document[], acc: Record<string, boolean> = {}): Record<string, boolean> => {
+      const expandAll = (nodes: SchemaItem[], acc: Record<string, boolean> = {}): Record<string, boolean> => {
         nodes.forEach(node => {
           if (node.type === 'folder') {
             acc[node.id] = true;
@@ -158,18 +162,7 @@ function App() {
     return fallbackId;
   }, []);
   
-  const getUserName = useCallback(() => {
-    const storedUser = localStorage.getItem('markd_user');
-    if (storedUser) {
-      try {
-        const user = JSON.parse(storedUser);
-        return user.username || `User-${Math.random().toString(36).substr(2, 5)}`;
-      } catch (e) {
-        console.error('Error parsing stored user:', e);
-      }
-    }
-    return `User-${Math.random().toString(36).substr(2, 5)}`;
-  }, []);
+  // Files don't need getUserName like documents
 
   // Load tags when workspace changes
   useEffect(() => {
@@ -180,79 +173,117 @@ function App() {
   }, [currentWorkspace, loadAllTags]);
 
   // Load initial data
+  // Save selected schema to sessionStorage
+  const saveSelectedSchema = useCallback((schemaId: string | null) => {
+    try {
+      sessionStorage.setItem('markd_schemas_selected_id', schemaId || '');
+    } catch (error) {
+      console.error('Error saving selected schema:', error);
+    }
+  }, []);
+
+  // Load selected schema from sessionStorage
+  const loadSelectedSchema = useCallback(async (schemaId: string, treeData: SchemaItem[]) => {
+    try {
+      // First, find the item in the tree to see if it's a schema or folder
+      const findItem = (nodes: SchemaItem[], targetId: string): SchemaItem | null => {
+        for (const node of nodes) {
+          if (node.id === targetId) {
+            return node;
+          }
+          if (node.children) {
+            const found = findItem(node.children, targetId);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+      
+      const item = findItem(treeData, schemaId);
+      if (!item) {
+        // Item not found, clear saved selection
+        saveSelectedSchema(null);
+        return;
+      }
+      
+      // Expand parent folders to show the selected item
+      const findAndExpand = (nodes: SchemaItem[], targetId: string, path: string[] = []): boolean => {
+        for (const node of nodes) {
+          const newPath = [...path, node.id];
+          if (node.id === targetId) {
+            // Expand all parents
+            setExpanded(prev => {
+              const next = { ...prev };
+              for (let i = 0; i < newPath.length - 1; i++) {
+                next[newPath[i]] = true;
+              }
+              return next;
+            });
+            return true;
+          }
+          if (node.children) {
+            if (findAndExpand(node.children, targetId, newPath)) {
+              return true;
+            }
+          }
+        }
+        return false;
+      };
+      findAndExpand(treeData, schemaId);
+      
+      // Select the item
+      setSelected([item]);
+      
+      // If it's a schema, load full details
+      if (item.type === 'schema') {
+        const schemaResult = await api.getSchema(schemaId);
+        if (schemaResult.success) {
+          setSelectedSchema(schemaResult.schema);
+          setDevices(schemaResult.schema.devices || []);
+          setConnections(schemaResult.schema.connections || []);
+        }
+      } else {
+        // It's a folder, just select it
+        setSelectedSchema(null);
+        setDevices([]);
+        setConnections([]);
+      }
+    } catch (err) {
+      console.error('Error loading selected schema:', err);
+      // Clear saved selection if schema doesn't exist anymore
+      saveSelectedSchema(null);
+    }
+  }, [saveSelectedSchema]);
+
   useEffect(() => {
     const loadData = async () => {
       try {
         setLoading(true);
         
         // Load tree from API with workspace
-        const result = await api.getTree(currentWorkspace);
+        const result = await api.getSchemasTree(currentWorkspace);
         setTree(result.tree);
         prevTreeRef.current = result.tree;
 
-        // Load session state
+        // Load session state for expanded nodes
         const sessionState = sessionStorageService.loadState();
         if (sessionState) {
           setExpanded(sessionState.expandedNodes);
-          
-          // Restore tree width if exists
-          const savedWidth = localStorage.getItem('markd_tree_width');
-          if (savedWidth) {
-            setTreeWidth(parseInt(savedWidth, 10));
-          }
-          
-          // Restore selected document if exists
-          if (sessionState.selectedId) {
-            // Find item in tree and expand parents
-            const findAndExpand = (nodes: Document[], targetId: string, path: string[] = []): boolean => {
-              for (const node of nodes) {
-                const newPath = [...path, node.id];
-                if (node.id === targetId) {
-                  // Expand all parents
-                  setExpanded(prev => {
-                    const next = { ...prev };
-                    for (let i = 0; i < newPath.length - 1; i++) {
-                      next[newPath[i]] = true;
-                    }
-                    return next;
-                  });
-                  return true;
-                }
-                if (node.children) {
-                  if (findAndExpand(node.children, targetId, newPath)) {
-                    return true;
-                  }
-                }
-              }
-              return false;
-            };
-            
-            // Expand parents first
-            findAndExpand(result.tree, sessionState.selectedId);
-            
-            // Then load document details
-            try {
-              const docResult = await api.getDocument(sessionState.selectedId);
-              if (docResult.success) {
-                setSelected([docResult.document]);
-                setEditContent(docResult.document.content || '');
-              } else {
-                // Document not found, clear selection
-                sessionStorageService.saveState({
-                  expandedNodes: expanded,
-                  selectedId: null,
-                });
-              }
-            } catch (err) {
-              // Document not found or error, clear selection
-              sessionStorageService.saveState({
-                expandedNodes: expanded,
-                selectedId: null,
-              });
-            }
-          }
         }
-
+        
+        // Restore tree width if exists
+        const savedWidth = localStorage.getItem('markd_schemas_tree_width');
+        if (savedWidth) {
+          setTreeWidth(parseInt(savedWidth, 10));
+        }
+        
+        // Restore selected schema from sessionStorage (after tree is loaded)
+        const savedSelectedId = sessionStorage.getItem('markd_schemas_selected_id');
+        if (savedSelectedId && result.tree.length > 0) {
+          // Load selected schema immediately with the tree data we just loaded
+          await loadSelectedSchema(savedSelectedId, result.tree);
+        }
+        
         setLoading(false);
       } catch (err) {
         console.error('Error loading data:', err);
@@ -263,10 +294,10 @@ function App() {
     };
     
     loadData();
-  }, [currentWorkspace]);
+  }, [currentWorkspace, loadSelectedSchema]);
 
   // Flatten tree to get all nodes in order (for Shift+Click range selection)
-  const flattenTree = useCallback((nodes: Document[], result: Document[] = []): Document[] => {
+  const flattenTree = useCallback((nodes: SchemaItem[], result: SchemaItem[] = []): SchemaItem[] => {
     for (const node of nodes) {
       if (node.id !== 'root') {
         result.push(node);
@@ -281,7 +312,7 @@ function App() {
   // Auto-select pending folder after tree is updated
   useEffect(() => {
     if (pendingSelection && tree.length > 0) {
-      const findAndSelectItem = (nodes: Document[], targetId: string): boolean => {
+      const findAndSelectItem = (nodes: SchemaItem[], targetId: string): boolean => {
         for (const node of nodes) {
           if (node.id === targetId) {
             // Select the folder (single selection for auto-select)
@@ -306,51 +337,13 @@ function App() {
   }, [pendingSelection, tree]);
 
 
-  // Emit presence events when selection changes
-  useEffect(() => {
-    if (!user) return;
+  // Files don't use presence like documents
 
-    // Leave previous document(s)
-    // For now, we only track presence on single selection
-    
-    // Join new document if single selection
-    const currentDocumentId = selected.length === 1 ? selected[0].id : null;
-    
-    if (currentDocumentId) {
-      websocket.joinDocument(currentDocumentId);
-    }
+  // Files don't need heartbeat loop like documents
 
-    // Cleanup: leave when selection changes or unmount
-    return () => {
-      if (currentDocumentId) {
-        websocket.leaveDocument(currentDocumentId);
-      }
-    };
-  }, [selected, user]);
-
-  // Heartbeat loop for locked documents
-  useEffect(() => {
-    if (!editMode || selected.length !== 1) return;
-    
-    const activeDoc = selected[0];
-    const currentUserId = getUserId();
-    
-    // Only heartbeat if we own the lock
-    if (activeDoc.locked_by?.user_id && String(activeDoc.locked_by.user_id) === currentUserId) {
-      // Send initial heartbeat
-      api.heartbeatDocument(activeDoc.id).catch(console.error);
-
-      const interval = setInterval(() => {
-        api.heartbeatDocument(activeDoc.id).catch(console.error);
-      }, 60000); // Every minute
-      
-      return () => clearInterval(interval);
-    }
-  }, [editMode, selected, getUserId]);
-
-  const handleSelectDocument = useCallback(async (doc: Document, event?: React.MouseEvent) => {
+  const handleSelectSchema = useCallback(async (schema: SchemaItem, event?: React.MouseEvent) => {
     const allNodes = flattenTree(tree);
-    const currentIndex = allNodes.findIndex(n => n.id === doc.id);
+    const currentIndex = allNodes.findIndex(n => n.id === schema.id);
     
     if (event) {
       const isCtrl = event.ctrlKey || event.metaKey;
@@ -365,57 +358,48 @@ function App() {
         setLastSelectedIndex(currentIndex);
       } else if (isCtrl && currentIndex !== -1) {
         // Ctrl+Click: toggle selection
-        const isSelected = selected.some(s => s.id === doc.id);
+        const isSelected = selected.some(s => s.id === schema.id);
         if (isSelected) {
-          setSelected(prev => prev.filter(s => s.id !== doc.id));
+          setSelected(prev => prev.filter(s => s.id !== schema.id));
         } else {
-          setSelected(prev => [...prev, doc]);
+          setSelected(prev => [...prev, schema]);
         }
         setLastSelectedIndex(currentIndex);
       } else {
         // Simple click: single selection
-        setSelected([doc]);
+        setSelected([schema]);
         setLastSelectedIndex(currentIndex);
       }
     } else {
       // Called without event (programmatic): single selection
-      setSelected([doc]);
+      setSelected([schema]);
       setLastSelectedIndex(currentIndex);
     }
     
-    // If it's a file, load it for editing (only if single selection)
-    if (doc.type === 'file' && (!event || (!event.ctrlKey && !event.metaKey && !event.shiftKey))) {
+    // If it's a schema, load it for editing (only if single selection)
+    if (schema.type === 'schema' && (!event || (!event.ctrlKey && !event.metaKey && !event.shiftKey))) {
       try {
-        // Set URL hash (skip if already processing from hash)
-        if (!processingHashRef.current) {
-          window.location.hash = `doc=${doc.id}`;
-        }
-
-        // If currently in edit mode, unlock the previous document (only if different)
-        if (editMode && selected.length > 0 && selected[0].id !== doc.id) {
-          const userId = getUserId();
-          await api.unlockDocument(selected[0].id, userId);
-          setEditMode(false);
-        }
-
-        // Get full document with latest content
-        const result = await api.getDocument(doc.id);
+        // Get full schema details with devices and connections
+        const result = await api.getSchema(schema.id);
         if (result.success) {
-          setEditContent(result.document.content || '');
-          // Only close edit mode if selecting a different document
-          if (selected.length === 0 || selected[0].id !== doc.id) {
-            setEditMode(false);
-          }
+          setSelectedSchema(result.schema);
+          setDevices(result.schema.devices || []);
+          setConnections(result.schema.connections || []);
+          // Save selected schema to sessionStorage
+          saveSelectedSchema(schema.id);
         }
       } catch (err) {
-        console.error('Error loading document:', err);
-        setError(err instanceof Error ? err.message : 'Failed to load document');
+        console.error('Error loading schema:', err);
+        setError(err instanceof Error ? err.message : 'Failed to load schema');
       }
+    } else if (schema.type === 'folder') {
+      // Save folder selection too
+      saveSelectedSchema(schema.id);
     }
-  }, [editMode, selected, getUserId, tree, flattenTree, lastSelectedIndex]);
+  }, [selected, tree, flattenTree, lastSelectedIndex, saveSelectedSchema]);
 
-  const expandToAndSelect = useCallback(async (id: string, treeDataLocal: Document[]) => {
-    const findPath = (nodes: Document[], targetId: string, path: string[] = []): string[] | null => {
+  const expandToAndSelect = useCallback(async (id: string, treeDataLocal: SchemaItem[]) => {
+    const findPath = (nodes: SchemaItem[], targetId: string, path: string[] = []): string[] | null => {
       for (const n of nodes) {
         const newPath = [...path, n.id];
         if (n.id === targetId) return newPath;
@@ -436,7 +420,7 @@ function App() {
         return next;
       });
       const node = (() => {
-        const walk = (nodes: Document[]): Document | null => {
+        const walk = (nodes: SchemaItem[]): SchemaItem | null => {
           for (const n of nodes) {
             if (n.id === id) return n;
             if (n.children) {
@@ -448,19 +432,26 @@ function App() {
         };
         return walk(treeDataLocal);
       })();
-      if (node) await handleSelectDocument(node);
+      if (node) await handleSelectSchema(node);
     }
-  }, [handleSelectDocument]);
+  }, [handleSelectSchema]);
 
   // Toast on content updates coming from other users
 
-  // Save session state when it changes
+  // Save session state when it changes (for expanded nodes and selected item)
   useEffect(() => {
     sessionStorageService.saveState({
       expandedNodes: expanded,
       selectedId: selected.length > 0 ? selected[0].id : null,
     });
-  }, [expanded, selected]);
+    
+    // Also save selected schema ID separately for Schema module (for cross-module navigation)
+    if (selected.length > 0) {
+      saveSelectedSchema(selected[0].id);
+    } else {
+      saveSelectedSchema(null);
+    }
+  }, [expanded, selected, saveSelectedSchema]);
 
   // Handle resizing
   const handleMouseDown = useCallback(() => {
@@ -480,7 +471,7 @@ function App() {
     const handleMouseUp = () => {
       setIsResizing(false);
       // Save width to localStorage when resizing ends
-      localStorage.setItem('markd_tree_width', treeWidth.toString());
+      localStorage.setItem('markd_files_tree_width', treeWidth.toString());
     };
 
     if (isResizing) {
@@ -500,7 +491,7 @@ function App() {
   }, []);
 
   const handleExpandAll = useCallback(() => {
-    const expandAllNodes = (nodes: Document[], acc: Record<string, boolean> = {}): Record<string, boolean> => {
+    const expandAllNodes = (nodes: SchemaItem[], acc: Record<string, boolean> = {}): Record<string, boolean> => {
       nodes.forEach(node => {
         if (node.type === 'folder' && node.children) {
           acc[node.id] = true;
@@ -525,34 +516,37 @@ function App() {
     }
   }, [tree, flattenTree]);
 
-  const handleCreateDocument = useCallback(async (parentId: string, name: string) => {
+  const handleCreateSchema = useCallback(async (parentId: string, name: string) => {
     try {
       lastLocalChangeAtRef.current = Date.now();
-      await api.createDocument({
-        name: name.endsWith('.md') ? name : `${name}.md`,
-        type: 'file',
-        parent_id: parentId,
-        content: `# ${name}\n\nNew document.`,
+      const result = await api.createSchema({
+        name,
+        type: 'schema',
+        parent_id: parentId === 'root' ? null : parentId,
         workspace_id: currentWorkspace,
       });
+      // Store the created schema ID for auto-selection after tree update
+      if (result.success && result.schema) {
+        setPendingSelection(result.schema.id);
+      }
     } catch (err) {
-      console.error('Error creating document:', err);
-      setError(err instanceof Error ? err.message : 'Failed to create document');
+      console.error('Error creating schema:', err);
+      setError(err instanceof Error ? err.message : 'Failed to create schema');
     }
   }, [currentWorkspace]);
 
   const handleCreateFolder = useCallback(async (parentId: string, name: string) => {
     try {
       lastLocalChangeAtRef.current = Date.now();
-      const result = await api.createDocument({
+      const result = await api.createSchema({
         name,
         type: 'folder',
-        parent_id: parentId,
+        parent_id: parentId === 'root' ? null : parentId,
         workspace_id: currentWorkspace,
       });
       // Store the created folder ID for auto-selection after tree update
-      if (result.success && result.document) {
-        setPendingSelection(result.document.id);
+      if (result.success && result.schema) {
+        setPendingSelection(result.schema.id);
       }
     } catch (err) {
       console.error('Error creating folder:', err);
@@ -563,14 +557,8 @@ function App() {
   const handleDelete = useCallback(async (id: string) => {
     try {
       lastLocalChangeAtRef.current = Date.now();
-      await api.deleteDocument(id);
-      setSelected(prev => {
-        const filtered = prev.filter(s => s.id !== id);
-        if (filtered.length === 0) {
-          setEditMode(false);
-        }
-        return filtered;
-      });
+      await api.deleteSchema(id);
+      setSelected(prev => prev.filter(s => s.id !== id));
     } catch (err) {
       console.error('Error deleting:', err);
       setError(err instanceof Error ? err.message : 'Failed to delete');
@@ -580,51 +568,117 @@ function App() {
   const handleRename = useCallback(async (id: string, newName: string) => {
     try {
       lastLocalChangeAtRef.current = Date.now();
-      await api.updateDocument(id, { name: newName });
+      await api.updateSchema(id, { name: newName });
     } catch (err) {
       console.error('Error renaming:', err);
       setError(err instanceof Error ? err.message : 'Failed to rename');
     }
   }, []);
 
-  const handleCopy = useCallback(async (id: string) => {
-    try {
-      lastLocalChangeAtRef.current = Date.now();
-      await api.copyDocument(id);
-    } catch (err) {
-      console.error('Error copying:', err);
-      setError(err instanceof Error ? err.message : 'Failed to copy');
-    }
-  }, []);
-
-  const handleDownload = useCallback((doc: Document) => {
-    if (doc.type === 'file' && doc.content) {
-      const blob = new Blob([doc.content], { type: 'text/markdown' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = doc.name;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }
-  }, []);
 
   // Toast on content updates coming from other users (placed after handleSelectDocument definition)
+  // Moved to main websocket useEffect below
+
+
+  // Files don't have edit mode - they use upload instead
+
+  // handleUnlock is not currently used but kept for future use
+  // const handleUnlock = useCallback(async () => {
+  //   if (selected.length !== 1) return;
+  //   const file = selected[0];
+  //   const userIdStr = getUserId();
+  //   const userId = userIdStr ? parseInt(userIdStr, 10) : 0;
+
+  //   try {
+  //     await api.unlockFile(file.id, userId);
+  //     toast.success('Verrou retiré');
+  //   } catch (err) {
+  //     console.error('Error unlocking:', err);
+  //     toast.error('Impossible de retirer le verrou');
+  //   }
+  // }, [selected, getUserId]);
+
+  const handleForceUnlock = useCallback(async (id: string) => {
+    try {
+      await api.forceUnlockSchema(id);
+      
+      // Update tree to remove lock
+      setTree(prevTree => {
+        const updateLock = (schemas: SchemaItem[]): SchemaItem[] => {
+          return schemas.map(schema => {
+            if (schema.id === id) {
+              return { ...schema, locked_by: null };
+            }
+            if (schema.children) {
+              return { ...schema, children: updateLock(schema.children) };
+            }
+            return schema;
+          });
+        };
+        return updateLock(prevTree);
+      });
+
+      // Update selected file if it's the one being unlocked
+      if (selected.length > 0 && selected[0].id === id) {
+        setSelected(prev => prev.length > 0 ? [{ ...prev[0], locked_by: null }] : []);
+      }
+      
+      toast.success('Fichier déverrouillé avec succès');
+    } catch (err) {
+      console.error('Error force unlocking:', err);
+      toast.error('Échec du déverrouillage du fichier');
+    }
+  }, [selected]);
+
+  // Handle URL hash for deep linking
   useEffect(() => {
-    const unsubscribeUpdated = websocket.onDocumentUpdated(async (data) => {
+    if (loading || tree.length === 0) return;
+
+    const handleHashChange = async () => {
+      const hash = window.location.hash;
+      if (hash.startsWith('#schema=')) {
+        const schemaId = hash.replace('#schema=', '');
+        if (schemaId && selected.length > 0 && selected[0].id === schemaId) {
+          // Already selected, skip to avoid loop
+          return;
+        }
+        if (schemaId) {
+          processingHashRef.current = true;
+          await expandToAndSelect(schemaId, tree);
+          processingHashRef.current = false;
+        }
+      }
+    };
+
+    // Check initial hash
+    handleHashChange();
+
+    // Listen for changes
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [loading, tree, expandToAndSelect, selected]);
+
+  // Setup WebSocket connection
+  useEffect(() => {
+    websocket.connect();
+
+    // Files don't use presence like documents
+
+    // Toast on content updates coming from other users
+    const unsubscribeContentUpdated = websocket.onSchemaContentUpdated(async (data) => {
       const justDidLocalChange = Date.now() - lastLocalChangeAtRef.current < 2000;
       if (justDidLocalChange) return;
       try {
-        const docId = data.document_id;
+        const schemaId = data.schema_id;
         // Try to use provided name, otherwise fetch
-        let docName = data.name || '';
-        if (!docName) {
-          const detail = await api.getDocument(docId);
-          if (detail.success) docName = detail.document.name;
+        let schemaName = '';
+        try {
+          const detail = await api.getSchema(schemaId);
+          if (detail.success) schemaName = detail.schema.name;
+        } catch (e) {
+          schemaName = schemaId;
         }
-        const result = await api.getTree(currentWorkspace);
+        const result = await api.getSchemasTree(currentWorkspace);
         const treeData = result.tree;
 
         const ToastUpdated: React.FC<{ title: string; onView: () => void }> = ({ title, onView }) => {
@@ -637,7 +691,7 @@ function App() {
             <div className="pointer-events-auto w-[360px] rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700 dark:bg-gray-800">
               <div className="flex items-start gap-3">
                 <div className="mt-0.5 text-blue-600 dark:text-blue-400">
-                  <File size={16} />
+                  <Network size={16} />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{title}</div>
@@ -673,8 +727,8 @@ function App() {
 
         toast.custom(
           <ToastUpdated
-            title={`Document mis à jour : ${docName || data.document_id}`}
-            onView={() => expandToAndSelect(docId, treeData)}
+            title={`Schéma mis à jour : ${schemaName || schemaId}`}
+            onView={() => expandToAndSelect(schemaId, treeData)}
           />,
           { duration: 25000 }
         );
@@ -682,195 +736,18 @@ function App() {
         // ignore toast errors
       }
     });
-    return () => {
-      unsubscribeUpdated();
-    };
-  }, [currentWorkspace, expandToAndSelect]);
 
-  const handleUpload = useCallback(async (parentId: string, file: File) => {
-    try {
-      lastLocalChangeAtRef.current = Date.now();
-      const content = await file.text();
-      await api.createDocument({
-        name: file.name,
-        type: 'file',
-        parent_id: parentId,
-        content,
-      });
-    } catch (err) {
-      console.error('Error uploading:', err);
-      setError(err instanceof Error ? err.message : 'Failed to upload');
-    }
-  }, []);
-
-  const handleStartEdit = useCallback(async () => {
-    if (selected.length === 0) return;
-    const doc = selected[0];
-
-    try {
-      const userId = getUserId();
-      const userName = getUserName();
-      
-      // Check if document is already locked by current user
-      if (doc.locked_by && String(doc.locked_by.user_id) === String(userId)) {
-        // User already owns the lock, allow editing
-        console.log('Document already locked by current user, allowing edit');
-        setEditMode(true);
-        setEditContent(doc.content || '');
-        websocket.notifyEditing(doc.id, userName);
-        return;
-      }
-      
-      // Try to lock the document
-      console.log('Locking document with:', { userId, userName, documentId: doc.id });
-      const result = await api.lockDocument(doc.id, userId, userName);
-      
-      if (result.success) {
-        setEditMode(true);
-        setEditContent(doc.content || '');
-        websocket.notifyEditing(doc.id, userName);
-      } else {
-        toast.error(`Document verrouillé par ${result.locked_by?.user_name || 'un autre utilisateur'}`);
-      }
-    } catch (err) {
-      console.error('Error locking document:', err);
-      setError(err instanceof Error ? err.message : 'Failed to lock document');
-    }
-  }, [selected, getUserId, getUserName]);
-
-  const handleSaveEdit = useCallback(async () => {
-    if (selected.length === 0) return;
-    const doc = selected[0];
-
-    try {
-      lastLocalChangeAtRef.current = Date.now();
-      await api.updateDocument(doc.id, { content: editContent });
-      const userId = getUserId();
-      await api.unlockDocument(doc.id, userId);
-      // Inform others via websocket as redundancy (server also emits)
-      websocket.notifyDocumentUpdated(doc.id, doc.name);
-      
-      setSelected(prev => prev.length > 0 ? [{ ...prev[0], content: editContent, locked_by: null }] : []);
-      setEditMode(false);
-      
-      // Reload all tags after saving (tags may have been extracted from markdown)
-      await loadAllTags();
-      // Reload tags for the current document
-      await loadDocumentTags(doc.id);
-    } catch (err) {
-      console.error('Error saving document:', err);
-      setError(err instanceof Error ? err.message : 'Failed to save document');
-    }
-  }, [selected, editContent, getUserId, loadAllTags, loadDocumentTags]);
-
-  const handleCancelEdit = useCallback(async () => {
-    if (selected.length === 0) return;
-    const doc = selected[0];
-
-    try {
-      const userId = getUserId();
-      await api.unlockDocument(doc.id, userId);
-      setEditContent(doc.content || '');
-      setEditMode(false);
-    } catch (err) {
-      console.error('Error canceling edit:', err);
-      setError(err instanceof Error ? err.message : 'Failed to cancel');
-    }
-  }, [selected, getUserId]);
-
-  const handleUnlock = useCallback(async () => {
-    if (selected.length !== 1) return;
-    const doc = selected[0];
-    const userId = getUserId();
-
-    try {
-      await api.unlockDocument(doc.id, userId);
-      toast.success('Verrou retiré');
-    } catch (err) {
-      console.error('Error unlocking:', err);
-      toast.error('Impossible de retirer le verrou');
-    }
-  }, [selected, getUserId]);
-
-  const handleForceUnlock = useCallback(async (id: string) => {
-    try {
-      await api.forceUnlockDocument(id);
-      
-      // Update tree to remove lock
-      setTree(prevTree => {
-        const updateLock = (docs: Document[]): Document[] => {
-          return docs.map(doc => {
-            if (doc.id === id) {
-              return { ...doc, locked_by: null };
-            }
-            if (doc.children) {
-              return { ...doc, children: updateLock(doc.children) };
-            }
-            return doc;
-          });
-        };
-        return updateLock(prevTree);
-      });
-
-      // Update selected document if it's the one being unlocked
-      if (selected.length > 0 && selected[0].id === id) {
-        setSelected(prev => prev.length > 0 ? [{ ...prev[0], locked_by: null }] : []);
-      }
-      
-      toast.success('Document déverrouillé avec succès');
-    } catch (err) {
-      console.error('Error force unlocking:', err);
-      toast.error('Échec du déverrouillage du document');
-    }
-  }, [selected]);
-
-  // Handle URL hash for deep linking
-  useEffect(() => {
-    if (loading || tree.length === 0) return;
-
-    const handleHashChange = async () => {
-      const hash = window.location.hash;
-      if (hash.startsWith('#doc=')) {
-        const docId = hash.replace('#doc=', '');
-        if (docId && selected.length > 0 && selected[0].id === docId) {
-          // Already selected, skip to avoid loop
-          return;
-        }
-        if (docId) {
-          processingHashRef.current = true;
-          await expandToAndSelect(docId, tree);
-          processingHashRef.current = false;
-        }
-      }
-    };
-
-    // Check initial hash
-    handleHashChange();
-
-    // Listen for changes
-    window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [loading, tree, expandToAndSelect, selected]);
-
-  // Setup WebSocket connection
-  useEffect(() => {
-    websocket.connect();
-
-    const unsubscribePresence = websocket.onPresenceUpdate((documentId, users) => {
-      setPresence(prev => ({
-        ...prev,
-        [documentId]: users
-      }));
-    });
-
-    const unsubscribeTreeChanged = websocket.onTreeChanged(async () => {
+    const unsubscribeTreeChanged = websocket.onSchemaTreeChanged(async () => {
       // Reload current workspace when tree changes
       try {
-        const result = await api.getTree(currentWorkspace);
+        const result = await api.getSchemasTree(currentWorkspace);
+        
+        // Update tree immediately
+        setTree(result.tree);
 
         // Build quick lookup maps to detect changes
         const flatten = (
-          nodes: Document[],
+          nodes: SchemaItem[],
           parentId: string | null = 'root',
           acc: Record<string, { id: string; name: string; parent_id: string | null; type: string; updated_at?: string | null }> = {}
         ) => {
@@ -890,7 +767,7 @@ function App() {
         const deleted: Array<{ id: string; name: string; type: string; path: string }> = [];
 
         // Helper to build full path for an item
-        const buildPath = (itemId: string, treeData: Document[], parentPath: string = ''): string | null => {
+        const buildPath = (itemId: string, treeData: SchemaItem[], parentPath: string = ''): string | null => {
           for (const node of treeData) {
             const currentPath = parentPath ? `${parentPath}/${node.name}` : node.name;
             if (node.id === itemId) {
@@ -929,8 +806,8 @@ function App() {
             if (prev.parent_id !== nxt.parent_id || prev.name !== nxt.name) {
               movedOrRenamed.push({ id, name: nxt.name, type: nxt.type });
             } else {
-              // Detect content/timestamp changes for files
-              if (nxt.type === 'file' && prev.updated_at !== nxt.updated_at) {
+              // Detect content/timestamp changes for schemas
+              if (nxt.type === 'schema' && prev.updated_at !== nxt.updated_at) {
                 contentUpdated.push({ id, name: nxt.name, type: nxt.type });
               }
             }
@@ -985,6 +862,10 @@ function App() {
           );
         };
 
+        // Update tree state
+        setTree(result.tree);
+        prevTreeRef.current = result.tree;
+
         // Show up to 5 toasts to prevent flooding. Skip if this client just performed a local change.
         const justDidLocalChange = Date.now() - lastLocalChangeAtRef.current < 2000;
         if (!justDidLocalChange) {
@@ -993,7 +874,7 @@ function App() {
           for (const ch of showLimited(created)) {
             toast.custom(
               <ToastChange
-                title={`Nouveau ${ch.type === 'folder' ? 'dossier' : 'document'} : ${ch.name}`}
+                title={`Nouveau ${ch.type === 'folder' ? 'dossier' : 'fichier'} : ${ch.name}`}
                 onView={() => expandToAndSelect(ch.id, result.tree)}
               />,
               { duration: 25000 }
@@ -1002,7 +883,7 @@ function App() {
           for (const ch of showLimited(movedOrRenamed)) {
             toast.custom(
               <ToastChange
-                title={`${ch.type === 'folder' ? 'Dossier' : 'Document'} mis à jour : ${ch.name}`}
+                title={`${ch.type === 'folder' ? 'Dossier' : 'Fichier'} mis à jour : ${ch.name}`}
                 subtitle="Renommé ou déplacé"
                 onView={() => expandToAndSelect(ch.id, result.tree)}
               />,
@@ -1012,8 +893,8 @@ function App() {
           for (const ch of showLimited(contentUpdated)) {
             toast.custom(
               <ToastChange
-                title={`Document mis à jour : ${ch.name}`}
-                subtitle="Contenu enregistré"
+                title={`Fichier mis à jour : ${ch.name}`}
+                subtitle="Contenu modifié"
                 onView={() => expandToAndSelect(ch.id, result.tree)}
               />,
               { duration: 25000 }
@@ -1060,7 +941,7 @@ function App() {
             };
             toast.custom(
               <ToastDelete
-                title={`${del.type === 'folder' ? 'Dossier' : 'Document'} supprimé : ${del.name}`}
+                title={`${del.type === 'folder' ? 'Dossier' : 'Fichier'} supprimé : ${del.name}`}
                 path={del.path}
               />,
               { duration: 25000 }
@@ -1075,14 +956,14 @@ function App() {
       }
     });
 
-    const unsubscribeLock = websocket.onLockUpdate((documentId, lockInfo) => {
+    const unsubscribeLock = websocket.onSchemaLockUpdated((schemaId, lockInfo) => {
       // Update tree with new lock info
       setTree(prevTree => {
         // Notify if someone else locked it
         if (lockInfo && String(lockInfo.user_id) !== getUserId()) {
-          const findName = (nodes: Document[]): string | null => {
+          const findName = (nodes: SchemaItem[]): string | null => {
             for (const n of nodes) {
-              if (n.id === documentId) return n.name;
+              if (n.id === schemaId) return n.name;
               if (n.children) {
                 const found = findName(n.children);
                 if (found) return found;
@@ -1092,33 +973,33 @@ function App() {
           };
           const name = findName(prevTree);
           if (name) {
-            toast(`${lockInfo.user_name} édite "${name}"`, { icon: '🔒', duration: 3000 });
+            toast(`${lockInfo.user_name} verrouille "${name}"`, { icon: '🔒', duration: 3000 });
           }
         }
 
-        const updateLock = (docs: Document[]): Document[] => {
-          return docs.map(doc => {
-            if (doc.id === documentId) {
-              return { ...doc, locked_by: lockInfo };
+        const updateLock = (schemas: SchemaItem[]): SchemaItem[] => {
+          return schemas.map(schema => {
+            if (schema.id === schemaId) {
+              return { ...schema, locked_by: lockInfo };
             }
-            if (doc.children) {
-              return { ...doc, children: updateLock(doc.children) };
+            if (schema.children) {
+              return { ...schema, children: updateLock(schema.children) };
             }
-            return doc;
+            return schema;
           });
         };
         return updateLock(prevTree);
       });
 
-      // Update selected documents if one is being locked/unlocked
-      setSelected(prev => prev.map(doc => 
-        doc.id === documentId ? { ...doc, locked_by: lockInfo } : doc
+      // Update selected schemas if one is being locked/unlocked
+      setSelected(prev => prev.map(schema => 
+        schema.id === schemaId ? { ...schema, locked_by: lockInfo } : schema
       ));
     });
 
     return () => {
-      unsubscribePresence();
       unsubscribeTreeChanged();
+      unsubscribeContentUpdated();
       unsubscribeLock();
       websocket.disconnect();
     };
@@ -1136,7 +1017,7 @@ function App() {
     if (!over || active.id === over.id) return;
 
     try {
-      const findNode = (nodes: Document[], id: string): Document | null => {
+      const findNode = (nodes: SchemaItem[], id: string): SchemaItem | null => {
         for (const node of nodes) {
           if (node.id === id) return node;
           if (node.children) {
@@ -1149,14 +1030,14 @@ function App() {
 
       // Determine items to move
       const activeIdStr = active.id as string;
-      const isMultiSelect = selected.some(doc => doc.id === activeIdStr);
-      const itemsToMove = isMultiSelect ? selected : [findNode(tree, activeIdStr)].filter((n): n is Document => n !== null);
+      const isMultiSelect = selected.some(schema => schema.id === activeIdStr);
+      const itemsToMove = isMultiSelect ? selected : [findNode(tree, activeIdStr)].filter((n): n is SchemaItem => n !== null);
 
       if (itemsToMove.length === 0) return;
 
       // Check target
       const targetId = over.id === 'root-drop-zone' ? 'root' : over.id as string;
-      let targetNode: Document | null = null;
+      let targetNode: SchemaItem | null = null;
       
       if (targetId !== 'root') {
         targetNode = findNode(tree, targetId);
@@ -1172,7 +1053,7 @@ function App() {
         // Skip if moving into itself or if parent is already target
         if (item.id === targetId) continue;
         
-        const result = await api.moveDocument(item.id, targetId);
+        const result = await api.updateSchema(item.id, { parent_id: targetId === 'root' ? null : targetId });
         if (result.success) {
           successCount++;
         } else {
@@ -1184,12 +1065,12 @@ function App() {
         const targetName = targetId === 'root' ? 'la racine' : `"${targetNode?.name}"`;
         const message = itemsToMove.length === 1 
           ? `"${itemsToMove[0].name}" déplacé vers ${targetName}`
-          : `${successCount} documents déplacés vers ${targetName}`;
+          : `${successCount} fichiers déplacés vers ${targetName}`;
         
         toast.success(message);
         
         // Refresh tree
-        const treeResult = await api.getTree(currentWorkspace);
+        const treeResult = await api.getSchemasTree(currentWorkspace);
         setTree(treeResult.tree);
       }
       
@@ -1198,7 +1079,7 @@ function App() {
       }
 
     } catch (err) {
-      console.error('Error moving document:', err);
+      console.error('Error moving file:', err);
       toast.error('Erreur lors du déplacement');
     }
   }, [tree, selected, currentWorkspace]);
@@ -1212,18 +1093,18 @@ function App() {
   }
 
   // Get active node for drag overlay
-  const findNode = (nodes: Document[], id: string): Document | null => {
+  const findNodeForOverlay = (nodes: SchemaItem[], id: string): SchemaItem | null => {
     for (const node of nodes) {
       if (node.id === id) return node;
       if (node.children) {
-        const found = findNode(node.children, id);
+        const found = findNodeForOverlay(node.children, id);
         if (found) return found;
       }
     }
     return null;
   };
-  
-  const activeNode = activeId ? findNode(tree, activeId) : null;
+
+  const activeNode = activeId ? findNodeForOverlay(tree, activeId) : null;
 
   return (
     <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
@@ -1234,22 +1115,19 @@ function App() {
         }}
       >
         <div className="flex flex-col" style={{ width: treeWidth }}>
-          <DocumentTree
+          <SchemaTree
             tree={filteredTree}
             expanded={expanded}
             selected={selected}
             onToggleExpand={handleToggleExpand}
             onExpandAll={handleExpandAll}
             onCollapseAll={handleCollapseAll}
-            onSelect={handleSelectDocument}
+            onSelect={handleSelectSchema}
             onSelectAll={handleSelectAll}
-            onCreate={userPermission !== 'read' ? handleCreateDocument : undefined}
+            onCreate={userPermission !== 'read' ? handleCreateSchema : undefined}
             onCreateFolder={userPermission !== 'read' ? handleCreateFolder : undefined}
             onDelete={userPermission !== 'read' ? handleDelete : undefined}
             onRename={userPermission !== 'read' ? handleRename : undefined}
-            onCopy={handleCopy}
-            onDownload={handleDownload}
-            onUpload={userPermission !== 'read' ? handleUpload : undefined}
             onUnlock={userPermission === 'admin' ? handleForceUnlock : undefined}
             width={treeWidth}
             readOnly={userPermission === 'read'}
@@ -1272,45 +1150,61 @@ function App() {
           <div className="absolute inset-y-0 -left-1 -right-1 group-hover:bg-blue-200 dark:group-hover:bg-blue-800 group-hover:opacity-20" />
         </div>
 
-        {selected.length > 0 ? (
-          editMode ? (
-            <>
-              <div className="flex-1 flex flex-col border-r">
-                <DocumentViewer
-                  document={{...selected[0], content: editContent}}
-                  onEdit={handleStartEdit}
-                  currentUserId={getUserId()}
-                  presenceUsers={presence[selected[0].id]}
-                  onUnlock={handleUnlock}
-                  isEditing={true}
+        {selected.length > 0 && selected[0].type === 'schema' && selectedSchema ? (
+          <div className="flex-1 flex flex-col relative">
+            <SchemaCanvas
+              schema={selectedSchema}
+              devices={devices}
+              connections={connections}
+              onDevicesChange={(newDevices) => {
+                setDevices(newDevices);
+                // Update selected device if it still exists
+                if (selectedDevice) {
+                  const updated = newDevices.find(d => d.id === selectedDevice.id);
+                  if (updated) {
+                    setSelectedDevice(updated);
+                  } else {
+                    setSelectedDevice(null);
+                    setShowDevicePanel(false);
+                  }
+                }
+              }}
+              onConnectionsChange={setConnections}
+              onDeviceSelect={(device) => {
+                setSelectedDevice(device);
+                setShowDevicePanel(device !== null);
+              }}
+              onTemplatesLoaded={setDeviceTemplates}
+            />
+            
+            {/* Device Properties Panel */}
+            {showDevicePanel && selectedDevice && (
+              <div className="absolute right-0 top-0 bottom-0 z-10">
+                <DevicePropertiesPanel
+                  device={selectedDevice}
+                  template={deviceTemplates.find(t => t.device_type === selectedDevice.device_type)}
+                  schemaId={selectedSchema.id}
+                  onClose={() => {
+                    setShowDevicePanel(false);
+                    setSelectedDevice(null);
+                  }}
+                  onUpdate={(updatedDevice) => {
+                    setDevices(devices.map(d => d.id === updatedDevice.id ? updatedDevice : d));
+                    setSelectedDevice(updatedDevice);
+                  }}
+                  onDelete={(deviceId) => {
+                    setDevices(devices.filter(d => d.id !== deviceId));
+                    setSelectedDevice(null);
+                    setShowDevicePanel(false);
+                  }}
                 />
               </div>
-              <div className="flex-1 flex flex-col">
-                <DocumentEditor
-                  document={selected[0]}
-                  content={editContent}
-                  onContentChange={setEditContent}
-                  onSave={handleSaveEdit}
-                  onCancel={handleCancelEdit}
-                />
-              </div>
-            </>
-          ) : (
-            <div className="flex-1 flex flex-col">
-              <DocumentViewer
-                document={selected[0]}
-                onEdit={handleStartEdit}
-                currentUserId={getUserId()}
-                presenceUsers={presence[selected[0].id]}
-                onUnlock={handleUnlock}
-                isEditing={false}
-              />
-            </div>
-          )
+            )}
+          </div>
         ) : (
           <div className="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-500">
             <div className="text-center">
-              <p className="text-lg">Select a document to view</p>
+              <p className="text-lg">Sélectionnez un schéma pour l'éditer</p>
             </div>
           </div>
         )}
@@ -1322,14 +1216,15 @@ function App() {
             {activeNode.type === 'folder' ? (
               <Folder size={16} className="text-yellow-600 dark:text-yellow-500" />
             ) : (
-              <File size={16} className="text-blue-600 dark:text-blue-400" />
+              <Network size={16} className="text-blue-600 dark:text-blue-400" />
             )}
             <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{activeNode.name}</span>
           </div>
         ) : null}
       </DragOverlay>
+
     </DndContext>
   );
 }
 
-export default App;
+export default SchemaApp;

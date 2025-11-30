@@ -16,6 +16,8 @@ import TagsAdmin from './pages/TagsAdmin';
 import VaultPage from './pages/VaultPage';
 import TasksApp from './TasksApp';
 import DocumentsApp from './DocumentsApp';
+import FilesApp from './FilesApp';
+import SchemaApp from './SchemaApp';
 import Header from './components/layout/Header';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -133,6 +135,32 @@ function AppContent() {
                 <Header />
                 <div className="flex-1 overflow-hidden">
                   <TasksApp />
+                </div>
+              </div>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/files"
+          element={
+            <ProtectedRoute>
+              <div className="h-screen flex flex-col">
+                <Header />
+                <div className="flex-1 overflow-hidden">
+                  <FilesApp />
+                </div>
+              </div>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/schemas"
+          element={
+            <ProtectedRoute>
+              <div className="h-screen flex flex-col">
+                <Header />
+                <div className="flex-1 overflow-hidden">
+                  <SchemaApp />
                 </div>
               </div>
             </ProtectedRoute>

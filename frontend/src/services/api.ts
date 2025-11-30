@@ -1,4 +1,4 @@
-import { Document, Task, TaskTimelineItem, TaskComment, Tag, TaskChecklistItem, TaskTag, TaskAssignee, TaskFile } from '../types';
+import { Document, Task, TaskTimelineItem, TaskComment, Tag, TaskChecklistItem, TaskTag, TaskAssignee, TaskFile, FileItem, FileDetail, SchemaItem, SchemaDetail, Device, Connection, DeviceTemplate, CustomDeviceTemplate } from '../types';
 
 const API_BASE = '/api';
 
@@ -429,6 +429,317 @@ class ApiService {
 
   async getPasswordTagSuggestions(query: string = '', limit: number = 20): Promise<{ success: boolean; tags: Tag[] }> {
     return this.request(`/vault/passwords/tags/suggestions?query=${encodeURIComponent(query)}&limit=${limit}`);
+  }
+
+  // ===== Files Operations =====
+  async getFilesTree(workspaceId: string = 'demo'): Promise<{ success: boolean; tree: FileItem[]; workspace_name?: string }> {
+    return this.request(`/files/tree?workspace_id=${workspaceId}`);
+  }
+
+  async getFile(id: string): Promise<{ success: boolean; file: FileDetail }> {
+    return this.request(`/files/${id}`);
+  }
+
+  async createFile(data: {
+    workspace_id: string;
+    parent_id?: string | null;
+    name: string;
+    type: 'file' | 'folder';
+  }): Promise<{ success: boolean; file: FileItem }> {
+    return this.request('/files', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateFile(
+    id: string,
+    data: {
+      name?: string;
+      parent_id?: string | null;
+    }
+  ): Promise<{ success: boolean; message: string }> {
+    return this.request(`/files/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteFile(id: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/files/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async uploadFileContent(fileId: string, file: File): Promise<{ success: boolean; file: FileItem }> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`${API_BASE}/files/${fileId}/upload`, {
+      method: 'POST',
+      body: formData,
+      credentials: 'include',
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+      throw new Error(error.detail || 'Failed to upload file');
+    }
+
+    return response.json();
+  }
+
+  async getFileContent(fileId: string): Promise<string> {
+    return `${API_BASE}/files/${fileId}/content`;
+  }
+
+  async downloadFile(fileId: string): Promise<void> {
+    const url = `${API_BASE}/files/${fileId}/download`;
+    window.open(url, '_blank');
+  }
+
+  // File tags
+  async getFileTags(fileId: string): Promise<{ success: boolean; tags: Tag[] }> {
+    return this.request(`/files/${fileId}/tags`);
+  }
+
+  async updateFileTags(fileId: string, tags: string[]): Promise<{ success: boolean; tags: Tag[] }> {
+    return this.request(`/files/${fileId}/tags`, {
+      method: 'PUT',
+      body: JSON.stringify({ tags }),
+    });
+  }
+
+  async getFileTagSuggestions(query: string = '', limit: number = 20): Promise<{ success: boolean; tags: Tag[] }> {
+    return this.request(`/files/tags/suggestions?query=${encodeURIComponent(query)}&limit=${limit}`);
+  }
+
+  // File locks
+  async lockFile(id: string, userId: number, userName: string): Promise<{
+    success: boolean;
+    message?: string;
+    locked_by?: { user_id: number; user_name: string; locked_at?: string };
+  }> {
+    return this.request(`/files/${id}/lock`, {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId, user_name: userName }),
+    });
+  }
+
+  async unlockFile(id: string, userId: number): Promise<{ success: boolean; message: string }> {
+    return this.request(`/files/${id}/lock?user_id=${userId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async forceUnlockFile(id: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/files/${id}/force-unlock`, {
+      method: 'POST',
+    });
+  }
+
+  // ===== Schema Operations =====
+  async getSchemasTree(workspaceId: string = 'demo'): Promise<{ success: boolean; tree: SchemaItem[]; workspace_name?: string }> {
+    return this.request(`/schemas/tree?workspace_id=${workspaceId}`);
+  }
+
+  async getSchema(id: string): Promise<{ success: boolean; schema: SchemaDetail }> {
+    return this.request(`/schemas/${id}`);
+  }
+
+  async createSchema(data: {
+    workspace_id: string;
+    parent_id?: string | null;
+    name: string;
+    type: 'schema' | 'folder';
+    description?: string;
+  }): Promise<{ success: boolean; schema: SchemaItem }> {
+    return this.request('/schemas', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateSchema(
+    id: string,
+    data: {
+      name?: string;
+      parent_id?: string | null;
+      description?: string;
+    }
+  ): Promise<{ success: boolean; message: string }> {
+    return this.request(`/schemas/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteSchema(id: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/schemas/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Schema devices
+  async getSchemaDevices(schemaId: string): Promise<{ success: boolean; devices: Device[] }> {
+    return this.request(`/schemas/${schemaId}/devices`);
+  }
+
+  async createDevice(schemaId: string, data: {
+    device_type: string;
+    name: string;
+    model?: string;
+    ip_address?: string;
+    mac_address?: string;
+    position_x: number;
+    position_y: number;
+    config_json?: Record<string, any>;
+  }): Promise<{ success: boolean; device: Device }> {
+    return this.request(`/schemas/${schemaId}/devices`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateDevice(schemaId: string, deviceId: string, data: {
+    name?: string;
+    position_x?: number;
+    position_y?: number;
+    model?: string;
+    ip_address?: string;
+    mac_address?: string;
+    config_json?: Record<string, any>;
+  }): Promise<{ success: boolean; device: Device }> {
+    return this.request(`/schemas/${schemaId}/devices/${deviceId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteDevice(schemaId: string, deviceId: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/schemas/${schemaId}/devices/${deviceId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async getDeviceTemplates(workspaceId: string = 'demo'): Promise<{ success: boolean; templates: DeviceTemplate[] }> {
+    return this.request(`/schemas/device-templates?workspace_id=${workspaceId}`);
+  }
+
+  // Custom device templates
+  async getCustomTemplates(workspaceId: string = 'demo'): Promise<{ success: boolean; templates: CustomDeviceTemplate[] }> {
+    return this.request(`/schemas/custom-templates?workspace_id=${workspaceId}`);
+  }
+
+  async createCustomTemplate(workspaceId: string, data: {
+    device_type: string;
+    name: string;
+    description?: string;
+    default_ports: Array<{ name: string; type: 'WAN' | 'LAN'; position: 'left' | 'right' | 'top' | 'bottom' }>;
+    icon_svg?: string;
+    default_size: { width: number; height: number };
+  }): Promise<{ success: boolean; template: CustomDeviceTemplate }> {
+    return this.request(`/schemas/custom-templates?workspace_id=${workspaceId}`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateCustomTemplate(templateId: string, workspaceId: string, data: {
+    name?: string;
+    description?: string;
+    default_ports?: Array<{ name: string; type: 'WAN' | 'LAN'; position: 'left' | 'right' | 'top' | 'bottom' }>;
+    icon_svg?: string;
+    default_size?: { width: number; height: number };
+  }): Promise<{ success: boolean; template: CustomDeviceTemplate }> {
+    return this.request(`/schemas/custom-templates/${templateId}?workspace_id=${workspaceId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteCustomTemplate(templateId: string, workspaceId: string = 'demo'): Promise<{ success: boolean; message: string }> {
+    return this.request(`/schemas/custom-templates/${templateId}?workspace_id=${workspaceId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Schema connections
+  async getSchemaConnections(schemaId: string): Promise<{ success: boolean; connections: Connection[] }> {
+    return this.request(`/schemas/${schemaId}/connections`);
+  }
+
+  async createConnection(schemaId: string, data: {
+    from_device_id: string;
+    from_port: string;
+    to_device_id: string;
+    to_port: string;
+    connection_type?: string;
+    bandwidth?: number;
+    vlan_id?: number;
+    config_json?: Record<string, any>;
+  }): Promise<{ success: boolean; connection: Connection }> {
+    return this.request(`/schemas/${schemaId}/connections`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateConnection(schemaId: string, connectionId: string, data: {
+    connection_type?: string;
+    bandwidth?: number;
+    vlan_id?: number;
+    config_json?: Record<string, any>;
+  }): Promise<{ success: boolean; connection: Connection }> {
+    return this.request(`/schemas/${schemaId}/connections/${connectionId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteConnection(schemaId: string, connectionId: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/schemas/${schemaId}/connections/${connectionId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // Schema tags
+  async getSchemaTags(schemaId: string): Promise<{ success: boolean; tags: Tag[] }> {
+    return this.request(`/schemas/${schemaId}/tags`);
+  }
+
+  async updateSchemaTags(schemaId: string, tags: string[]): Promise<{ success: boolean; tags: Tag[] }> {
+    return this.request(`/schemas/${schemaId}/tags`, {
+      method: 'PUT',
+      body: JSON.stringify({ tags }),
+    });
+  }
+
+  async getSchemaTagSuggestions(query: string = '', limit: number = 20): Promise<{ success: boolean; tags: Tag[] }> {
+    return this.request(`/schemas/tags/suggestions?query=${encodeURIComponent(query)}&limit=${limit}`);
+  }
+
+  // Schema locks
+  async lockSchema(id: string, userId: number, userName: string): Promise<{
+    success: boolean;
+    locked_by: LockInfo;
+  }> {
+    return this.request(`/schemas/${id}/lock`, {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId, user_name: userName }),
+    });
+  }
+
+  async unlockSchema(id: string, userId: number): Promise<{ success: boolean; message: string }> {
+    return this.request(`/schemas/${id}/lock?user_id=${userId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async forceUnlockSchema(id: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/schemas/${id}/force-unlock`, {
+      method: 'POST',
+    });
   }
 
   // ===== System Settings =====

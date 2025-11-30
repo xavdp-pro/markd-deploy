@@ -16,6 +16,16 @@ type VaultTreeChangedCallback = () => void;
 type VaultItemUpdatedCallback = (data: { password_id: string; name?: string | null }) => void;
 type PresenceUpdateCallback = (documentId: string, users: Array<{ id: string; username: string }>) => void;
 
+// Files callbacks
+type FileTreeChangedCallback = () => void;
+type FileLockUpdateCallback = (fileId: string, lockInfo: LockInfo | null) => void;
+type FileContentUpdatedCallback = (data: { file_id: string; name?: string | null; user_id?: number | null }) => void;
+
+// Schema callbacks
+type SchemaTreeChangedCallback = () => void;
+type SchemaLockUpdateCallback = (schemaId: string, lockInfo: LockInfo | null) => void;
+type SchemaContentUpdatedCallback = (data: { schema_id: string; user_id?: number | null }) => void;
+
 class WebSocketService {
   private socket: Socket | null = null;
   private treeUpdateCallbacks: Set<TreeUpdateCallback> = new Set();
@@ -33,6 +43,16 @@ class WebSocketService {
   private vaultItemUpdatedCallbacks: Set<VaultItemUpdatedCallback> = new Set();
   private vaultLockUpdateCallbacks: Set<LockUpdateCallback> = new Set();
   private presenceUpdateCallbacks: Set<PresenceUpdateCallback> = new Set();
+
+  // Files callbacks
+  private fileTreeChangedCallbacks: Set<FileTreeChangedCallback> = new Set();
+  private fileLockUpdateCallbacks: Set<FileLockUpdateCallback> = new Set();
+  private fileContentUpdatedCallbacks: Set<FileContentUpdatedCallback> = new Set();
+
+  // Schema callbacks
+  private schemaTreeChangedCallbacks: Set<SchemaTreeChangedCallback> = new Set();
+  private schemaLockUpdateCallbacks: Set<SchemaLockUpdateCallback> = new Set();
+  private schemaContentUpdatedCallbacks: Set<SchemaContentUpdatedCallback> = new Set();
 
   connect() {
     if (this.socket?.connected) {
@@ -98,6 +118,32 @@ class WebSocketService {
 
     this.socket.on('presence_updated', (data: { document_id: string; users: Array<{ id: string; username: string }> }) => {
       this.presenceUpdateCallbacks.forEach(cb => cb(data.document_id, data.users));
+    });
+
+    // Files events
+    this.socket.on('file_tree_changed', () => {
+      this.fileTreeChangedCallbacks.forEach(cb => cb());
+    });
+
+    this.socket.on('file_lock_updated', (data: { file_id: string; locked_by: LockInfo | null }) => {
+      this.fileLockUpdateCallbacks.forEach(cb => cb(data.file_id, data.locked_by));
+    });
+
+    this.socket.on('file_content_updated', (data: { file_id: string; name?: string | null; user_id?: number | null }) => {
+      this.fileContentUpdatedCallbacks.forEach(cb => cb(data));
+    });
+
+    // Schema events
+    this.socket.on('schema_tree_changed', () => {
+      this.schemaTreeChangedCallbacks.forEach(cb => cb());
+    });
+
+    this.socket.on('schema_lock_updated', (data: { schema_id: string; locked_by: LockInfo | null }) => {
+      this.schemaLockUpdateCallbacks.forEach(cb => cb(data.schema_id, data.locked_by));
+    });
+
+    this.socket.on('schema_content_updated', (data: { schema_id: string; user_id?: number | null }) => {
+      this.schemaContentUpdatedCallbacks.forEach(cb => cb(data));
     });
   }
 
@@ -209,6 +255,38 @@ class WebSocketService {
   onPresenceUpdate(callback: PresenceUpdateCallback) {
     this.presenceUpdateCallbacks.add(callback);
     return () => { this.presenceUpdateCallbacks.delete(callback); };
+  }
+
+  // Files methods
+  onFileTreeChanged(callback: FileTreeChangedCallback) {
+    this.fileTreeChangedCallbacks.add(callback);
+    return () => { this.fileTreeChangedCallbacks.delete(callback); };
+  }
+
+  onFileLockUpdate(callback: FileLockUpdateCallback) {
+    this.fileLockUpdateCallbacks.add(callback);
+    return () => { this.fileLockUpdateCallbacks.delete(callback); };
+  }
+
+  onFileContentUpdated(callback: FileContentUpdatedCallback) {
+    this.fileContentUpdatedCallbacks.add(callback);
+    return () => { this.fileContentUpdatedCallbacks.delete(callback); };
+  }
+
+  // Schema handlers
+  onSchemaTreeChanged(callback: SchemaTreeChangedCallback) {
+    this.schemaTreeChangedCallbacks.add(callback);
+    return () => { this.schemaTreeChangedCallbacks.delete(callback); };
+  }
+
+  onSchemaLockUpdated(callback: SchemaLockUpdateCallback) {
+    this.schemaLockUpdateCallbacks.add(callback);
+    return () => { this.schemaLockUpdateCallbacks.delete(callback); };
+  }
+
+  onSchemaContentUpdated(callback: SchemaContentUpdatedCallback) {
+    this.schemaContentUpdatedCallbacks.add(callback);
+    return () => { this.schemaContentUpdatedCallbacks.delete(callback); };
   }
 }
 
