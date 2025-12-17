@@ -1482,6 +1482,207 @@ async def get_mcp_activity(limit: int = 100):
     """Get recent MCP activity"""
     try:
         query = """
+            SELECT agent_id, action, document_id, details, created_at
+            FROM mcp_activity_log
+            ORDER BY created_at DESC
+            LIMIT %s
+        """
+        activities = db.execute_query(query, (limit,))
+        return {"success": True, "activities": activities}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ===== MCP Configuration Endpoints =====
+
+class MCPConfigBase(BaseModel):
+    workspace_id: str
+    source_path: str
+    destination_path: str = ''
+    enabled: bool = True
+
+class MCPConfigUpdate(BaseModel):
+    source_path: Optional[str] = None
+    destination_path: Optional[str] = None
+    enabled: Optional[bool] = None
+
+@app.get("/api/mcp/configs")
+async def get_mcp_configs(request: Request, user: Dict = Depends(get_current_user)):
+    """Get all MCP configurations for current user"""
+    try:
+        query = """
+            SELECT mc.id, mc.workspace_id, mc.source_path, mc.destination_path, 
+                   mc.enabled, mc.created_at, mc.updated_at,
+                   w.name as workspace_name
+            FROM mcp_configs mc
+            LEFT JOIN workspaces w ON mc.workspace_id = w.id
+            WHERE mc.user_id = %s
+            ORDER BY mc.created_at DESC
+        """
+        configs = db.execute_query(query, (user['id'],))
+        
+        # Vérifier les permissions pour chaque workspace
+        for config in configs:
+            workspace_id = config['workspace_id']
+            try:
+                # Vérifier que l'utilisateur a au moins 'read' sur le workspace
+                permission = await check_workspace_permission(workspace_id, user, 'read')
+                config['user_permission'] = permission
+                # Autoriser seulement si write ou admin
+                config['mcp_allowed'] = permission in ['write', 'admin']
+            except HTTPException:
+                config['user_permission'] = 'none'
+                config['mcp_allowed'] = False
+        
+        return {"success": True, "configs": configs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/mcp/configs")
+async def create_mcp_config(config: MCPConfigBase, request: Request, user: Dict = Depends(get_current_user)):
+    """Create new MCP configuration (requires write permission on workspace)"""
+    try:
+        # Vérifier que l'utilisateur a au moins 'write' sur le workspace
+        permission = await check_workspace_permission(config.workspace_id, user, 'write')
+        
+        if permission not in ['write', 'admin']:
+            raise HTTPException(
+                status_code=403, 
+                detail="MCP requires 'write' or 'admin' permission on the workspace"
+            )
+        
+        # Vérifier qu'il n'existe pas déjà une config pour ce user/workspace/source_path
+        check_query = """
+            SELECT id FROM mcp_configs 
+            WHERE user_id = %s AND workspace_id = %s AND source_path = %s
+        """
+        existing = db.execute_query(check_query, (user['id'], config.workspace_id, config.source_path))
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail="A configuration already exists for this user/workspace/source_path"
+            )
+        
+        config_id = str(uuid.uuid4())
+        query = """
+            INSERT INTO mcp_configs (id, user_id, workspace_id, source_path, destination_path, enabled)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """
+        db.execute_update(query, (
+            config_id,
+            user['id'],
+            config.workspace_id,
+            config.source_path,
+            config.destination_path,
+            config.enabled
+        ))
+        
+        return {
+            "success": True,
+            "config": {
+                "id": config_id,
+                "workspace_id": config.workspace_id,
+                "source_path": config.source_path,
+                "destination_path": config.destination_path,
+                "enabled": config.enabled
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/mcp/configs/{config_id}")
+async def update_mcp_config(config_id: str, config: MCPConfigUpdate, request: Request, user: Dict = Depends(get_current_user)):
+    """Update MCP configuration (requires write permission on workspace)"""
+    try:
+        # Vérifier que la config existe et appartient à l'utilisateur
+        check_query = "SELECT workspace_id FROM mcp_configs WHERE id = %s AND user_id = %s"
+        existing = db.execute_query(check_query, (config_id, user['id']))
+        if not existing:
+            raise HTTPException(status_code=404, detail="Configuration not found")
+        
+        workspace_id = existing[0]['workspace_id']
+        
+        # Vérifier que l'utilisateur a au moins 'write' sur le workspace
+        permission = await check_workspace_permission(workspace_id, user, 'write')
+        
+        if permission not in ['write', 'admin']:
+            raise HTTPException(
+                status_code=403,
+                detail="MCP requires 'write' or 'admin' permission on the workspace"
+            )
+        
+        # Construire la requête de mise à jour
+        updates = []
+        params = []
+        
+        if config.source_path is not None:
+            updates.append("source_path = %s")
+            params.append(config.source_path)
+        
+        if config.destination_path is not None:
+            updates.append("destination_path = %s")
+            params.append(config.destination_path)
+        
+        if config.enabled is not None:
+            updates.append("enabled = %s")
+            params.append(config.enabled)
+        
+        if updates:
+            params.append(config_id)
+            query = f"UPDATE mcp_configs SET {', '.join(updates)} WHERE id = %s"
+            db.execute_update(query, tuple(params))
+        
+        return {"success": True, "message": "Configuration updated"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/mcp/configs/{config_id}")
+async def delete_mcp_config(config_id: str, request: Request, user: Dict = Depends(get_current_user)):
+    """Delete MCP configuration"""
+    try:
+        # Vérifier que la config existe et appartient à l'utilisateur
+        check_query = "SELECT id FROM mcp_configs WHERE id = %s AND user_id = %s"
+        existing = db.execute_query(check_query, (config_id, user['id']))
+        if not existing:
+            raise HTTPException(status_code=404, detail="Configuration not found")
+        
+        query = "DELETE FROM mcp_configs WHERE id = %s"
+        db.execute_update(query, (config_id,))
+        
+        return {"success": True, "message": "Configuration deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/mcp/configs/check")
+async def check_mcp_permission(workspace_id: str, request: Request, user: Dict = Depends(get_current_user)):
+    """Check if user has permission to use MCP on a workspace (requires write/admin)"""
+    try:
+        permission = await check_workspace_permission(workspace_id, user, 'write')
+        mcp_allowed = permission in ['write', 'admin']
+        
+        return {
+            "success": True,
+            "workspace_id": workspace_id,
+            "user_permission": permission,
+            "mcp_allowed": mcp_allowed
+        }
+    except HTTPException as e:
+        # Si pas de permission, retourner 'none'
+        return {
+            "success": True,
+            "workspace_id": workspace_id,
+            "user_permission": "none",
+            "mcp_allowed": False
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    try:
+        query = """
             SELECT * FROM mcp_activity_log
             ORDER BY created_at DESC
             LIMIT %s
