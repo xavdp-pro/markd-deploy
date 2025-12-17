@@ -1,4 +1,4 @@
-import { Document, Task, TaskTimelineItem, TaskComment, Tag, TaskChecklistItem, TaskTag, TaskAssignee, TaskFile, FileItem, FileDetail, SchemaItem, SchemaDetail, Device, Connection, DeviceTemplate, CustomDeviceTemplate } from '../types';
+import { Document, Task, TaskTimelineItem, TaskTimelineFile, TaskComment, Tag, TaskChecklistItem, TaskTag, TaskAssignee, TaskFile, FileItem, FileDetail, SchemaItem, SchemaDetail, Device, Connection, DeviceTemplate, CustomDeviceTemplate } from '../types';
 
 const API_BASE = '/api';
 
@@ -299,6 +299,30 @@ class ApiService {
     });
   }
 
+  async uploadTimelineFile(
+    taskId: string,
+    entryId: string,
+    file: File
+  ): Promise<{ success: boolean; file: TaskTimelineFile }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    return this.request(`/tasks/${taskId}/timeline/${entryId}/files`, {
+      method: 'POST',
+      body: formData,
+      headers: {}, // Let browser set Content-Type for FormData
+    });
+  }
+
+  async deleteTimelineFile(
+    taskId: string,
+    entryId: string,
+    fileId: string
+  ): Promise<{ success: boolean }> {
+    return this.request(`/tasks/${taskId}/timeline/${entryId}/files/${fileId}`, {
+      method: 'DELETE',
+    });
+  }
+
   async getTaskComments(id: string): Promise<{ success: boolean; comments: TaskComment[] }> {
     return this.request(`/tasks/${id}/comments`);
   }
@@ -307,6 +331,32 @@ class ApiService {
     return this.request(`/tasks/${id}/comments`, {
       method: 'POST',
       body: JSON.stringify(data),
+    });
+  }
+
+  async updateTaskComment(taskId: string, commentId: string, data: { content: string }): Promise<{ success: boolean; comment: TaskComment }> {
+    return this.request(`/tasks/${taskId}/comments/${commentId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTaskTimelineEntry(taskId: string, entryId: string, data: { title?: string; description?: string }): Promise<{ success: boolean; entry: TaskTimelineItem }> {
+    return this.request(`/tasks/${taskId}/timeline/${entryId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteTaskComment(taskId: string, commentId: string): Promise<{ success: boolean }> {
+    return this.request(`/tasks/${taskId}/comments/${commentId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async deleteTaskTimelineEntry(taskId: string, entryId: string): Promise<{ success: boolean }> {
+    return this.request(`/tasks/${taskId}/timeline/${entryId}`, {
+      method: 'DELETE',
     });
   }
 
@@ -391,26 +441,26 @@ class ApiService {
 
   // Password Locking
   async lockPassword(id: string, user: { id: string; username: string }): Promise<{ success: boolean; message: string }> {
-    return this.request(`/passwords/${id}/lock`, {
+    return this.request(`/vault/passwords/${id}/lock`, {
       method: 'POST',
       body: JSON.stringify({ user_id: user.id, user_name: user.username }),
     });
   }
 
   async unlockPassword(id: string, userId: string): Promise<{ success: boolean; message: string }> {
-    return this.request(`/passwords/${id}/lock?user_id=${userId}`, {
+    return this.request(`/vault/passwords/${id}/lock?user_id=${userId}`, {
       method: 'DELETE',
     });
   }
 
   async forceUnlockPassword(id: string): Promise<{ success: boolean; message: string }> {
-    return this.request(`/passwords/${id}/force-unlock`, {
+    return this.request(`/vault/passwords/${id}/force-unlock`, {
       method: 'POST',
     });
   }
 
   async heartbeatPassword(id: string): Promise<{ success: boolean; message: string }> {
-    return this.request(`/passwords/${id}/heartbeat`, {
+    return this.request(`/vault/passwords/${id}/heartbeat`, {
       method: 'POST',
     });
   }

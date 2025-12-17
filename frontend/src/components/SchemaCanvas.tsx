@@ -17,6 +17,7 @@ interface SchemaCanvasProps {
   workspaceId?: string;
   onEditTemplate?: (template: DeviceTemplate) => void;
   onCreateTemplate?: () => void;
+  refreshTemplatesTrigger?: number;
 }
 
 const SchemaCanvas: React.FC<SchemaCanvasProps> = ({
@@ -30,6 +31,7 @@ const SchemaCanvas: React.FC<SchemaCanvasProps> = ({
   workspaceId = 'demo',
   onEditTemplate,
   onCreateTemplate,
+  refreshTemplatesTrigger,
 }) => {
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -47,7 +49,7 @@ const SchemaCanvas: React.FC<SchemaCanvasProps> = ({
   useEffect(() => {
     const loadTemplates = async () => {
       try {
-        const result = await api.getDeviceTemplates();
+        const result = await api.getDeviceTemplates(workspaceId);
         if (result.success) {
           setTemplates(result.templates);
           if (onTemplatesLoaded) {
@@ -59,7 +61,7 @@ const SchemaCanvas: React.FC<SchemaCanvasProps> = ({
       }
     };
     loadTemplates();
-  }, [onTemplatesLoaded]);
+  }, [workspaceId, refreshTemplatesTrigger, onTemplatesLoaded]);
 
   const handleDeviceClick = (deviceId: string) => {
     if (connectionMode && connectionStart) {
@@ -282,7 +284,9 @@ const SchemaCanvas: React.FC<SchemaCanvasProps> = ({
       <DeviceLibrary
         templates={templates}
         onDeviceSelect={handleDeviceSelect}
-              onDeviceDragStart={handleTemplateDragStart}
+        onDeviceDragStart={handleTemplateDragStart}
+        onEditTemplate={onEditTemplate}
+        onCreateTemplate={onCreateTemplate}
       />
 
       {/* Canvas Area */}

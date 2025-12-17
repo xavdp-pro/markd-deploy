@@ -187,6 +187,20 @@ export interface Task {
   } | null;
 }
 
+export interface TaskTimelineFile {
+  id: string;
+  timeline_entry_id: string;
+  task_id: string;
+  file_name: string;
+  original_name: string;
+  content_type?: string | null;
+  file_size?: number | null;
+  uploaded_by?: number | null;
+  uploaded_by_name?: string | null;
+  uploaded_at: string;
+  download_url: string;
+}
+
 export interface TaskTimelineItem {
   id: string;
   task_id: string;
@@ -197,6 +211,7 @@ export interface TaskTimelineItem {
   user_id?: number | null;
   user_name?: string | null;
   created_at: string;
+  files?: TaskTimelineFile[];
 }
 
 export interface TaskComment {

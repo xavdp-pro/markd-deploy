@@ -12,6 +12,7 @@ import CustomTemplateEditor from './components/CustomTemplateEditor';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent } from '@dnd-kit/core';
 import { Network, Folder, X, Trash2 } from 'lucide-react';
 import { DeviceTemplate, CustomDeviceTemplate } from './types';
+import { getHashSelection, setHashSelection, onHashChange } from './utils/urlHash';
 
 function SchemaApp() {
   const { currentWorkspace, userPermission } = useWorkspace();
@@ -40,9 +41,11 @@ function SchemaApp() {
   const [deviceTemplates, setDeviceTemplates] = useState<DeviceTemplate[]>([]);
   const [showTemplateEditor, setShowTemplateEditor] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<DeviceTemplate | CustomDeviceTemplate | null>(null);
+  const [templatesRefreshTrigger, setTemplatesRefreshTrigger] = useState(0);
   const prevTreeRef = React.useRef<SchemaItem[] | null>(null);
   const lastLocalChangeAtRef = React.useRef<number>(0);
   const processingHashRef = React.useRef<boolean>(false);
+  const userInitiatedSelectionRef = React.useRef<boolean>(false);
   
   // Load all tags for filter
   const loadAllTags = useCallback(async () => {
@@ -173,87 +176,134 @@ function SchemaApp() {
   }, [currentWorkspace, loadAllTags]);
 
   // Load initial data
-  // Save selected schema to sessionStorage
-  const saveSelectedSchema = useCallback((schemaId: string | null) => {
+  // Save selected schemas to sessionStorage (all selected items)
+  const prevSelectedIdsRef = React.useRef<string>('');
+  const isRestoringRef = React.useRef<boolean>(false);
+  const saveSelectedSchemas = useCallback((selectedIds: string[]) => {
+    // Don't save if we're currently restoring from hash
+    if (isRestoringRef.current) {
+      return;
+    }
+    
     try {
-      sessionStorage.setItem('markd_schemas_selected_id', schemaId || '');
+      const idsString = selectedIds.sort().join(',');
+      // Avoid saving if selection hasn't changed
+      if (prevSelectedIdsRef.current === idsString) {
+        return;
+      }
+      prevSelectedIdsRef.current = idsString;
+      
+      if (selectedIds.length > 0) {
+        // Only update hash if different from current to avoid loop
+        const currentHashIds = getHashSelection('schema');
+        if (JSON.stringify(currentHashIds.sort()) !== JSON.stringify(selectedIds.sort())) {
+          setHashSelection('schema', selectedIds);
+        }
+        sessionStorage.setItem('markd_schemas_selected_ids', JSON.stringify(selectedIds));
+      } else {
+        // Only clear hash if it's not already empty
+        const currentHashIds = getHashSelection('schema');
+        if (currentHashIds.length > 0) {
+          setHashSelection('schema', []);
+        }
+        sessionStorage.removeItem('markd_schemas_selected_ids');
+      }
     } catch (error) {
-      console.error('Error saving selected schema:', error);
+      console.error('Error saving selected schemas:', error);
     }
   }, []);
 
-  // Load selected schema from sessionStorage
-  const loadSelectedSchema = useCallback(async (schemaId: string, treeData: SchemaItem[]) => {
+  // Load selected schemas from sessionStorage (restore all selected items)
+  const loadSelectedSchemas = useCallback(async (selectedIds: string[], treeData: SchemaItem[]) => {
+    // Don't restore if user just initiated a selection
+    if (userInitiatedSelectionRef.current) {
+      return;
+    }
+    
     try {
-      // First, find the item in the tree to see if it's a schema or folder
-      const findItem = (nodes: SchemaItem[], targetId: string): SchemaItem | null => {
+      // Find all items in tree and collect paths for expansion
+      const foundItems: SchemaItem[] = [];
+      const pathsToExpand: string[][] = [];
+      
+      const findItemWithPath = (nodes: SchemaItem[], targetId: string, path: string[] = []): SchemaItem | null => {
         for (const node of nodes) {
+          const newPath = [...path, node.id];
           if (node.id === targetId) {
+            pathsToExpand.push(newPath);
             return node;
           }
           if (node.children) {
-            const found = findItem(node.children, targetId);
+            const found = findItemWithPath(node.children, targetId, newPath);
             if (found) return found;
           }
         }
         return null;
       };
       
-      const item = findItem(treeData, schemaId);
-      if (!item) {
-        // Item not found, clear saved selection
-        saveSelectedSchema(null);
+      // Find all selected items
+      for (const id of selectedIds) {
+        const item = findItemWithPath(treeData, id);
+        if (item) {
+          foundItems.push(item);
+        }
+      }
+      
+      if (foundItems.length === 0) {
+        // No items found, clear saved selection
+        saveSelectedSchemas([]);
         return;
       }
       
-      // Expand parent folders to show the selected item
-      const findAndExpand = (nodes: SchemaItem[], targetId: string, path: string[] = []): boolean => {
-        for (const node of nodes) {
-          const newPath = [...path, node.id];
-          if (node.id === targetId) {
-            // Expand all parents
-            setExpanded(prev => {
-              const next = { ...prev };
-              for (let i = 0; i < newPath.length - 1; i++) {
-                next[newPath[i]] = true;
-              }
-              return next;
-            });
-            return true;
-          }
-          if (node.children) {
-            if (findAndExpand(node.children, targetId, newPath)) {
-              return true;
-            }
-          }
+      // Expand all parent folders first
+      const sessionState = sessionStorageService.loadState();
+      const newExpanded: Record<string, boolean> = sessionState?.expandedNodes || {};
+      pathsToExpand.forEach(path => {
+        for (let i = 0; i < path.length - 1; i++) {
+          newExpanded[path[i]] = true;
         }
-        return false;
-      };
-      findAndExpand(treeData, schemaId);
+      });
+      setExpanded(newExpanded);
       
-      // Select the item
-      setSelected([item]);
+      // Set flag to prevent saving during restoration
+      isRestoringRef.current = true;
       
-      // If it's a schema, load full details
-      if (item.type === 'schema') {
-        const schemaResult = await api.getSchema(schemaId);
-        if (schemaResult.success) {
-          setSelectedSchema(schemaResult.schema);
-          setDevices(schemaResult.schema.devices || []);
-          setConnections(schemaResult.schema.connections || []);
+      // Load full details for the first schema (if any) BEFORE updating selection
+      const firstSchema = foundItems.find(item => item.type === 'schema');
+      if (firstSchema) {
+        try {
+          // Pre-load content before updating selection to avoid visual jump
+          const schemaResult = await api.getSchema(firstSchema.id);
+          if (schemaResult.success) {
+            setSelectedSchema(schemaResult.schema);
+            setDevices(schemaResult.schema.devices || []);
+            setConnections(schemaResult.schema.connections || []);
+          }
+        } catch (err) {
+          console.error('Error loading schema content:', err);
         }
       } else {
-        // It's a folder, just select it
+        // No schema selected, clear content
         setSelectedSchema(null);
         setDevices([]);
         setConnections([]);
       }
+      
+      // Wait a bit for expansion to render, then select
+      setTimeout(() => {
+        setSelected(foundItems);
+        
+        // Reset flag after a short delay
+        setTimeout(() => {
+          isRestoringRef.current = false;
+        }, 200);
+      }, 100);
     } catch (err) {
-      console.error('Error loading selected schema:', err);
-      // Clear saved selection if schema doesn't exist anymore
-      saveSelectedSchema(null);
+      console.error('Error loading selected schemas:', err);
+      // Clear saved selection if error
+      saveSelectedSchemas([]);
+      isRestoringRef.current = false;
     }
-  }, [saveSelectedSchema]);
+  }, [saveSelectedSchemas]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -262,26 +312,50 @@ function SchemaApp() {
         
         // Load tree from API with workspace
         const result = await api.getSchemasTree(currentWorkspace);
-        setTree(result.tree);
-        prevTreeRef.current = result.tree;
+        if (result.success) {
+          const treeData = result.tree || [];
+          setTree(treeData);
+          prevTreeRef.current = treeData;
 
-        // Load session state for expanded nodes
-        const sessionState = sessionStorageService.loadState();
-        if (sessionState) {
-          setExpanded(sessionState.expandedNodes);
-        }
-        
-        // Restore tree width if exists
-        const savedWidth = localStorage.getItem('markd_schemas_tree_width');
-        if (savedWidth) {
-          setTreeWidth(parseInt(savedWidth, 10));
-        }
-        
-        // Restore selected schema from sessionStorage (after tree is loaded)
-        const savedSelectedId = sessionStorage.getItem('markd_schemas_selected_id');
-        if (savedSelectedId && result.tree.length > 0) {
-          // Load selected schema immediately with the tree data we just loaded
-          await loadSelectedSchema(savedSelectedId, result.tree);
+          // Load session state for expanded nodes
+          const sessionState = sessionStorageService.loadState();
+          if (sessionState) {
+            setExpanded(sessionState.expandedNodes);
+          }
+          
+          // Restore tree width if exists
+          const savedWidth = localStorage.getItem('markd_schemas_tree_width');
+          if (savedWidth) {
+            setTreeWidth(parseInt(savedWidth, 10));
+          }
+          
+          // Restore selected schemas (try URL hash first, then sessionStorage)
+          let selectedIds: string[] = getHashSelection('schema');
+          
+          // Fallback to sessionStorage if no hash
+          if (selectedIds.length === 0) {
+            const savedSelectedIdsJson = sessionStorage.getItem('markd_schemas_selected_ids');
+            
+            if (savedSelectedIdsJson && treeData.length > 0) {
+              try {
+                selectedIds = JSON.parse(savedSelectedIdsJson);
+                // Update hash with sessionStorage value (only if different)
+                const currentHashIds = getHashSelection('schema');
+                if (JSON.stringify(currentHashIds.sort()) !== JSON.stringify(selectedIds.sort())) {
+                  setHashSelection('schema', selectedIds);
+                }
+              } catch (e) {
+                console.error('Error parsing saved selected IDs:', e);
+              }
+            }
+          }
+          
+          if (selectedIds.length > 0 && treeData.length > 0) {
+            await loadSelectedSchemas(selectedIds, treeData);
+          }
+        } else {
+          console.error('Failed to load tree:', result);
+          setTree([]);
         }
         
         setLoading(false);
@@ -294,7 +368,203 @@ function SchemaApp() {
     };
     
     loadData();
-  }, [currentWorkspace, loadSelectedSchema]);
+    
+    // Listen to hash changes (when navigating back to this module)
+    const cleanup = onHashChange((selections) => {
+      // Prevent processing if already restoring to avoid infinite loop
+      if (isRestoringRef.current || processingHashRef.current) {
+        return;
+      }
+      
+      // Don't restore if the change was initiated by user click
+      if (userInitiatedSelectionRef.current) {
+        return;
+      }
+      
+      const hashIds = selections.schema;
+      if (hashIds.length > 0 && tree.length > 0) {
+        // Check if selection is already correct to avoid loop
+        const currentIds = selected.map(s => s.id).sort().join(',');
+        const hashIdsString = hashIds.sort().join(',');
+        if (currentIds === hashIdsString) {
+          // Already selected, but ensure content is loaded if needed
+          const firstSchema = selected.find(s => s.type === 'schema');
+          if (firstSchema && selectedSchemaIdRef.current !== firstSchema.id) {
+            // Content missing, load it
+            api.getSchema(firstSchema.id).then(result => {
+              if (result.success) {
+                setSelectedSchema(result.schema);
+                setDevices(result.schema.devices || []);
+                setConnections(result.schema.connections || []);
+              }
+            }).catch(err => {
+              console.error('Error loading schema content:', err);
+            });
+          }
+          return; // Already selected, no need to restore
+        }
+        
+        // Set flag to prevent saving during restoration
+        isRestoringRef.current = true;
+        processingHashRef.current = true;
+        loadSelectedSchemas(hashIds, tree).then(() => {
+          // Reset flag after restoration
+          setTimeout(() => {
+            isRestoringRef.current = false;
+            processingHashRef.current = false;
+          }, 300);
+        });
+      } else if (hashIds.length === 0 && selected.length > 0) {
+        // Hash cleared, clear selection
+        setSelected([]);
+        setSelectedSchema(null);
+        setDevices([]);
+        setConnections([]);
+      }
+    });
+    
+    return cleanup;
+  }, [currentWorkspace, loadSelectedSchemas, tree, selected]);
+
+  // Restore selected schema when tree is loaded (or when returning to module)
+  const hasRestoredRef = React.useRef<string | null>(null);
+  const selectedSchemaIdRef = React.useRef<string | null>(null);
+  
+  // Update ref when selectedSchema changes
+  useEffect(() => {
+    selectedSchemaIdRef.current = selectedSchema?.id || null;
+  }, [selectedSchema]);
+  
+  useEffect(() => {
+    const restoreSelection = async () => {
+      if (tree.length === 0) return; // Wait for tree to be loaded
+      if (loading) return; // Wait for initial load to complete
+      
+      // Don't restore if user just initiated a selection or if we're processing hash
+      if (userInitiatedSelectionRef.current || processingHashRef.current || isRestoringRef.current) {
+        return;
+      }
+      
+      const savedSelectedIdsJson = sessionStorage.getItem('markd_schemas_selected_ids');
+      if (!savedSelectedIdsJson) {
+        hasRestoredRef.current = null;
+        return;
+      }
+      
+      let savedSelectedIds: string[];
+      try {
+        savedSelectedIds = JSON.parse(savedSelectedIdsJson);
+      } catch (e) {
+        console.error('Error parsing saved selected IDs:', e);
+        hasRestoredRef.current = null;
+        return;
+      }
+      
+      if (savedSelectedIds.length === 0) {
+        hasRestoredRef.current = null;
+        return;
+      }
+      
+      // Check if already selected (compare IDs)
+      const currentIds = selected.map(s => s.id).sort().join(',');
+      const savedIds = savedSelectedIds.sort().join(',');
+      
+      // Avoid restoring the same selection multiple times
+      if (hasRestoredRef.current === savedIds) {
+        // Already restored, just ensure content is loaded if needed
+        const firstSchema = selected.find(s => s.type === 'schema');
+        if (firstSchema && selectedSchemaIdRef.current !== firstSchema.id) {
+          try {
+            const schemaResult = await api.getSchema(firstSchema.id);
+            if (schemaResult.success) {
+              setSelectedSchema(schemaResult.schema);
+              setDevices(schemaResult.schema.devices || []);
+              setConnections(schemaResult.schema.connections || []);
+            }
+          } catch (err) {
+            console.error('Error loading schema content:', err);
+          }
+        }
+        return;
+      }
+      
+      // Check if already selected (user might have manually selected it)
+      if (currentIds === savedIds) {
+        hasRestoredRef.current = savedIds;
+        // Ensure content is loaded if first item is a schema
+        const firstSchema = selected.find(s => s.type === 'schema');
+        if (firstSchema && selectedSchemaIdRef.current !== firstSchema.id) {
+          try {
+            const schemaResult = await api.getSchema(firstSchema.id);
+            if (schemaResult.success) {
+              setSelectedSchema(schemaResult.schema);
+              setDevices(schemaResult.schema.devices || []);
+              setConnections(schemaResult.schema.connections || []);
+            }
+          } catch (err) {
+            console.error('Error loading schema content:', err);
+          }
+        }
+        return;
+      }
+      
+      // Restore selection
+      hasRestoredRef.current = savedIds;
+      await loadSelectedSchemas(savedSelectedIds, tree);
+    };
+    
+    restoreSelection();
+  }, [tree, loading, loadSelectedSchemas, selected]);
+  
+  // Reset restoration flag when workspace changes
+  useEffect(() => {
+    hasRestoredRef.current = null;
+  }, [currentWorkspace]);
+  
+  // Also restore when component becomes visible (returning to module)
+  useEffect(() => {
+    const handleVisibilityChange = async () => {
+      if (!document.hidden && tree.length > 0 && !loading) {
+        // Don't restore if user just initiated a selection or if we're processing hash
+        if (userInitiatedSelectionRef.current || processingHashRef.current || isRestoringRef.current) {
+          return;
+        }
+        
+        const savedSelectedIdsJson = sessionStorage.getItem('markd_schemas_selected_ids');
+        if (savedSelectedIdsJson) {
+          try {
+            const savedSelectedIds = JSON.parse(savedSelectedIdsJson);
+            const currentIds = selected.map(s => s.id).sort().join(',');
+            const savedIds = savedSelectedIds.sort().join(',');
+            // Only restore if selection is different
+            if (currentIds !== savedIds && savedSelectedIds.length > 0) {
+              await loadSelectedSchemas(savedSelectedIds, tree);
+            } else if (currentIds === savedIds) {
+              // Selection is already correct, but ensure content is loaded
+              const firstSchema = selected.find(s => s.type === 'schema');
+              if (firstSchema && selectedSchemaIdRef.current !== firstSchema.id) {
+                try {
+                  const schemaResult = await api.getSchema(firstSchema.id);
+                  if (schemaResult.success) {
+                    setSelectedSchema(schemaResult.schema);
+                    setDevices(schemaResult.schema.devices || []);
+                    setConnections(schemaResult.schema.connections || []);
+                  }
+                } catch (err) {
+                  console.error('Error loading schema content:', err);
+                }
+              }
+            }
+          } catch (e) {
+            console.error('Error parsing saved selected IDs:', e);
+          }
+        }
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [tree, loading, selected, loadSelectedSchemas]);
 
   // Flatten tree to get all nodes in order (for Shift+Click range selection)
   const flattenTree = useCallback((nodes: SchemaItem[], result: SchemaItem[] = []): SchemaItem[] => {
@@ -342,9 +612,52 @@ function SchemaApp() {
   // Files don't need heartbeat loop like documents
 
   const handleSelectSchema = useCallback(async (schema: SchemaItem, event?: React.MouseEvent) => {
+    // Mark this as user-initiated selection to prevent hash-based restoration
+    userInitiatedSelectionRef.current = true;
+    
     const allNodes = flattenTree(tree);
     const currentIndex = allNodes.findIndex(n => n.id === schema.id);
     
+    // Reset flag after a short delay
+    setTimeout(() => {
+      userInitiatedSelectionRef.current = false;
+    }, 500);
+    
+    // If it's a schema and single selection, load content BEFORE updating selection
+    if (schema.type === 'schema' && (!event || (!event.ctrlKey && !event.metaKey && !event.shiftKey))) {
+      try {
+        // Pre-load content before updating selection to avoid visual jump
+        const result = await api.getSchema(schema.id);
+        if (result.success) {
+          // Update content before selection to ensure smooth transition
+          setSelectedSchema(result.schema);
+          setDevices(result.schema.devices || []);
+          setConnections(result.schema.connections || []);
+          
+          // Now update selection with full schema data
+          setSelected([schema]);
+          setLastSelectedIndex(currentIndex);
+          
+          // Update hash after everything is loaded
+          setHashSelection('schema', [schema.id]);
+        } else {
+          // If API call fails, still set selection
+          setSelected([schema]);
+          setLastSelectedIndex(currentIndex);
+          setHashSelection('schema', [schema.id]);
+        }
+      } catch (err) {
+        console.error('Error loading schema:', err);
+        setError(err instanceof Error ? err.message : 'Failed to load schema');
+        // Still set selection even if loading fails
+        setSelected([schema]);
+        setLastSelectedIndex(currentIndex);
+        setHashSelection('schema', [schema.id]);
+      }
+      return; // Early return for schema selection
+    }
+    
+    // For multi-selection or folder selection
     if (event) {
       const isCtrl = event.ctrlKey || event.metaKey;
       const isShift = event.shiftKey;
@@ -376,29 +689,22 @@ function SchemaApp() {
       setLastSelectedIndex(currentIndex);
     }
     
-    // If it's a schema, load it for editing (only if single selection)
-    if (schema.type === 'schema' && (!event || (!event.ctrlKey && !event.metaKey && !event.shiftKey))) {
-      try {
-        // Get full schema details with devices and connections
-        const result = await api.getSchema(schema.id);
-        if (result.success) {
-          setSelectedSchema(result.schema);
-          setDevices(result.schema.devices || []);
-          setConnections(result.schema.connections || []);
-          // Save selected schema to sessionStorage
-          saveSelectedSchema(schema.id);
-        }
-      } catch (err) {
-        console.error('Error loading schema:', err);
-        setError(err instanceof Error ? err.message : 'Failed to load schema');
-      }
-    } else if (schema.type === 'folder') {
-      // Save folder selection too
-      saveSelectedSchema(schema.id);
+    // For folders or multi-selection, clear schema content
+    if (schema.type === 'folder') {
+      setSelectedSchema(null);
+      setDevices([]);
+      setConnections([]);
+      // Save selection (all selected items)
+      saveSelectedSchemas(selected.map(s => s.id));
     }
-  }, [selected, tree, flattenTree, lastSelectedIndex, saveSelectedSchema]);
+  }, [selected, tree, flattenTree, lastSelectedIndex, saveSelectedSchemas]);
 
   const expandToAndSelect = useCallback(async (id: string, treeDataLocal: SchemaItem[]) => {
+    // Don't restore if user just initiated a selection
+    if (userInitiatedSelectionRef.current) {
+      return;
+    }
+    
     const findPath = (nodes: SchemaItem[], targetId: string, path: string[] = []): string[] | null => {
       for (const n of nodes) {
         const newPath = [...path, n.id];
@@ -432,7 +738,15 @@ function SchemaApp() {
         };
         return walk(treeDataLocal);
       })();
-      if (node) await handleSelectSchema(node);
+      if (node) {
+        // Set flag to indicate this is a programmatic selection (not user-initiated)
+        // This prevents it from interfering with user clicks
+        processingHashRef.current = true;
+        await handleSelectSchema(node);
+        setTimeout(() => {
+          processingHashRef.current = false;
+        }, 300);
+      }
     }
   }, [handleSelectSchema]);
 
@@ -445,13 +759,9 @@ function SchemaApp() {
       selectedId: selected.length > 0 ? selected[0].id : null,
     });
     
-    // Also save selected schema ID separately for Schema module (for cross-module navigation)
-    if (selected.length > 0) {
-      saveSelectedSchema(selected[0].id);
-    } else {
-      saveSelectedSchema(null);
-    }
-  }, [expanded, selected, saveSelectedSchema]);
+    // Also save selected schema IDs separately for Schema module (for cross-module navigation)
+    saveSelectedSchemas(selected.map(s => s.id));
+  }, [expanded, selected, saveSelectedSchemas]);
 
   // Handle resizing
   const handleMouseDown = useCallback(() => {
@@ -598,6 +908,31 @@ function SchemaApp() {
   //   }
   // }, [selected, getUserId]);
 
+  // Handle template editor
+  const handleEditTemplate = useCallback((template: DeviceTemplate | CustomDeviceTemplate) => {
+    setEditingTemplate(template);
+    setShowTemplateEditor(true);
+  }, []);
+
+  const handleCreateTemplate = useCallback(() => {
+    setEditingTemplate(null);
+    setShowTemplateEditor(true);
+  }, []);
+
+  const handleTemplateEditorSave = useCallback(async () => {
+    // Reload device templates after save
+    try {
+      const result = await api.getDeviceTemplates(currentWorkspace?.id || 'demo');
+      if (result.success) {
+        setDeviceTemplates(result.templates);
+        // Trigger refresh in SchemaCanvas
+        setTemplatesRefreshTrigger(prev => prev + 1);
+      }
+    } catch (error) {
+      console.error('Error reloading device templates:', error);
+    }
+  }, [currentWorkspace]);
+
   const handleForceUnlock = useCallback(async (id: string) => {
     try {
       await api.forceUnlockSchema(id);
@@ -630,33 +965,7 @@ function SchemaApp() {
     }
   }, [selected]);
 
-  // Handle URL hash for deep linking
-  useEffect(() => {
-    if (loading || tree.length === 0) return;
-
-    const handleHashChange = async () => {
-      const hash = window.location.hash;
-      if (hash.startsWith('#schema=')) {
-        const schemaId = hash.replace('#schema=', '');
-        if (schemaId && selected.length > 0 && selected[0].id === schemaId) {
-          // Already selected, skip to avoid loop
-          return;
-        }
-        if (schemaId) {
-          processingHashRef.current = true;
-          await expandToAndSelect(schemaId, tree);
-          processingHashRef.current = false;
-        }
-      }
-    };
-
-    // Check initial hash
-    handleHashChange();
-
-    // Listen for changes
-    window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [loading, tree, expandToAndSelect, selected]);
+  // Hash restoration is handled by onHashChange callback above, no need for duplicate listener
 
   // Setup WebSocket connection
   useEffect(() => {
@@ -742,8 +1051,39 @@ function SchemaApp() {
       try {
         const result = await api.getSchemasTree(currentWorkspace);
         
+        // Preserve current selection before updating tree
+        const selectedIds = selected.map(s => s.id);
+        
         // Update tree immediately
         setTree(result.tree);
+        
+        // Restore selection after tree update
+        if (selectedIds.length > 0 && result.tree.length > 0) {
+          const findItem = (nodes: SchemaItem[], targetId: string): SchemaItem | null => {
+            for (const node of nodes) {
+              if (node.id === targetId) return node;
+              if (node.children) {
+                const found = findItem(node.children, targetId);
+                if (found) return found;
+              }
+            }
+            return null;
+          };
+          
+          const foundItems: SchemaItem[] = [];
+          for (const id of selectedIds) {
+            const item = findItem(result.tree, id);
+            if (item) foundItems.push(item);
+          }
+          
+          // Only update selection if we found at least one item
+          if (foundItems.length > 0) {
+            setSelected(foundItems);
+          } else if (selectedIds.length > 0) {
+            // Items were deleted, clear selection
+            setSelected([]);
+          }
+        }
 
         // Build quick lookup maps to detect changes
         const flatten = (
@@ -1175,6 +1515,10 @@ function SchemaApp() {
                 setShowDevicePanel(device !== null);
               }}
               onTemplatesLoaded={setDeviceTemplates}
+              onEditTemplate={handleEditTemplate}
+              onCreateTemplate={handleCreateTemplate}
+              workspaceId={currentWorkspace?.id || 'demo'}
+              refreshTemplatesTrigger={templatesRefreshTrigger}
             />
             
             {/* Device Properties Panel */}
@@ -1223,6 +1567,18 @@ function SchemaApp() {
         ) : null}
       </DragOverlay>
 
+      {/* Template Editor Modal */}
+      {showTemplateEditor && (
+        <CustomTemplateEditor
+          template={editingTemplate}
+          workspaceId={currentWorkspace?.id || 'demo'}
+          onClose={() => {
+            setShowTemplateEditor(false);
+            setEditingTemplate(null);
+          }}
+          onSave={handleTemplateEditorSave}
+        />
+      )}
     </DndContext>
   );
 }

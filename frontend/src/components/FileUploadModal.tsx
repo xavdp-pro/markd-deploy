@@ -83,36 +83,78 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
     if (pendingFiles.length === 0) return;
 
     setUploading(true);
+    
+    let successCount = 0;
+    let errorCount = 0;
 
     for (let i = 0; i < pendingFiles.length; i++) {
       const fileProgress = pendingFiles[i];
-      const fileIndex = files.findIndex(f => f.file === fileProgress.file);
-
+      let progressInterval: NodeJS.Timeout | null = null;
+      
       // Update status to uploading
       setFiles(prev => {
+        const fileIndex = prev.findIndex(f => f.file === fileProgress.file);
+        if (fileIndex === -1) return prev;
         const updated = [...prev];
-        updated[fileIndex] = { ...updated[fileIndex], status: 'uploading' };
+        updated[fileIndex] = { ...updated[fileIndex], status: 'uploading', progress: 0 };
         return updated;
       });
+
+      // Simulate progress animation during upload
+      progressInterval = setInterval(() => {
+        setFiles(prev => {
+          const fileIndex = prev.findIndex(f => f.file === fileProgress.file);
+          if (fileIndex === -1) return prev;
+          const current = prev[fileIndex];
+          // Only update if still uploading
+          if (current.status === 'uploading' && current.progress !== undefined && current.progress < 90) {
+            const updated = [...prev];
+            updated[fileIndex] = { 
+              ...updated[fileIndex], 
+              progress: Math.min(current.progress + Math.random() * 15, 90) 
+            };
+            return updated;
+          }
+          return prev;
+        });
+      }, 200);
 
       try {
         await onUpload(parentId, fileProgress.file);
         
-        // Update status to success
+        // Clear progress interval
+        if (progressInterval) {
+          clearInterval(progressInterval);
+        }
+        
+        successCount++;
+        
+        // Update status to success with 100% progress
         setFiles(prev => {
+          const fileIndex = prev.findIndex(f => f.file === fileProgress.file);
+          if (fileIndex === -1) return prev;
           const updated = [...prev];
-          updated[fileIndex] = { ...updated[fileIndex], status: 'success' };
+          updated[fileIndex] = { ...updated[fileIndex], status: 'success', progress: 100 };
           return updated;
         });
       } catch (error) {
+        // Clear progress interval on error
+        if (progressInterval) {
+          clearInterval(progressInterval);
+        }
+        
+        errorCount++;
         const errorMessage = error instanceof Error ? error.message : 'Erreur lors de l\'upload';
         
-        // Update status to error
+        // Update status to error with 100% progress (to show full bar)
         setFiles(prev => {
+          const fileIndex = prev.findIndex(f => f.file === fileProgress.file);
+          if (fileIndex === -1) return prev;
           const updated = [...prev];
           updated[fileIndex] = { 
             ...updated[fileIndex], 
             status: 'error',
+            progress: 100,
             error: errorMessage
           };
           return updated;
@@ -122,19 +164,19 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
 
     setUploading(false);
     
-    // Check if all files are done
-    const allDone = files.every(f => f.status === 'success' || f.status === 'error');
-    if (allDone) {
-      const successCount = files.filter(f => f.status === 'success').length;
-      if (successCount > 0) {
-        toast.success(`${successCount} fichier(s) uploadé(s) avec succès`);
-        onUploadComplete();
-        setTimeout(() => {
-          handleClose();
-        }, 1000);
-      }
+    // All uploads completed, show toast and close modal
+    if (successCount > 0) {
+      toast.success(`${successCount} fichier(s) uploadé(s) avec succès`);
+      onUploadComplete();
     }
-  }, [parentId, files, onUpload, onUploadComplete]);
+    
+    // Close modal after a short delay
+    setTimeout(() => {
+      setFiles([]);
+      setIsDragging(false);
+      onClose();
+    }, successCount > 0 ? 1000 : 1500);
+  }, [parentId, files, onUpload, onUploadComplete, onClose]);
 
   const handleClose = () => {
     if (uploading) return; // Prevent closing during upload
@@ -148,6 +190,12 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
   const pendingCount = files.filter(f => f.status === 'pending').length;
   const successCount = files.filter(f => f.status === 'success').length;
   const errorCount = files.filter(f => f.status === 'error').length;
+  const uploadingCount = files.filter(f => f.status === 'uploading').length;
+  
+  // Calculate overall progress percentage
+  const totalFiles = files.length;
+  const completedFiles = successCount + errorCount;
+  const overallProgress = totalFiles > 0 ? Math.round((completedFiles / totalFiles) * 100) : 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
@@ -165,6 +213,29 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
             <X size={20} />
           </button>
         </div>
+
+        {/* Progress Bar - Global */}
+        {uploading && totalFiles > 0 && (
+          <div className="px-4 pt-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                Progression globale
+              </span>
+              <span className="text-sm text-gray-600 dark:text-gray-400">
+                {completedFiles} / {totalFiles} fichiers
+              </span>
+            </div>
+            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
+              <div
+                className="bg-blue-600 dark:bg-blue-500 h-2.5 rounded-full transition-all duration-300 ease-out"
+                style={{ width: `${overallProgress}%` }}
+              />
+            </div>
+            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400 text-right">
+              {overallProgress}%
+            </div>
+          </div>
+        )}
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4">
@@ -219,48 +290,81 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
               <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Fichiers sélectionnés ({files.length})
               </h4>
-              {files.map((fileProgress, index) => (
-                <div
-                  key={index}
-                  className="flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg"
-                >
-                  <File size={20} className="text-gray-400 dark:text-gray-500 flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                      {fileProgress.file.name}
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {formatFileSize(fileProgress.file.size)}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {fileProgress.status === 'pending' && (
-                      <button
-                        onClick={() => removeFile(index)}
-                        className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500"
-                      >
-                        <X size={16} />
-                      </button>
-                    )}
-                    {fileProgress.status === 'uploading' && (
-                      <Loader2 size={16} className="animate-spin text-blue-500" />
-                    )}
-                    {fileProgress.status === 'success' && (
-                      <CheckCircle2 size={16} className="text-green-500" />
-                    )}
-                    {fileProgress.status === 'error' && (
-                      <div className="flex items-center gap-1">
-                        <AlertCircle size={16} className="text-red-500" />
-                        {fileProgress.error && (
-                          <span className="text-xs text-red-500" title={fileProgress.error}>
-                            Erreur
-                          </span>
+              {files.map((fileProgress, index) => {
+                // Calculate file progress (0-100%)
+                let fileProgressPercent = 0;
+                if (fileProgress.status === 'success') {
+                  fileProgressPercent = 100;
+                } else if (fileProgress.status === 'error') {
+                  fileProgressPercent = 100; // Show full bar for error
+                } else if (fileProgress.status === 'uploading') {
+                  // For uploading, show a pulsing progress or estimate based on position
+                  fileProgressPercent = fileProgress.progress ?? 50; // Default to 50% while uploading
+                }
+
+                return (
+                  <div
+                    key={index}
+                    className="flex flex-col gap-2 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg"
+                  >
+                    <div className="flex items-center gap-3">
+                      <File size={20} className="text-gray-400 dark:text-gray-500 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                          {fileProgress.file.name}
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          {formatFileSize(fileProgress.file.size)}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {fileProgress.status === 'pending' && (
+                          <button
+                            onClick={() => removeFile(index)}
+                            className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-500"
+                          >
+                            <X size={16} />
+                          </button>
                         )}
+                        {fileProgress.status === 'uploading' && (
+                          <Loader2 size={16} className="animate-spin text-blue-500" />
+                        )}
+                        {fileProgress.status === 'success' && (
+                          <CheckCircle2 size={16} className="text-green-500" />
+                        )}
+                        {fileProgress.status === 'error' && (
+                          <div className="flex items-center gap-1">
+                            <AlertCircle size={16} className="text-red-500" />
+                            {fileProgress.error && (
+                              <span className="text-xs text-red-500" title={fileProgress.error}>
+                                Erreur
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* Individual file progress bar */}
+                    {(fileProgress.status === 'uploading' || fileProgress.status === 'success' || fileProgress.status === 'error') && (
+                      <div className="w-full">
+                        <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-1.5">
+                          <div
+                            className={`h-1.5 rounded-full transition-all duration-300 ${
+                              fileProgress.status === 'success'
+                                ? 'bg-green-500'
+                                : fileProgress.status === 'error'
+                                ? 'bg-red-500'
+                                : 'bg-blue-500'
+                            } ${fileProgress.status === 'uploading' ? 'animate-pulse' : ''}`}
+                            style={{ width: `${fileProgressPercent}%` }}
+                          />
+                        </div>
                       </div>
                     )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

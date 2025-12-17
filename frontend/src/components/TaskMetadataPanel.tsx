@@ -1,5 +1,5 @@
 import React from 'react';
-import { Calendar, Clock, Flag, Tag, User, X, CheckCircle2, Circle, ArrowUpCircle, ArrowDownCircle, MinusCircle, AlertCircle } from 'lucide-react';
+import { Calendar, Clock, Flag, Tag, User, X, CheckCircle2, Circle, ArrowUpCircle, ArrowDownCircle, MinusCircle, AlertCircle, ChevronLeft } from 'lucide-react';
 import { Task, TaskTag, TaskAssignee } from '../types';
 import UserMultiSelect from './UserMultiSelect';
 import TagSelector from './TagSelector';
@@ -19,6 +19,7 @@ interface TaskMetadataPanelProps {
   onAssigneesChange?: (userIds: number[], responsibleId?: number) => void;
   workspaceId?: string;
   className?: string;
+  onCollapse?: () => void;
 }
 
 const STATUS_OPTIONS: Array<{ value: string; label: string; color: string; icon: React.ReactNode }> = [
@@ -53,6 +54,7 @@ const TaskMetadataPanel: React.FC<TaskMetadataPanelProps> = ({
   onAssigneesChange,
   workspaceId = 'demo',
   className,
+  onCollapse,
 }) => {
   const handleStatusClick = (status: string) => {
     if (!canEdit || !onStatusChange) return;
@@ -93,10 +95,21 @@ const TaskMetadataPanel: React.FC<TaskMetadataPanelProps> = ({
     <div className={containerClass}>
       {/* Status Section */}
       <section>
-        <span className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
-          <Clock size={12} />
-          Statut
-        </span>
+        <div className="mb-3 flex items-center justify-between">
+          <span className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-gray-400 dark:text-gray-500">
+            <Clock size={12} />
+            Statut
+          </span>
+          {onCollapse && (
+            <button
+              onClick={onCollapse}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-800 transition-colors border border-gray-200 dark:border-gray-700"
+              title="Masquer les métadonnées"
+            >
+              <ChevronLeft size={18} />
+            </button>
+          )}
+        </div>
         <div className="flex flex-col gap-2">
           <div className="flex w-full rounded-lg bg-gray-100 p-1 dark:bg-gray-800">
             {STATUS_OPTIONS.map((option) => {

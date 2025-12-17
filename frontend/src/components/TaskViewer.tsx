@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { FileEdit, Lock, Unlock, Link } from 'lucide-react';
+import { FileEdit, Lock, Unlock, Link, ChevronLeft, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import MDEditor from '@uiw/react-md-editor';
 import { Task, TaskTimelineItem, TaskComment, TaskTag, TaskAssignee, TaskFile, TaskChecklistItem } from '../types';
@@ -37,7 +37,13 @@ interface TaskViewerProps {
   comments: TaskComment[];
   commentsLoading?: boolean;
   onAddComment?: (content: string) => Promise<void>;
+  onUpdateComment?: (commentId: string, content: string) => Promise<void>;
+  onDeleteComment?: (commentId: string) => Promise<void>;
+  onUpdateTimelineEntry?: (entryId: string, data: { title?: string; description?: string }) => Promise<void>;
+  onDeleteTimelineEntry?: (entryId: string) => Promise<void>;
   canCollaborate?: boolean;
+  currentUserId?: number | null;
+  taskId?: string;
   files?: TaskFile[];
   filesLoading?: boolean;
   onUploadFile?: (file: File) => Promise<void>;
@@ -74,10 +80,16 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
   timeline,
   timelineLoading = false,
   onAddTimelineEntry,
+  onUpdateTimelineEntry,
+  onDeleteTimelineEntry,
   comments,
   commentsLoading = false,
   onAddComment,
+  onUpdateComment,
+  onDeleteComment,
   canCollaborate = true,
+  currentUserId,
+  taskId,
   files = [],
   filesLoading = false,
   onUploadFile,
@@ -93,9 +105,31 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
   const isLockedByMe = task.locked_by !== null && !lockedByOther;
   const canUnlock = isLockedByMe && !isEditing;
   const [activeTab, setActiveTab] = useState<'details' | 'checklist' | 'timeline' | 'comments' | 'files'>('details');
+  const [isMetadataCollapsed, setIsMetadataCollapsed] = useState<boolean>(false);
   const commentCount = comments.length;
   const checklistCount = checklistItems.length;
   const completedChecklistCount = checklistItems.filter(item => item.completed).length;
+  
+  // Load collapsed state from sessionStorage
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem('markd_task_metadata_collapsed');
+      if (saved !== null) {
+        setIsMetadataCollapsed(JSON.parse(saved));
+      }
+    } catch (e) {
+      console.error('Error loading metadata collapsed state:', e);
+    }
+  }, []);
+
+  // Save collapsed state to sessionStorage
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('markd_task_metadata_collapsed', JSON.stringify(isMetadataCollapsed));
+    } catch (e) {
+      console.error('Error saving metadata collapsed state:', e);
+    }
+  }, [isMetadataCollapsed]);
   
   // Detect dark mode
   const isDarkMode = typeof window !== 'undefined' && window.document.documentElement.classList.contains('dark');
@@ -191,35 +225,38 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
       </div>
 
       <div className="flex flex-1 gap-6 overflow-hidden p-6">
-        {/* Left Sidebar - Metadata */}
-        <div className="w-80 flex-shrink-0 overflow-y-auto custom-scrollbar">
-          <TaskMetadataPanel
-            task={task}
-            canEdit={canEdit && !lockedByOther}
-            onStatusChange={onStatusChange}
-            onPriorityChange={onPriorityChange}
-            onDueDateChange={onDueDateChange}
-            tags={tags}
-            availableTags={availableTags}
-            onAddTag={onAddTag}
-            onRemoveTag={onRemoveTag}
-            assignees={assignees}
-            responsibleId={responsibleId ?? undefined}
-            onAssigneesChange={onAssigneesChange}
-            workspaceId={workspaceId}
-            className="h-auto"
-          />
-        </div>
+        {/* Left Sidebar - Metadata with collapse/expand */}
+        {!isMetadataCollapsed && (
+          <div className="w-80 flex-shrink-0 overflow-y-auto custom-scrollbar">
+            <TaskMetadataPanel
+              task={task}
+              canEdit={canEdit && !lockedByOther}
+              onStatusChange={onStatusChange}
+              onPriorityChange={onPriorityChange}
+              onDueDateChange={onDueDateChange}
+              tags={tags}
+              availableTags={availableTags}
+              onAddTag={onAddTag}
+              onRemoveTag={onRemoveTag}
+              assignees={assignees}
+              responsibleId={responsibleId ?? undefined}
+              onAssigneesChange={onAssigneesChange}
+              workspaceId={workspaceId}
+              className="h-auto"
+              onCollapse={() => setIsMetadataCollapsed(true)}
+            />
+          </div>
+        )}
 
         {/* Main Content Area */}
         <div className="flex flex-1 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
           {/* Tabs */}
-          <nav className="flex gap-6 border-b border-gray-100 px-6 dark:border-gray-800">
+          <nav className="flex items-center gap-6 border-b border-gray-100 px-6 dark:border-gray-800 relative">
             {[
               { id: 'details', label: 'Détails' },
               { id: 'checklist', label: `Checklist ${checklistCount > 0 ? `(${completedChecklistCount}/${checklistCount})` : ''}` },
-              { id: 'timeline', label: 'Historique' },
-              { id: 'comments', label: `Commentaires ${commentCount > 0 ? `(${commentCount})` : ''}` },
+              { id: 'comments', label: `Discussion ${commentCount > 0 ? `(${commentCount})` : ''}` },
+              { id: 'timeline', label: 'Timeline' },
               { id: 'files', label: 'Fichiers' }
             ].map((tab) => (
               <button
@@ -240,6 +277,16 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
                 )}
               </button>
             ))}
+            {/* Collapse button when metadata is collapsed - positioned at right of tabs */}
+            {isMetadataCollapsed && (
+              <button
+                onClick={() => setIsMetadataCollapsed(false)}
+                className="ml-auto flex items-center justify-center h-8 w-8 rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-800 transition-colors border border-gray-200 dark:border-gray-700"
+                title="Afficher les métadonnées"
+              >
+                <ChevronRight size={18} />
+              </button>
+            )}
           </nav>
 
           {/* Tab Content */}
@@ -280,12 +327,20 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
             )}
 
             {activeTab === 'timeline' && (
-              <div className="h-full overflow-y-auto p-6">
+              <div className="h-full overflow-hidden">
                 <TaskTimeline
                   items={timeline}
                   loading={timelineLoading}
                   canAdd={canCollaborate}
+                  taskId={task.id}
                   onAdd={onAddTimelineEntry}
+                  onUpdate={onUpdateTimelineEntry}
+                  onDelete={onDeleteTimelineEntry}
+                  currentUserId={currentUserId}
+                  onRefresh={async () => {
+                    // Timeline will refresh via websocket automatically
+                    // If needed, could call refreshTaskActivity here but it's handled by parent
+                  }}
                 />
               </div>
             )}
@@ -297,6 +352,10 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
                   loading={commentsLoading}
                   canAdd={canCollaborate}
                   onAdd={onAddComment}
+                  onUpdate={onUpdateComment}
+                  onDelete={onDeleteComment}
+                  taskId={taskId}
+                  currentUserId={currentUserId}
                 />
               </div>
             )}

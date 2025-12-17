@@ -136,7 +136,7 @@ const TaskFiles: React.FC<TaskFilesProps> = ({ files, loading = false, canUpload
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-6 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 dark:scrollbar-thumb-gray-600 dark:scrollbar-track-gray-800 hover:scrollbar-thumb-gray-400 dark:hover:scrollbar-thumb-gray-500">
         {loading ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-gray-500 dark:text-gray-400">
             <Loader2 size={24} className="animate-spin text-blue-500" />
@@ -161,12 +161,17 @@ const TaskFiles: React.FC<TaskFilesProps> = ({ files, loading = false, canUpload
               >
                 {/* Image Preview */}
                 {isImageFile(file.original_name) && (
-                  <div className="overflow-hidden rounded-t-lg">
+                  <div className="overflow-hidden rounded-t-lg bg-gray-100 dark:bg-gray-700">
                     <img
-                      src={file.download_url}
+                      src={`${file.download_url}?download=false`}
                       alt={file.original_name}
                       className="h-48 w-full object-cover transition-transform group-hover:scale-105"
                       loading="lazy"
+                      crossOrigin="use-credentials"
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        target.style.display = 'none';
+                      }}
                     />
                   </div>
                 )}

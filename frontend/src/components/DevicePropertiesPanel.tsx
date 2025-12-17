@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Device, DeviceTemplate } from '../types';
 import { api } from '../services/api';
-import { X, Save, Trash2, Copy, Edit2 } from 'lucide-react';
+import { X, Save, Trash2, Copy, Edit2, Plus } from 'lucide-react';
 
 interface DevicePropertiesPanelProps {
   device: Device | null;
@@ -28,6 +28,7 @@ const DevicePropertiesPanel: React.FC<DevicePropertiesPanelProps> = ({
     position_x: 0,
     position_y: 0,
   });
+  const [customPorts, setCustomPorts] = useState<Array<{ name: string; type: 'WAN' | 'LAN'; position: 'left' | 'right' | 'top' | 'bottom' }>>([]);
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -41,6 +42,13 @@ const DevicePropertiesPanel: React.FC<DevicePropertiesPanelProps> = ({
         position_x: device.position_x || 0,
         position_y: device.position_y || 0,
       });
+      // Load custom ports from config_json
+      const customPortsFromConfig = device.config_json?.custom_ports;
+      if (customPortsFromConfig && Array.isArray(customPortsFromConfig)) {
+        setCustomPorts(customPortsFromConfig);
+      } else {
+        setCustomPorts([]);
+      }
       setIsEditing(false);
     }
   }, [device]);
@@ -50,6 +58,13 @@ const DevicePropertiesPanel: React.FC<DevicePropertiesPanelProps> = ({
 
     setIsSaving(true);
     try {
+      const configJson = device.config_json || {};
+      if (customPorts.length > 0) {
+        configJson.custom_ports = customPorts;
+      } else {
+        delete configJson.custom_ports;
+      }
+
       const result = await api.updateDevice(schemaId, device.id, {
         name: formData.name,
         model: formData.model,
@@ -57,6 +72,7 @@ const DevicePropertiesPanel: React.FC<DevicePropertiesPanelProps> = ({
         mac_address: formData.mac_address,
         position_x: formData.position_x,
         position_y: formData.position_y,
+        config_json: configJson,
       });
 
       if (result.success && result.device) {
@@ -70,6 +86,24 @@ const DevicePropertiesPanel: React.FC<DevicePropertiesPanelProps> = ({
       setIsSaving(false);
     }
   };
+
+  const addCustomPort = () => {
+    setCustomPorts([...customPorts, { name: `Port${customPorts.length + 1}`, type: 'LAN', position: 'right' }]);
+  };
+
+  const removeCustomPort = (index: number) => {
+    setCustomPorts(customPorts.filter((_, i) => i !== index));
+  };
+
+  const updateCustomPort = (index: number, field: string, value: any) => {
+    const updated = [...customPorts];
+    updated[index] = { ...updated[index], [field]: value };
+    setCustomPorts(updated);
+  };
+
+  // Get ports to display: custom ports if any, otherwise template ports
+  const displayPorts = customPorts.length > 0 ? customPorts : (template?.default_ports || []);
+  const hasCustomPorts = customPorts.length > 0;
 
   const handleDelete = async () => {
     if (!device) return;
@@ -235,27 +269,111 @@ const DevicePropertiesPanel: React.FC<DevicePropertiesPanelProps> = ({
           </div>
 
           {/* Ports Info */}
-          {template?.default_ports && template.default_ports.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Ports ({template.default_ports.length})
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Ports ({displayPorts.length})
+                {hasCustomPorts && (
+                  <span className="ml-2 text-xs text-blue-600 dark:text-blue-400 font-normal">
+                    (Personnalisés)
+                  </span>
+                )}
               </label>
-              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 space-y-1 max-h-40 overflow-y-auto">
-                {template.default_ports.map((port, index) => (
-                  <div key={index} className="flex items-center justify-between text-xs">
-                    <span className="text-gray-700 dark:text-gray-300">{port.name}</span>
-                    <span className={`px-2 py-0.5 rounded text-xs ${
-                      port.type === 'WAN'
-                        ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
-                        : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
-                    }`}>
-                      {port.type}
-                    </span>
+              {isEditing && (
+                <button
+                  onClick={addCustomPort}
+                  className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                  title="Ajouter un port personnalisé"
+                >
+                  <Plus size={12} />
+                  Ajouter
+                </button>
+              )}
+            </div>
+            
+            {isEditing ? (
+              /* Edit mode: show editable ports */
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {displayPorts.map((port, index) => (
+                  <div key={index} className="flex items-center gap-2 p-2 bg-gray-50 dark:bg-gray-700 rounded">
+                    <input
+                      type="text"
+                      value={port.name}
+                      onChange={(e) => updateCustomPort(index, 'name', e.target.value)}
+                      placeholder="Nom du port"
+                      className="flex-1 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm"
+                    />
+                    <select
+                      value={port.type}
+                      onChange={(e) => updateCustomPort(index, 'type', e.target.value)}
+                      className="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm"
+                    >
+                      <option value="WAN">WAN</option>
+                      <option value="LAN">LAN</option>
+                    </select>
+                    <select
+                      value={port.position}
+                      onChange={(e) => updateCustomPort(index, 'position', e.target.value)}
+                      className="px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm"
+                    >
+                      <option value="left">Gauche</option>
+                      <option value="right">Droite</option>
+                      <option value="top">Haut</option>
+                      <option value="bottom">Bas</option>
+                    </select>
+                    <button
+                      onClick={() => removeCustomPort(index)}
+                      className="p-1 text-red-600 hover:bg-red-50 dark:hover:bg-red-900 rounded"
+                      title="Supprimer le port"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 ))}
+                {displayPorts.length === 0 && (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4 bg-gray-50 dark:bg-gray-700 rounded">
+                    Aucun port défini. Cliquez sur "Ajouter" pour créer un port personnalisé.
+                  </p>
+                )}
               </div>
-            </div>
-          )}
+            ) : (
+              /* View mode: show read-only ports */
+              displayPorts.length > 0 ? (
+                <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 space-y-1 max-h-40 overflow-y-auto">
+                  {displayPorts.map((port, index) => (
+                    <div key={index} className="flex items-center justify-between text-xs">
+                      <span className="text-gray-700 dark:text-gray-300">{port.name}</span>
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded text-xs ${
+                          port.type === 'WAN'
+                            ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                            : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                        }`}>
+                          {port.type}
+                        </span>
+                        <span className="text-gray-400 dark:text-gray-500 text-xs">
+                          {port.position === 'left' && '←'}
+                          {port.position === 'right' && '→'}
+                          {port.position === 'top' && '↑'}
+                          {port.position === 'bottom' && '↓'}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3 text-xs text-gray-500 dark:text-gray-400 text-center">
+                  Aucun port défini
+                </div>
+              )
+            )}
+            
+            {!isEditing && !hasCustomPorts && template?.default_ports && template.default_ports.length > 0 && (
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                Ports du template. Passez en mode édition pour personnaliser.
+              </p>
+            )}
+          </div>
         </div>
       </div>
 
@@ -264,7 +382,13 @@ const DevicePropertiesPanel: React.FC<DevicePropertiesPanelProps> = ({
         {!isEditing ? (
           <div className="flex gap-2">
             <button
-              onClick={() => setIsEditing(true)}
+              onClick={() => {
+                setIsEditing(true);
+                // Initialize custom ports with template ports if no custom ports exist
+                if (customPorts.length === 0 && template?.default_ports && template.default_ports.length > 0) {
+                  setCustomPorts([...template.default_ports]);
+                }
+              }}
               className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
             >
               <Edit2 size={16} />
@@ -298,7 +422,7 @@ const DevicePropertiesPanel: React.FC<DevicePropertiesPanelProps> = ({
             <button
               onClick={() => {
                 setIsEditing(false);
-                // Reset form data
+                // Reset form data and custom ports
                 if (device) {
                   setFormData({
                     name: device.name || '',
@@ -308,6 +432,13 @@ const DevicePropertiesPanel: React.FC<DevicePropertiesPanelProps> = ({
                     position_x: device.position_x || 0,
                     position_y: device.position_y || 0,
                   });
+                  // Reset custom ports from config_json
+                  const customPortsFromConfig = device.config_json?.custom_ports;
+                  if (customPortsFromConfig && Array.isArray(customPortsFromConfig)) {
+                    setCustomPorts(customPortsFromConfig);
+                  } else {
+                    setCustomPorts([]);
+                  }
                 }
               }}
               className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded-lg transition-colors"

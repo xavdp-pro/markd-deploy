@@ -54,6 +54,9 @@ async def check_workspace_permission(workspace_id: str, user: Dict, required_lev
 TASK_UPLOAD_DIR = Path("uploads/tasks")
 TASK_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+TIMELINE_UPLOAD_DIR = Path("uploads/timeline")
+TIMELINE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
 router = APIRouter(prefix="/api")
 
 # Pydantic Models
@@ -89,7 +92,14 @@ class TimelineEntryCreate(BaseModel):
     description: Optional[str] = None
     event_type: Optional[str] = 'note'
 
+class TimelineEntryUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+
 class TaskCommentCreate(BaseModel):
+    content: str
+
+class TaskCommentUpdate(BaseModel):
     content: str
 
 class TagsUpdate(BaseModel):
@@ -98,6 +108,13 @@ class TagsUpdate(BaseModel):
 class AssigneesUpdate(BaseModel):
     assignee_ids: List[int] = Field(default_factory=list)
     responsible_id: Optional[int] = None
+
+class ChecklistItemCreate(BaseModel):
+    text: str
+
+class ChecklistItemUpdate(BaseModel):
+    text: Optional[str] = None
+    completed: Optional[bool] = None
 
 # Helper function
 def build_task_tree(parent_id: Optional[str] = 'root', workspace_id: str = 'demo', depth: int = 0) -> List[Dict]:
@@ -193,7 +210,59 @@ def serialize_timeline_entry(row: Dict[str, Any]) -> Dict[str, Any]:
         except json.JSONDecodeError:
             row['metadata'] = None
     row['created_at'] = serialize_timestamp(row.get('created_at'))
+    # Fetch attached files for this entry
+    entry_id = row.get('id')
+    task_id = row.get('task_id')
+    if entry_id:
+        row['files'] = fetch_timeline_entry_files(entry_id, task_id)
+    else:
+        row['files'] = []
     return row
+
+def fetch_timeline_entry_files(entry_id: str, task_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Fetch files attached to a timeline entry"""
+    try:
+        query = """
+            SELECT id, timeline_entry_id, task_id, file_name, original_name, content_type, file_size,
+                   uploaded_by, uploaded_by_name, uploaded_at
+            FROM task_timeline_files
+            WHERE timeline_entry_id = %s
+            ORDER BY uploaded_at ASC
+        """
+        rows = db.execute_query(query, (entry_id,))
+        result = []
+        for row in rows:
+            item = dict(row)
+            item_task_id = task_id or item['task_id']
+            item['uploaded_at'] = serialize_timestamp(item.get('uploaded_at'))
+            item['download_url'] = f"/api/tasks/{item_task_id}/timeline/{entry_id}/files/{item['id']}/download"
+            result.append(item)
+        return result
+    except Exception as e:
+        # Table might not exist yet if migration hasn't been applied
+        # Return empty list instead of crashing
+        print(f"Warning: Could not fetch timeline files (table may not exist): {e}")
+        return []
+
+def get_timeline_file_record(entry_id: str, file_id: str) -> Optional[Dict[str, Any]]:
+    """Get a timeline file record"""
+    try:
+        query = """
+            SELECT id, timeline_entry_id, task_id, file_name, original_name, content_type, file_size, storage_path,
+                   uploaded_by, uploaded_by_name, uploaded_at
+            FROM task_timeline_files
+            WHERE id = %s AND timeline_entry_id = %s
+        """
+        rows = db.execute_query(query, (file_id, entry_id))
+        if not rows:
+            return None
+        record = dict(rows[0])
+        record['uploaded_at'] = serialize_timestamp(record.get('uploaded_at'))
+        return record
+    except Exception as e:
+        # Table might not exist yet
+        print(f"Warning: Could not get timeline file record (table may not exist): {e}")
+        return None
 
 def serialize_comment(row: Dict[str, Any]) -> Dict[str, Any]:
     row['created_at'] = serialize_timestamp(row.get('created_at'))
@@ -282,9 +351,7 @@ def get_task_file_record(task_id: str, file_id: str) -> Optional[Dict[str, Any]]
     rows = db.execute_query(query, (task_id, file_id))
     if not rows:
         return None
-    record = dict(rows[0])
-    record['uploaded_at'] = serialize_timestamp(record.get('uploaded_at'))
-    return record
+    return serialize_file(dict(rows[0]))
 
 def update_task_tags(task: Dict[str, Any], tag_names: List[str], user: Dict) -> List[Dict[str, Any]]:
     current_tags = fetch_task_tags(task['id'])
@@ -495,6 +562,81 @@ def delete_task_file(task: Dict[str, Any], record: Dict[str, Any], user: Dict) -
         metadata={'file_name': record.get('original_name')},
         user=user,
     )
+
+async def save_timeline_file(entry_id: str, task_id: str, upload: UploadFile, user: Dict) -> Dict[str, Any]:
+    """Save a file attached to a timeline entry"""
+    if not upload.filename:
+        raise HTTPException(status_code=400, detail="File name is required")
+
+    safe_name = os.path.basename(upload.filename)
+    file_id = str(uuid.uuid4())
+    entry_dir = TIMELINE_UPLOAD_DIR / task_id / entry_id
+    entry_dir.mkdir(parents=True, exist_ok=True)
+
+    storage_name = f"{file_id}_{safe_name}"
+    relative_path = Path(task_id) / entry_id / storage_name
+    absolute_path = entry_dir / storage_name
+
+    with open(absolute_path, "wb") as buffer:
+        while True:
+            chunk = await upload.read(1024 * 1024)
+            if not chunk:
+                break
+            buffer.write(chunk)
+
+    file_size = absolute_path.stat().st_size
+    if file_size > 50 * 1024 * 1024:
+        absolute_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="File exceeds the 50 MB limit")
+
+    user_id = user.get('id')
+    user_name = user.get('username') or user.get('email')
+
+    db.execute_update(
+        """
+        INSERT INTO task_timeline_files (id, timeline_entry_id, task_id, file_name, original_name, content_type, file_size, storage_path, uploaded_by, uploaded_by_name)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            file_id,
+            entry_id,
+            task_id,
+            storage_name,
+            safe_name,
+            upload.content_type,
+            file_size,
+            str(relative_path),
+            user_id,
+            user_name,
+        )
+    )
+
+    record = get_timeline_file_record(entry_id, file_id)
+    if record is None:
+        raise HTTPException(status_code=500, detail="Unable to load uploaded file metadata")
+    return record
+
+def normalize_checklist_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize a checklist item from database (convert types)"""
+    normalized = dict(item)
+    # Convert completed from tinyint (0/1) to boolean
+    normalized['completed'] = bool(normalized.get('completed', False))
+    # Ensure order is an integer
+    normalized['order'] = int(normalized.get('order', 0))
+    normalized['created_at'] = serialize_timestamp(normalized.get('created_at'))
+    normalized['updated_at'] = serialize_timestamp(normalized.get('updated_at'))
+    return normalized
+
+def fetch_task_checklist(task_id: str) -> List[Dict[str, Any]]:
+    """Fetch checklist items for a task"""
+    query = """
+        SELECT id, task_id, text, completed, `order`, created_at, updated_at
+        FROM task_checklist
+        WHERE task_id = %s
+        ORDER BY `order` ASC, created_at ASC
+    """
+    rows = db.execute_query(query, (task_id,))
+    return [normalize_checklist_item(dict(row)) for row in rows]
 
 # Endpoints
 @router.get("/tasks/tree")
@@ -912,11 +1054,13 @@ async def add_task_timeline_entry(task_id: str, entry: TimelineEntryCreate, user
     if task['type'] != 'task':
         raise HTTPException(status_code=400, detail="Timeline is only available for tasks")
 
-    title = entry.title.strip()
-    if not title:
-        raise HTTPException(status_code=400, detail="Title is required")
-
+    title = entry.title.strip() if entry.title else ''
     description = entry.description.strip() if entry.description else None
+    
+    # At least description must be provided
+    if not description:
+        raise HTTPException(status_code=400, detail="Description is required")
+
     event_type = (entry.event_type or 'note').strip().lower()
 
     entry_id = log_task_event(
@@ -940,6 +1084,135 @@ async def add_task_timeline_entry(task_id: str, entry: TimelineEntryCreate, user
     await broadcast_task_activity_update(task_id)
     
     return {"success": True, "entry": serialize_timeline_entry(dict(rows[0]))}
+
+@router.patch("/tasks/{task_id}/timeline/{entry_id}")
+async def update_task_timeline_entry_patch(task_id: str, entry_id: str, entry: TimelineEntryUpdate, user: Dict = Depends(get_current_user)):
+    """Update a timeline entry (only by the creator, and only manual notes)"""
+    task = ensure_task_exists(task_id)
+    
+    # Get the entry to check ownership and type
+    check_query = """
+        SELECT id, user_id, event_type, title, description FROM task_timeline
+        WHERE id = %s AND task_id = %s
+    """
+    existing = db.execute_query(check_query, (entry_id, task_id))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Timeline entry not found")
+    
+    # Only allow editing manual notes
+    if existing[0]['event_type'] != 'note':
+        raise HTTPException(status_code=400, detail="Only manual notes can be edited")
+    
+    # Check if user is the creator
+    if existing[0]['user_id'] != user.get('id'):
+        raise HTTPException(status_code=403, detail="You can only edit your own timeline entries")
+    
+    # Prepare update fields
+    title = entry.title.strip() if entry.title is not None else existing[0]['title']
+    if title is None:
+        title = ''
+    description = entry.description.strip() if entry.description is not None else existing[0]['description']
+    
+    # At least description must be provided (or already exist)
+    if not description:
+        raise HTTPException(status_code=400, detail="Description cannot be empty")
+    
+    # Update the entry
+    update_query = """
+        UPDATE task_timeline
+        SET title = %s, description = %s
+        WHERE id = %s AND task_id = %s
+    """
+    db.execute_update(update_query, (title, description, entry_id, task_id))
+    
+    # Fetch updated entry
+    fetch_query = """
+        SELECT id, task_id, event_type, title, description, metadata, user_id, user_name, created_at
+        FROM task_timeline
+        WHERE id = %s
+    """
+    rows = db.execute_query(fetch_query, (entry_id,))
+    if not rows:
+        raise HTTPException(status_code=500, detail="Failed to load updated timeline entry")
+    
+    # Broadcast activity update
+    await broadcast_task_activity_update(task_id)
+    
+    return {"success": True, "entry": serialize_timeline_entry(dict(rows[0]))}
+
+@router.post("/tasks/{task_id}/timeline/{entry_id}/files")
+async def upload_timeline_file(task_id: str, entry_id: str, file: UploadFile = File(...), user: Dict = Depends(get_current_user)):
+    """Upload a file to attach to a timeline entry"""
+    task = ensure_task_exists(task_id)
+    if task['type'] != 'task':
+        raise HTTPException(status_code=400, detail="Timeline is only available for tasks")
+    
+    # Verify entry exists and belongs to task
+    check_query = "SELECT id FROM task_timeline WHERE id = %s AND task_id = %s"
+    existing = db.execute_query(check_query, (entry_id, task_id))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Timeline entry not found")
+    
+    record = await save_timeline_file(entry_id, task_id, file, user)
+    
+    # Broadcast activity update
+    await broadcast_task_activity_update(task_id)
+    
+    return {"success": True, "file": record}
+
+@router.get("/tasks/{task_id}/timeline/{entry_id}/files/{file_id}/download")
+async def download_timeline_file(task_id: str, entry_id: str, file_id: str, download: bool = True, user: Dict = Depends(get_current_user)):
+    """Download or view a timeline file"""
+    task = ensure_task_exists(task_id)
+    record = get_timeline_file_record(entry_id, file_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    relative_path = record.get('storage_path')
+    absolute_path = TIMELINE_UPLOAD_DIR / relative_path if relative_path else None
+    if not absolute_path or not absolute_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    # If download=False, return file for viewing (inline)
+    if not download:
+        from fastapi.responses import Response
+        with open(absolute_path, 'rb') as f:
+            content = f.read()
+        return Response(
+            content=content,
+            media_type=record.get('content_type') or 'application/octet-stream',
+            headers={
+                'Content-Disposition': 'inline'
+            }
+        )
+    
+    # If download=True, force download with filename
+    return FileResponse(
+        absolute_path,
+        filename=record.get('original_name') or record.get('file_name'),
+        media_type=record.get('content_type') or 'application/octet-stream'
+    )
+
+@router.delete("/tasks/{task_id}/timeline/{entry_id}/files/{file_id}")
+async def delete_timeline_file(task_id: str, entry_id: str, file_id: str, user: Dict = Depends(get_current_user)):
+    """Delete a file attached to a timeline entry"""
+    task = ensure_task_exists(task_id)
+    record = get_timeline_file_record(entry_id, file_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    relative_path = record.get('storage_path')
+    absolute_path = TIMELINE_UPLOAD_DIR / relative_path if relative_path else None
+
+    db.execute_update("DELETE FROM task_timeline_files WHERE id = %s AND timeline_entry_id = %s", (file_id, entry_id))
+
+    if absolute_path and absolute_path.exists():
+        absolute_path.unlink()
+    
+    # Broadcast activity update
+    await broadcast_task_activity_update(task_id)
+    
+    return {"success": True}
 
 @router.get("/tasks/{task_id}/comments")
 async def get_task_comments(task_id: str, limit: int = 200):
@@ -990,6 +1263,162 @@ async def add_task_comment(task_id: str, comment: TaskCommentCreate, user: Dict 
     await broadcast_task_activity_update(task_id)
 
     return {"success": True, "comment": serialize_comment(dict(rows[0]))}
+
+@router.patch("/tasks/{task_id}/comments/{comment_id}")
+async def update_task_comment(task_id: str, comment_id: str, comment: TaskCommentUpdate, user: Dict = Depends(get_current_user)):
+    """Update a comment (only by the creator)"""
+    task = ensure_task_exists(task_id)
+    
+    # Get the comment to check ownership
+    check_query = """
+        SELECT id, user_id, content FROM task_comments
+        WHERE id = %s AND task_id = %s
+    """
+    existing = db.execute_query(check_query, (comment_id, task_id))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    
+    # Check if user is the creator
+    if existing[0]['user_id'] != user.get('id'):
+        raise HTTPException(status_code=403, detail="You can only edit your own comments")
+    
+    content = comment.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Comment cannot be empty")
+    
+    # Update the comment
+    update_query = """
+        UPDATE task_comments
+        SET content = %s
+        WHERE id = %s AND task_id = %s
+    """
+    db.execute_update(update_query, (content, comment_id, task_id))
+    
+    # Fetch updated comment
+    fetch_query = """
+        SELECT id, task_id, user_id, user_name, content, created_at
+        FROM task_comments
+        WHERE id = %s
+    """
+    rows = db.execute_query(fetch_query, (comment_id,))
+    if not rows:
+        raise HTTPException(status_code=500, detail="Failed to load updated comment")
+    
+    # Broadcast activity update
+    await broadcast_task_activity_update(task_id)
+    
+    return {"success": True, "comment": serialize_comment(dict(rows[0]))}
+
+@router.patch("/tasks/{task_id}/timeline/{entry_id}")
+async def update_task_timeline_entry(task_id: str, entry_id: str, entry: TimelineEntryUpdate, user: Dict = Depends(get_current_user)):
+    """Update a timeline entry (only by the creator, and only manual notes)"""
+    task = ensure_task_exists(task_id)
+    
+    # Get the entry to check ownership and type
+    check_query = """
+        SELECT id, user_id, event_type, title, description FROM task_timeline
+        WHERE id = %s AND task_id = %s
+    """
+    existing = db.execute_query(check_query, (entry_id, task_id))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Timeline entry not found")
+    
+    # Only allow editing manual notes
+    if existing[0]['event_type'] != 'note':
+        raise HTTPException(status_code=400, detail="Only manual notes can be edited")
+    
+    # Check if user is the creator
+    if existing[0]['user_id'] != user.get('id'):
+        raise HTTPException(status_code=403, detail="You can only edit your own timeline entries")
+    
+    # Prepare update fields
+    title = entry.title.strip() if entry.title is not None else existing[0]['title']
+    if title is None:
+        title = ''
+    description = entry.description.strip() if entry.description is not None else existing[0]['description']
+    
+    # At least description must be provided (or already exist)
+    if not description:
+        raise HTTPException(status_code=400, detail="Description cannot be empty")
+    
+    # Update the entry
+    update_query = """
+        UPDATE task_timeline
+        SET title = %s, description = %s
+        WHERE id = %s AND task_id = %s
+    """
+    db.execute_update(update_query, (title, description, entry_id, task_id))
+    
+    # Fetch updated entry
+    fetch_query = """
+        SELECT id, task_id, event_type, title, description, metadata, user_id, user_name, created_at
+        FROM task_timeline
+        WHERE id = %s
+    """
+    rows = db.execute_query(fetch_query, (entry_id,))
+    if not rows:
+        raise HTTPException(status_code=500, detail="Failed to load updated timeline entry")
+    
+    # Broadcast activity update
+    await broadcast_task_activity_update(task_id)
+    
+    return {"success": True, "entry": serialize_timeline_entry(dict(rows[0]))}
+
+@router.delete("/tasks/{task_id}/comments/{comment_id}")
+async def delete_task_comment(task_id: str, comment_id: str, user: Dict = Depends(get_current_user)):
+    """Delete a comment (only by the creator)"""
+    task = ensure_task_exists(task_id)
+    
+    # Get the comment to check ownership
+    check_query = """
+        SELECT id, user_id FROM task_comments
+        WHERE id = %s AND task_id = %s
+    """
+    existing = db.execute_query(check_query, (comment_id, task_id))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    
+    # Check if user is the creator
+    if existing[0]['user_id'] != user.get('id'):
+        raise HTTPException(status_code=403, detail="You can only delete your own comments")
+    
+    # Delete the comment
+    db.execute_update("DELETE FROM task_comments WHERE id = %s AND task_id = %s", (comment_id, task_id))
+    
+    # Broadcast activity update
+    await broadcast_task_activity_update(task_id)
+    
+    return {"success": True}
+
+@router.delete("/tasks/{task_id}/timeline/{entry_id}")
+async def delete_task_timeline_entry(task_id: str, entry_id: str, user: Dict = Depends(get_current_user)):
+    """Delete a timeline entry (only by the creator, and only manual notes)"""
+    task = ensure_task_exists(task_id)
+    
+    # Get the entry to check ownership and type
+    check_query = """
+        SELECT id, user_id, event_type FROM task_timeline
+        WHERE id = %s AND task_id = %s
+    """
+    existing = db.execute_query(check_query, (entry_id, task_id))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Timeline entry not found")
+    
+    # Only allow deleting manual notes
+    if existing[0]['event_type'] != 'note':
+        raise HTTPException(status_code=400, detail="Only manual notes can be deleted")
+    
+    # Check if user is the creator
+    if existing[0]['user_id'] != user.get('id'):
+        raise HTTPException(status_code=403, detail="You can only delete your own timeline entries")
+    
+    # Delete the entry (CASCADE will handle files)
+    db.execute_update("DELETE FROM task_timeline WHERE id = %s AND task_id = %s", (entry_id, task_id))
+    
+    # Broadcast activity update
+    await broadcast_task_activity_update(task_id)
+    
+    return {"success": True}
 
 # Lock endpoints
 @router.post("/tasks/{task_id}/lock")
@@ -1055,5 +1484,135 @@ async def heartbeat_task(task_id: str, user: Dict = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# Checklist endpoints
+@router.get("/tasks/{task_id}/checklist")
+async def get_task_checklist(task_id: str, user: Dict = Depends(get_current_user)):
+    """Get checklist items for a task"""
+    task = ensure_task_exists(task_id)
+    if task['type'] != 'task':
+        raise HTTPException(status_code=400, detail="Checklist is only available for tasks")
+    items = fetch_task_checklist(task_id)
+    return {"success": True, "items": items}
+
+@router.post("/tasks/{task_id}/checklist")
+async def add_task_checklist_item(task_id: str, item: ChecklistItemCreate, user: Dict = Depends(get_current_user)):
+    """Add a checklist item to a task"""
+    task = ensure_task_exists(task_id)
+    if task['type'] != 'task':
+        raise HTTPException(status_code=400, detail="Checklist is only available for tasks")
+    
+    text = item.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+    
+    # Get max order for this task
+    max_order_query = "SELECT MAX(`order`) as max_order FROM task_checklist WHERE task_id = %s"
+    max_order_result = db.execute_query(max_order_query, (task_id,))
+    max_order = max_order_result[0]['max_order'] if max_order_result and max_order_result[0]['max_order'] is not None else -1
+    new_order = max_order + 1
+    
+    item_id = str(uuid.uuid4())
+    query = """
+        INSERT INTO task_checklist (id, task_id, text, completed, `order`)
+        VALUES (%s, %s, %s, %s, %s)
+    """
+    db.execute_update(query, (item_id, task_id, text, False, new_order))
+    
+    # Fetch created item
+    fetch_query = """
+        SELECT id, task_id, text, completed, `order`, created_at, updated_at
+        FROM task_checklist
+        WHERE id = %s
+    """
+    rows = db.execute_query(fetch_query, (item_id,))
+    if not rows:
+        raise HTTPException(status_code=500, detail="Failed to load created checklist item")
+    
+    result_item = normalize_checklist_item(dict(rows[0]))
+    
+    # Broadcast activity update
+    await broadcast_task_activity_update(task_id)
+    
+    return {"success": True, "item": result_item}
+
+@router.patch("/tasks/{task_id}/checklist/{item_id}")
+async def update_task_checklist_item(
+    task_id: str,
+    item_id: str,
+    updates: ChecklistItemUpdate,
+    user: Dict = Depends(get_current_user)
+):
+    """Update a checklist item"""
+    task = ensure_task_exists(task_id)
+    if task['type'] != 'task':
+        raise HTTPException(status_code=400, detail="Checklist is only available for tasks")
+    
+    # Check if item exists and belongs to task
+    check_query = "SELECT id FROM task_checklist WHERE id = %s AND task_id = %s"
+    existing = db.execute_query(check_query, (item_id, task_id))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Checklist item not found")
+    
+    updates_list = []
+    params = []
+    
+    if updates.text is not None:
+        text = updates.text.strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="Text cannot be empty")
+        updates_list.append("text = %s")
+        params.append(text)
+    
+    if updates.completed is not None:
+        updates_list.append("completed = %s")
+        params.append(bool(updates.completed))
+    
+    if not updates_list:
+        return {"success": True, "message": "No changes"}
+    
+    params.extend([task_id, item_id])
+    query = f"UPDATE task_checklist SET {', '.join(updates_list)} WHERE task_id = %s AND id = %s"
+    db.execute_update(query, tuple(params))
+    
+    # Fetch updated item
+    fetch_query = """
+        SELECT id, task_id, text, completed, `order`, created_at, updated_at
+        FROM task_checklist
+        WHERE id = %s
+    """
+    rows = db.execute_query(fetch_query, (item_id,))
+    if not rows:
+        raise HTTPException(status_code=500, detail="Failed to load updated checklist item")
+    
+    result_item = normalize_checklist_item(dict(rows[0]))
+    
+    # Broadcast activity update
+    await broadcast_task_activity_update(task_id)
+    
+    return {"success": True, "item": result_item}
+
+@router.delete("/tasks/{task_id}/checklist/{item_id}")
+async def delete_task_checklist_item(
+    task_id: str,
+    item_id: str,
+    user: Dict = Depends(get_current_user)
+):
+    """Delete a checklist item"""
+    task = ensure_task_exists(task_id)
+    if task['type'] != 'task':
+        raise HTTPException(status_code=400, detail="Checklist is only available for tasks")
+    
+    # Check if item exists and belongs to task
+    check_query = "SELECT id FROM task_checklist WHERE id = %s AND task_id = %s"
+    existing = db.execute_query(check_query, (item_id, task_id))
+    if not existing:
+        raise HTTPException(status_code=404, detail="Checklist item not found")
+    
+    db.execute_update("DELETE FROM task_checklist WHERE id = %s AND task_id = %s", (item_id, task_id))
+    
+    # Broadcast activity update
+    await broadcast_task_activity_update(task_id)
+    
+    return {"success": True}
 
 

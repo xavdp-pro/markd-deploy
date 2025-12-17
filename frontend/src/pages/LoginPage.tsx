@@ -28,9 +28,12 @@ const LoginPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-      <div className="max-w-md w-full mx-4">
-        <div className="bg-white rounded-lg shadow-xl p-8">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 relative">
+      {/* Overlay avec effet de flou */}
+      <div className="absolute inset-0 bg-black/20 backdrop-blur-sm"></div>
+      
+      <div className="max-w-md w-full mx-4 relative z-10">
+        <div className="bg-white/95 backdrop-blur-md rounded-lg shadow-2xl p-8 border border-white/20">
           <div className="flex items-center justify-center mb-8">
             <FileText className="w-12 h-12 text-blue-600 mr-3" />
             <h1 className="text-3xl font-bold text-gray-800">MarkD</h1>

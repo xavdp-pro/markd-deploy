@@ -103,7 +103,7 @@ async def login(request: LoginRequest, response: Response):
             httponly=True,
             max_age=7 * 24 * 60 * 60,  # 7 jours en secondes
             samesite="lax",
-            secure=False  # Set to True in production with HTTPS
+            secure=True  # Required for HTTPS
         )
         
         return {

@@ -579,7 +579,7 @@ async def get_password_tag_suggestions(query: str = "", limit: int = 20, current
 
 # ===== Lock Management =====
 
-@router.post("/api/passwords/{password_id}/lock")
+@router.post("/api/vault/passwords/{password_id}/lock")
 async def lock_password(password_id: str, lock_req: LockRequest):
     """Lock password for editing"""
     try:
@@ -625,7 +625,7 @@ async def lock_password(password_id: str, lock_req: LockRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/api/passwords/{password_id}/heartbeat")
+@router.post("/api/vault/passwords/{password_id}/heartbeat")
 async def heartbeat_password(password_id: str, current_user: Dict = Depends(get_current_user)):
     """Update lock timestamp to prevent expiration"""
     try:
@@ -648,7 +648,7 @@ async def heartbeat_password(password_id: str, current_user: Dict = Depends(get_
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.delete("/api/passwords/{password_id}/lock")
+@router.delete("/api/vault/passwords/{password_id}/lock")
 async def unlock_password(password_id: str, user_id: str):
     """Unlock password"""
     try:
@@ -664,7 +664,7 @@ async def unlock_password(password_id: str, user_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/api/passwords/{password_id}/force-unlock")
+@router.post("/api/vault/passwords/{password_id}/force-unlock")
 async def force_unlock_password(password_id: str):
     """Force unlock password (admin only)"""
     try:

@@ -10,6 +10,7 @@ import FileViewer from './components/FileViewer';
 import FileUploadModal from './components/FileUploadModal';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent } from '@dnd-kit/core';
 import { File, Folder, X, Trash2 } from 'lucide-react';
+import { getHashSelection, setHashSelection, onHashChange } from './utils/urlHash';
 
 function FilesApp() {
   const { currentWorkspace, userPermission } = useWorkspace();
@@ -188,53 +189,92 @@ function FilesApp() {
             setTreeWidth(parseInt(savedWidth, 10));
           }
           
-          // Restore selected file if exists
-          if (sessionState.selectedId) {
-            // Find item in tree and expand parents
-            const findAndExpand = (nodes: FileItem[], targetId: string, path: string[] = []): boolean => {
+          // Restore selected files (try URL hash first, then sessionStorage, then fallback)
+          let selectedIds: string[] = getHashSelection('file');
+          console.log('FilesApp: Restoring from hash:', selectedIds);
+          
+          // Fallback to sessionStorage if no hash
+          if (selectedIds.length === 0) {
+            const savedSelectedIdsJson = sessionStorage.getItem('markd_files_selected_ids');
+            console.log('FilesApp: Restoring from sessionStorage, savedSelectedIdsJson:', savedSelectedIdsJson);
+            
+            if (savedSelectedIdsJson) {
+              try {
+                selectedIds = JSON.parse(savedSelectedIdsJson);
+                console.log('FilesApp: Parsed selectedIds:', selectedIds);
+                // Update hash with sessionStorage value
+                setHashSelection('file', selectedIds);
+              } catch (e) {
+                console.error('Error parsing saved selected IDs:', e);
+              }
+            }
+          }
+          
+          // Fallback to single selection if no multi-selection saved
+          if (selectedIds.length === 0 && sessionState.selectedId) {
+            selectedIds = [sessionState.selectedId];
+            console.log('FilesApp: Using fallback selectedId:', selectedIds);
+            setHashSelection('file', selectedIds);
+          }
+          
+          if (selectedIds.length > 0) {
+            console.log('FilesApp: Restoring', selectedIds.length, 'items');
+            // Find all items in tree
+            const foundItems: FileItem[] = [];
+            const pathsToExpand: string[][] = [];
+            
+            const findItemWithPath = (nodes: FileItem[], targetId: string, path: string[] = []): FileItem | null => {
               for (const node of nodes) {
                 const newPath = [...path, node.id];
                 if (node.id === targetId) {
-                  // Expand all parents
-                  setExpanded(prev => {
-                    const next = { ...prev };
-                    for (let i = 0; i < newPath.length - 1; i++) {
-                      next[newPath[i]] = true;
-                    }
-                    return next;
-                  });
-                  return true;
+                  pathsToExpand.push(newPath);
+                  return node;
                 }
                 if (node.children) {
-                  if (findAndExpand(node.children, targetId, newPath)) {
-                    return true;
-                  }
+                  const found = findItemWithPath(node.children, targetId, newPath);
+                  if (found) return found;
                 }
               }
-              return false;
+              return null;
             };
             
-            // Expand parents first
-            findAndExpand(result.tree, sessionState.selectedId);
-            
-            // Then load file details
-            try {
-              const fileResult = await api.getFile(sessionState.selectedId);
-              if (fileResult.success) {
-                setSelected([fileResult.file]);
-              } else {
-                // File not found, clear selection
-                sessionStorageService.saveState({
-                  expandedNodes: expanded,
-                  selectedId: null,
-                });
+            // Find all selected items
+            for (const id of selectedIds) {
+              const item = findItemWithPath(result.tree, id);
+              if (item) {
+                foundItems.push(item);
               }
-            } catch (err) {
-              // File not found or error, clear selection
+            }
+            
+            if (foundItems.length > 0) {
+              // Expand all parent folders first
+              const newExpanded: Record<string, boolean> = { ...sessionState.expandedNodes };
+              pathsToExpand.forEach(path => {
+                for (let i = 0; i < path.length - 1; i++) {
+                  newExpanded[path[i]] = true;
+                }
+              });
+              setExpanded(newExpanded);
+              
+              // Set flag to prevent saving during restoration
+              isRestoringRef.current = true;
+              
+              // Wait a bit for expansion to render, then select
+              setTimeout(() => {
+                setSelected(foundItems);
+                // Reset flag after a short delay
+                setTimeout(() => {
+                  isRestoringRef.current = false;
+                }, 200);
+                // FileViewer will handle display based on selected[0].type === 'file'
+              }, 100);
+            } else {
+              // Items not found, clear selection
               sessionStorageService.saveState({
-                expandedNodes: expanded,
+                expandedNodes: sessionState.expandedNodes,
                 selectedId: null,
               });
+              sessionStorage.removeItem('markd_files_selected_ids');
             }
           }
         }
@@ -249,7 +289,40 @@ function FilesApp() {
     };
     
     loadData();
-  }, [currentWorkspace]);
+    
+    // Listen to hash changes (when navigating back to this module)
+    const cleanup = onHashChange((selections) => {
+      const hashIds = selections.file;
+      if (hashIds.length > 0 && tree.length > 0) {
+        // Restore selection from hash
+        const findItemWithPath = (nodes: FileItem[], targetId: string, path: string[] = []): FileItem | null => {
+          for (const node of nodes) {
+            const newPath = [...path, node.id];
+            if (node.id === targetId) {
+              return node;
+            }
+            if (node.children) {
+              const found = findItemWithPath(node.children, targetId, newPath);
+              if (found) return found;
+            }
+          }
+          return null;
+        };
+        
+        const foundItems: FileItem[] = [];
+        for (const id of hashIds) {
+          const item = findItemWithPath(tree, id);
+          if (item) foundItems.push(item);
+        }
+        
+        if (foundItems.length > 0) {
+          setSelected(foundItems);
+        }
+      }
+    });
+    
+    return cleanup;
+  }, [currentWorkspace, tree]);
 
   // Flatten tree to get all nodes in order (for Shift+Click range selection)
   const flattenTree = useCallback((nodes: FileItem[], result: FileItem[] = []): FileItem[] => {
@@ -392,11 +465,41 @@ function FilesApp() {
   // Toast on content updates coming from other users
 
   // Save session state when it changes
+  const prevSelectedIdsRef = React.useRef<string>('');
+  const isRestoringRef = React.useRef<boolean>(false);
   useEffect(() => {
     sessionStorageService.saveState({
       expandedNodes: expanded,
-      selectedId: selected.length > 0 ? selected[0].id : null,
+      selectedId: selected.length > 0 ? selected[0].id : null, // Keep for backward compatibility
     });
+    
+    // Don't save if we're currently restoring from hash
+    if (isRestoringRef.current) {
+      return;
+    }
+    
+    // Save all selected IDs to both URL hash and sessionStorage
+    try {
+      const ids = selected.map(s => s.id);
+      const idsString = ids.sort().join(',');
+      // Avoid saving if selection hasn't changed
+      if (prevSelectedIdsRef.current === idsString) {
+        return;
+      }
+      prevSelectedIdsRef.current = idsString;
+      
+      if (selected.length > 0) {
+        console.log('FilesApp: Saving selected IDs:', ids);
+        setHashSelection('file', ids);
+        sessionStorage.setItem('markd_files_selected_ids', JSON.stringify(ids));
+      } else {
+        console.log('FilesApp: Clearing selected IDs');
+        setHashSelection('file', []);
+        sessionStorage.removeItem('markd_files_selected_ids');
+      }
+    } catch (error) {
+      console.error('Error saving selected files:', error);
+    }
   }, [expanded, selected]);
 
   // Handle resizing
@@ -731,8 +834,39 @@ function FilesApp() {
       try {
         const result = await api.getFilesTree(currentWorkspace);
         
+        // Preserve current selection before updating tree
+        const selectedIds = selected.map(s => s.id);
+        
         // Update tree immediately
         setTree(result.tree);
+        
+        // Restore selection after tree update
+        if (selectedIds.length > 0 && result.tree.length > 0) {
+          const findItem = (nodes: FileItem[], targetId: string): FileItem | null => {
+            for (const node of nodes) {
+              if (node.id === targetId) return node;
+              if (node.children) {
+                const found = findItem(node.children, targetId);
+                if (found) return found;
+              }
+            }
+            return null;
+          };
+          
+          const foundItems: FileItem[] = [];
+          for (const id of selectedIds) {
+            const item = findItem(result.tree, id);
+            if (item) foundItems.push(item);
+          }
+          
+          // Only update selection if we found at least one item
+          if (foundItems.length > 0) {
+            setSelected(foundItems);
+          } else if (selectedIds.length > 0) {
+            // Items were deleted, clear selection
+            setSelected([]);
+          }
+        }
 
         // Build quick lookup maps to detect changes
         const flatten = (

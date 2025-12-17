@@ -77,8 +77,8 @@ app.include_router(admin_router)
 sio = socketio.AsyncServer(
     async_mode='asgi',
     cors_allowed_origins='*',
-    logger=True,
-    engineio_logger=True
+    logger=False,
+    engineio_logger=False
 )
 
 # Wrap FastAPI with Socket.IO
@@ -766,8 +766,8 @@ async def get_workspaces(request: Request, user: Dict = Depends(get_current_user
                     else:
                         ws['user_permission'] = 'none'  # No permission if not in any group
                 except Exception as e:
-                    print(f"Error getting permission for workspace {ws['id']}: {e}")
-                    ws['user_permission'] = 'read'  # Default to read if no explicit permission
+                    # Default to read if no explicit permission
+                    ws['user_permission'] = 'read'
         
         return {"success": True, "workspaces": workspaces}
     except Exception as e:
@@ -995,11 +995,8 @@ async def get_users(request: Request, user: Dict = Depends(get_current_user)):
 async def get_tree(workspace_id: str = 'demo', request: Request = None, user: Dict = Depends(get_current_user)):
     """Get full document tree for a workspace (requires read permission)"""
     try:
-        print(f"DEBUG: Checking permission for user {user.get('id')} on workspace {workspace_id}")
         await check_workspace_permission(workspace_id, user, 'read')
-        print(f"DEBUG: Permission OK, building tree")
         tree = build_tree('root', workspace_id)
-        print(f"DEBUG: Tree built, getting workspace info")
         
         # Get workspace info
         ws_query = "SELECT name FROM workspaces WHERE id = %s"
@@ -1010,7 +1007,6 @@ async def get_tree(workspace_id: str = 'demo', request: Request = None, user: Di
     except HTTPException:
         raise
     except Exception as e:
-        print(f"DEBUG ERROR: {type(e).__name__}: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -1457,7 +1453,6 @@ async def upload_image(file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error uploading image: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ===== MCP Server Endpoints =====
@@ -1501,16 +1496,51 @@ async def get_mcp_activity(limit: int = 100):
 @sio.event
 async def connect(sid, environ):
     """Handle client connection"""
-    print(f"Client connected: {sid}")
+    # print(f"Client connected: {sid}")  # Disabled to reduce log verbosity
     # Send current tree to new client
     tree = build_tree()
     await sio.emit('tree_updated', {'tree': tree}, room=sid)
 
 @sio.event
 async def disconnect(sid):
-    """Handle client disconnection"""
-    print(f"Client disconnected: {sid}")
-    # TODO: Release any locks held by this client
+    """Handle client disconnection - Clean up expired locks"""
+    # Clean up locks that are older than LOCK_TIMEOUT_MINUTES
+    try:
+        timeout = timedelta(minutes=LOCK_TIMEOUT_MINUTES)
+        cutoff_time = datetime.utcnow() - timeout
+        
+        # Clean up expired document locks
+        db.execute_update(
+            "DELETE FROM document_locks WHERE locked_at < %s",
+            (cutoff_time,)
+        )
+        
+        # Clean up expired task locks
+        db.execute_update(
+            "DELETE FROM task_locks WHERE locked_at < %s",
+            (cutoff_time,)
+        )
+        
+        # Clean up expired password locks
+        db.execute_update(
+            "DELETE FROM password_locks WHERE locked_at < %s",
+            (cutoff_time,)
+        )
+        
+        # Clean up expired file locks
+        db.execute_update(
+            "DELETE FROM file_locks WHERE locked_at < %s",
+            (cutoff_time,)
+        )
+        
+        # Clean up expired schema locks
+        db.execute_update(
+            "DELETE FROM schema_locks WHERE locked_at < %s",
+            (cutoff_time,)
+        )
+    except Exception:
+        # Ignore errors in cleanup to avoid breaking disconnection
+        pass
 
 @sio.event
 async def request_tree(sid):

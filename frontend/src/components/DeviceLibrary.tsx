@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { DeviceTemplate } from '../types';
-import { Network, Search, ChevronDown, ChevronRight, Plus, Edit } from 'lucide-react';
+import { Network, Search, ChevronDown, ChevronRight, Plus, Edit, ChevronLeft } from 'lucide-react';
 
 interface DeviceLibraryProps {
   templates: DeviceTemplate[];
@@ -26,6 +26,28 @@ const DeviceLibrary: React.FC<DeviceLibraryProps> = ({
   onCreateTemplate,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  
+  // Load collapsed state from sessionStorage
+  React.useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem('markd_device_library_collapsed');
+      if (saved !== null) {
+        setIsCollapsed(JSON.parse(saved));
+      }
+    } catch (e) {
+      console.error('Error loading collapsed state:', e);
+    }
+  }, []);
+
+  // Save collapsed state to sessionStorage
+  React.useEffect(() => {
+    try {
+      sessionStorage.setItem('markd_device_library_collapsed', JSON.stringify(isCollapsed));
+    } catch (e) {
+      console.error('Error saving collapsed state:', e);
+    }
+  }, [isCollapsed]);
   
   // Debug: log templates when they change
   React.useEffect(() => {
@@ -119,42 +141,66 @@ const DeviceLibrary: React.FC<DeviceLibraryProps> = ({
   };
 
   return (
-    <div className="w-64 h-full bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col">
+    <div className={`${isCollapsed ? 'w-12' : 'w-64'} h-full bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col transition-all duration-300 ease-in-out`}>
       {/* Header */}
-      <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold text-lg text-gray-900 dark:text-white">
-            Bibliothèque d'appareils
-          </h3>
-          {onCreateTemplate && (
+      <div className={`border-b border-gray-200 dark:border-gray-700 ${isCollapsed ? 'p-2' : 'p-4'}`}>
+        {isCollapsed ? (
+          <div className="flex items-center justify-center">
             <button
-              onClick={onCreateTemplate}
-              className="p-1.5 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900 rounded transition-colors"
-              title="Créer un template personnalisé"
+              onClick={() => setIsCollapsed(!isCollapsed)}
+              className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+              title="Afficher la bibliothèque"
             >
-              <Plus size={18} />
+              <ChevronRight size={18} />
             </button>
-          )}
-        </div>
-        
-        {/* Search */}
-        <div className="relative">
-          <Search
-            size={16}
-            className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400"
-          />
-          <input
-            type="text"
-            placeholder="Rechercher..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold text-lg text-gray-900 dark:text-white">
+                Bibliothèque d'appareils
+              </h3>
+              <div className="flex items-center gap-2">
+                {onCreateTemplate && (
+                  <button
+                    onClick={onCreateTemplate}
+                    className="p-1.5 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900 rounded transition-colors"
+                    title="Créer un template personnalisé"
+                  >
+                    <Plus size={18} />
+                  </button>
+                )}
+                <button
+                  onClick={() => setIsCollapsed(!isCollapsed)}
+                  className="p-1.5 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+                  title="Replier la bibliothèque"
+                >
+                  <ChevronLeft size={18} />
+                </button>
+              </div>
+            </div>
+            
+            {/* Search */}
+            <div className="relative">
+              <Search
+                size={16}
+                className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400"
+              />
+              <input
+                type="text"
+                placeholder="Rechercher..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-8 pr-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </>
+        )}
       </div>
 
       {/* Categories and Devices */}
-      <div className="flex-1 overflow-y-auto p-2">
+      {!isCollapsed && (
+        <div className="flex-1 overflow-y-auto p-2">
         {templates.length === 0 && (
           <div className="text-center py-8 text-gray-500 dark:text-gray-400 text-sm">
             Chargement des templates...
@@ -254,7 +300,8 @@ const DeviceLibrary: React.FC<DeviceLibraryProps> = ({
             Aucun appareil trouvé
           </div>
         )}
-      </div>
+        </div>
+      )}
     </div>
   );
 };

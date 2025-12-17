@@ -11,6 +11,7 @@ import DocumentViewer from './components/DocumentViewer';
 import DocumentEditor from './components/DocumentEditor';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent } from '@dnd-kit/core';
 import { File, Folder, X, Trash2 } from 'lucide-react';
+import { getHashSelection, setHashSelection, onHashChange } from './utils/urlHash';
 
 function App() {
   const { user } = useAuth();
@@ -38,6 +39,9 @@ function App() {
   const prevTreeRef = React.useRef<Document[] | null>(null);
   const lastLocalChangeAtRef = React.useRef<number>(0);
   const processingHashRef = React.useRef<boolean>(false);
+  const userInitiatedSelectionRef = React.useRef<boolean>(false);
+  const treeRef = React.useRef<Document[]>([]);
+  const selectedRef = React.useRef<Document[]>([]);
   
   // Load all tags for filter
   const loadAllTags = useCallback(async () => {
@@ -135,6 +139,15 @@ function App() {
   
   const filteredTree = filterTree(tree, searchQuery, selectedTags);
   
+  // Keep refs in sync with state
+  useEffect(() => {
+    treeRef.current = tree;
+  }, [tree]);
+  
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
+  
   // Clear search and collapse tree
   const handleClearSearch = () => {
     setSearchQuery('');
@@ -147,14 +160,12 @@ function App() {
     if (storedUser) {
       try {
         const user = JSON.parse(storedUser);
-        console.log('User ID from localStorage:', user.id);
         return String(user.id);
       } catch (e) {
         console.error('Error parsing stored user:', e);
       }
     }
     const fallbackId = `user-${Math.random().toString(36).substr(2, 9)}`;
-    console.log('Using fallback user ID:', fallbackId);
     return fallbackId;
   }, []);
   
@@ -189,6 +200,7 @@ function App() {
         const result = await api.getTree(currentWorkspace);
         setTree(result.tree);
         prevTreeRef.current = result.tree;
+        treeRef.current = result.tree;
 
         // Load session state
         const sessionState = sessionStorageService.loadState();
@@ -201,54 +213,128 @@ function App() {
             setTreeWidth(parseInt(savedWidth, 10));
           }
           
-          // Restore selected document if exists
-          if (sessionState.selectedId) {
-            // Find item in tree and expand parents
-            const findAndExpand = (nodes: Document[], targetId: string, path: string[] = []): boolean => {
+          // Restore selected documents (try URL hash first, then sessionStorage, then fallback)
+          let selectedIds: string[] = getHashSelection('document');
+          
+          // Fallback to sessionStorage if no hash
+          if (selectedIds.length === 0) {
+            const savedSelectedIdsJson = sessionStorage.getItem('markd_documents_selected_ids');
+            
+            if (savedSelectedIdsJson) {
+              try {
+                selectedIds = JSON.parse(savedSelectedIdsJson);
+                // Update hash with sessionStorage value (only if different)
+                const currentHashIds = getHashSelection('document');
+                if (JSON.stringify(currentHashIds.sort()) !== JSON.stringify(selectedIds.sort())) {
+                  setHashSelection('document', selectedIds);
+                }
+              } catch (e) {
+                console.error('Error parsing saved selected IDs:', e);
+              }
+            }
+          }
+          
+          // Fallback to single selection if no multi-selection saved
+          if (selectedIds.length === 0 && sessionState.selectedId) {
+            selectedIds = [sessionState.selectedId];
+            const currentHashIds = getHashSelection('document');
+            if (JSON.stringify(currentHashIds) !== JSON.stringify(selectedIds)) {
+              setHashSelection('document', selectedIds);
+            }
+          }
+          
+          if (selectedIds.length > 0) {
+            // Find all items in tree
+            const findItem = (nodes: Document[], targetId: string): Document | null => {
+              for (const node of nodes) {
+                if (node.id === targetId) return node;
+                if (node.children) {
+                  const found = findItem(node.children, targetId);
+                  if (found) return found;
+                }
+              }
+              return null;
+            };
+            
+            const foundItems: Document[] = [];
+            const pathsToExpand: string[][] = [];
+            
+            const findItemWithPath = (nodes: Document[], targetId: string, path: string[] = []): Document | null => {
               for (const node of nodes) {
                 const newPath = [...path, node.id];
                 if (node.id === targetId) {
-                  // Expand all parents
-                  setExpanded(prev => {
-                    const next = { ...prev };
-                    for (let i = 0; i < newPath.length - 1; i++) {
-                      next[newPath[i]] = true;
-                    }
-                    return next;
-                  });
-                  return true;
+                  pathsToExpand.push(newPath);
+                  return node;
                 }
                 if (node.children) {
-                  if (findAndExpand(node.children, targetId, newPath)) {
-                    return true;
-                  }
+                  const found = findItemWithPath(node.children, targetId, newPath);
+                  if (found) return found;
                 }
               }
-              return false;
+              return null;
             };
             
-            // Expand parents first
-            findAndExpand(result.tree, sessionState.selectedId);
-            
-            // Then load document details
-            try {
-              const docResult = await api.getDocument(sessionState.selectedId);
-              if (docResult.success) {
-                setSelected([docResult.document]);
-                setEditContent(docResult.document.content || '');
-              } else {
-                // Document not found, clear selection
-                sessionStorageService.saveState({
-                  expandedNodes: expanded,
-                  selectedId: null,
-                });
+            // Find all selected items
+            for (const id of selectedIds) {
+              const item = findItemWithPath(result.tree, id);
+              if (item) {
+                foundItems.push(item);
               }
-            } catch (err) {
-              // Document not found or error, clear selection
+            }
+            
+            if (foundItems.length > 0) {
+              // Expand all parent folders first
+              const newExpanded: Record<string, boolean> = { ...sessionState.expandedNodes };
+              pathsToExpand.forEach(path => {
+                for (let i = 0; i < path.length - 1; i++) {
+                  newExpanded[path[i]] = true;
+                }
+              });
+              setExpanded(newExpanded);
+              
+              // Set flag to prevent saving during restoration
+              isRestoringRef.current = true;
+              
+              // Wait a bit for expansion to render, then select
+              setTimeout(() => {
+                // Load content for the first file before setting selection to avoid visual jump
+                const firstFile = foundItems.find(item => item.type === 'file');
+                if (firstFile) {
+                  api.getDocument(firstFile.id).then(docResult => {
+                    if (docResult.success) {
+                      setEditContent(docResult.document.content || '');
+                      // Update the selected document with full content
+                      const updatedItems = foundItems.map(item => 
+                        item.id === firstFile.id 
+                          ? { ...item, content: docResult.document.content || '' }
+                          : item
+                      );
+                      setSelected(updatedItems);
+                    } else {
+                      setSelected(foundItems);
+                    }
+                  }).catch(err => {
+                    console.error('Error loading document content:', err);
+                    setSelected(foundItems);
+                  });
+                } else {
+                  // No file selected, clear edit content
+                  setEditContent('');
+                  setSelected(foundItems);
+                }
+                
+                // Reset flag after a short delay
+                setTimeout(() => {
+                  isRestoringRef.current = false;
+                }, 200);
+              }, 100);
+            } else {
+              // Items not found, clear selection
               sessionStorageService.saveState({
-                expandedNodes: expanded,
+                expandedNodes: sessionState.expandedNodes,
                 selectedId: null,
               });
+              sessionStorage.removeItem('markd_documents_selected_ids');
             }
           }
         }
@@ -263,6 +349,90 @@ function App() {
     };
     
     loadData();
+    
+    // Listen to hash changes (when navigating back to this module)
+    const cleanup = onHashChange((selections) => {
+      // Prevent processing if already restoring to avoid infinite loop
+      if (isRestoringRef.current) {
+        return;
+      }
+      
+      // Don't restore if the change was initiated by user click
+      if (userInitiatedSelectionRef.current) {
+        return;
+      }
+      
+      const hashIds = selections.document;
+      // Use refs to get latest values without causing re-renders
+      const currentTree = treeRef.current;
+      const currentSelected = selectedRef.current;
+      
+      if (hashIds.length > 0 && currentTree.length > 0) {
+        // Check if selection is already correct to avoid loop
+        const currentIds = currentSelected.map(s => s.id).sort().join(',');
+        const hashIdsString = hashIds.sort().join(',');
+        if (currentIds === hashIdsString) {
+          return; // Already selected, no need to restore
+        }
+        
+        // Set flag to prevent saving during restoration
+        isRestoringRef.current = true;
+        
+        // Restore selection from hash
+        const findItemWithPath = (nodes: Document[], targetId: string, path: string[] = []): Document | null => {
+          for (const node of nodes) {
+            const newPath = [...path, node.id];
+            if (node.id === targetId) {
+              return node;
+            }
+            if (node.children) {
+              const found = findItemWithPath(node.children, targetId, newPath);
+              if (found) return found;
+            }
+          }
+          return null;
+        };
+        
+        const foundItems: Document[] = [];
+        for (const id of hashIds) {
+          const item = findItemWithPath(currentTree, id);
+          if (item) foundItems.push(item);
+        }
+        
+        if (foundItems.length > 0) {
+          const firstFile = foundItems.find(item => item.type === 'file');
+          if (firstFile) {
+            // Load content before setting selection to avoid visual jump
+            api.getDocument(firstFile.id).then(docResult => {
+              if (docResult.success) {
+                setEditContent(docResult.document.content || '');
+                // Update the selected document with full content
+                const updatedItems = foundItems.map(item => 
+                  item.id === firstFile.id 
+                    ? { ...item, content: docResult.document.content || '' }
+                    : item
+                );
+                setSelected(updatedItems);
+              } else {
+                setSelected(foundItems);
+              }
+            }).catch(() => {
+              setSelected(foundItems);
+            });
+          } else {
+            setSelected(foundItems);
+          }
+          // Reset flag after a short delay
+          setTimeout(() => {
+            isRestoringRef.current = false;
+          }, 200);
+        } else {
+          isRestoringRef.current = false;
+        }
+      }
+    });
+    
+    return cleanup;
   }, [currentWorkspace]);
 
   // Flatten tree to get all nodes in order (for Shift+Click range selection)
@@ -342,13 +512,16 @@ function App() {
 
       const interval = setInterval(() => {
         api.heartbeatDocument(activeDoc.id).catch(console.error);
-      }, 60000); // Every minute
+      }, 120000); // Every 2 minutes
       
       return () => clearInterval(interval);
     }
   }, [editMode, selected, getUserId]);
 
   const handleSelectDocument = useCallback(async (doc: Document, event?: React.MouseEvent) => {
+    // Mark this as user-initiated selection to prevent hash-based restoration
+    userInitiatedSelectionRef.current = true;
+    
     const allNodes = flattenTree(tree);
     const currentIndex = allNodes.findIndex(n => n.id === doc.id);
     
@@ -383,13 +556,16 @@ function App() {
       setLastSelectedIndex(currentIndex);
     }
     
+    // Reset flag after a short delay
+    setTimeout(() => {
+      userInitiatedSelectionRef.current = false;
+    }, 500);
+    
     // If it's a file, load it for editing (only if single selection)
     if (doc.type === 'file' && (!event || (!event.ctrlKey && !event.metaKey && !event.shiftKey))) {
       try {
-        // Set URL hash (skip if already processing from hash)
-        if (!processingHashRef.current) {
-          window.location.hash = `doc=${doc.id}`;
-        }
+        // Use setHashSelection instead of direct hash change to avoid triggering hashchange event
+        setHashSelection('document', [doc.id]);
 
         // If currently in edit mode, unlock the previous document (only if different)
         if (editMode && selected.length > 0 && selected[0].id !== doc.id) {
@@ -398,18 +574,30 @@ function App() {
           setEditMode(false);
         }
 
-        // Get full document with latest content
+        // Pre-load content before updating selection to avoid visual jump
+        // Get full document with latest content first
         const result = await api.getDocument(doc.id);
         if (result.success) {
+          // Update content before selection to ensure smooth transition
           setEditContent(result.document.content || '');
+          
+          // Update the selected document with the full content to avoid visual jump
+          const updatedDoc = { ...doc, content: result.document.content || '' };
+          setSelected([updatedDoc]);
+          
           // Only close edit mode if selecting a different document
           if (selected.length === 0 || selected[0].id !== doc.id) {
             setEditMode(false);
           }
+        } else {
+          // If API call fails, still set selection but keep old content
+          setSelected([doc]);
         }
       } catch (err) {
         console.error('Error loading document:', err);
         setError(err instanceof Error ? err.message : 'Failed to load document');
+        // Set selection anyway to show the document in the tree
+        setSelected([doc]);
       }
     }
   }, [editMode, selected, getUserId, tree, flattenTree, lastSelectedIndex]);
@@ -454,12 +642,48 @@ function App() {
 
   // Toast on content updates coming from other users
 
-  // Save session state when it changes
+  // Save session state when it changes (including all selected items)
+  const prevSelectedIdsRef = React.useRef<string>('');
+  const isRestoringRef = React.useRef<boolean>(false);
   useEffect(() => {
     sessionStorageService.saveState({
       expandedNodes: expanded,
-      selectedId: selected.length > 0 ? selected[0].id : null,
+      selectedId: selected.length > 0 ? selected[0].id : null, // Keep for backward compatibility
     });
+    
+    // Don't save if we're currently restoring from hash
+    if (isRestoringRef.current) {
+      return;
+    }
+    
+    // Save all selected IDs to both URL hash and sessionStorage
+    try {
+      const ids = selected.map(s => s.id);
+      const idsString = ids.sort().join(',');
+      // Avoid saving if selection hasn't changed
+      if (prevSelectedIdsRef.current === idsString) {
+        return;
+      }
+      prevSelectedIdsRef.current = idsString;
+      
+      if (selected.length > 0) {
+        // Only update hash if different from current to avoid loop
+        const currentHashIds = getHashSelection('document');
+        if (JSON.stringify(currentHashIds.sort()) !== JSON.stringify(ids.sort())) {
+          setHashSelection('document', ids);
+        }
+        sessionStorage.setItem('markd_documents_selected_ids', JSON.stringify(ids));
+      } else {
+        // Only clear hash if it's not already empty
+        const currentHashIds = getHashSelection('document');
+        if (currentHashIds.length > 0) {
+          setHashSelection('document', []);
+        }
+        sessionStorage.removeItem('markd_documents_selected_ids');
+      }
+    } catch (error) {
+      console.error('Error saving selected documents:', error);
+    }
   }, [expanded, selected]);
 
   // Handle resizing
@@ -829,6 +1053,11 @@ function App() {
     if (loading || tree.length === 0) return;
 
     const handleHashChange = async () => {
+      // Don't restore if the change was initiated by user click
+      if (userInitiatedSelectionRef.current) {
+        return;
+      }
+      
       const hash = window.location.hash;
       if (hash.startsWith('#doc=')) {
         const docId = hash.replace('#doc=', '');
@@ -844,13 +1073,22 @@ function App() {
       }
     };
 
-    // Check initial hash
-    handleHashChange();
+    // Check initial hash only on mount
+    const initialHash = window.location.hash;
+    if (initialHash.startsWith('#doc=')) {
+      const docId = initialHash.replace('#doc=', '');
+      if (docId) {
+        processingHashRef.current = true;
+        expandToAndSelect(docId, tree).then(() => {
+          processingHashRef.current = false;
+        });
+      }
+    }
 
-    // Listen for changes
+    // Listen for changes (only for navigation, not user-initiated)
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [loading, tree, expandToAndSelect, selected]);
+  }, [loading, tree, expandToAndSelect]);
 
   // Setup WebSocket connection
   useEffect(() => {
@@ -1070,6 +1308,7 @@ function App() {
 
         setTree(result.tree);
         prevTreeRef.current = result.tree;
+        treeRef.current = result.tree;
       } catch (err) {
         console.error('Error reloading tree:', err);
       }
@@ -1191,6 +1430,7 @@ function App() {
         // Refresh tree
         const treeResult = await api.getTree(currentWorkspace);
         setTree(treeResult.tree);
+        treeRef.current = treeResult.tree;
       }
       
       if (errors.length > 0) {
@@ -1272,7 +1512,7 @@ function App() {
           <div className="absolute inset-y-0 -left-1 -right-1 group-hover:bg-blue-200 dark:group-hover:bg-blue-800 group-hover:opacity-20" />
         </div>
 
-        {selected.length > 0 ? (
+        {selected.length > 0 && selected[0].type === 'file' ? (
           editMode ? (
             <>
               <div className="flex-1 flex flex-col border-r">
@@ -1298,7 +1538,7 @@ function App() {
           ) : (
             <div className="flex-1 flex flex-col">
               <DocumentViewer
-                document={selected[0]}
+                document={{...selected[0], content: editContent || selected[0].content}}
                 onEdit={handleStartEdit}
                 currentUserId={getUserId()}
                 presenceUsers={presence[selected[0].id]}
@@ -1310,7 +1550,11 @@ function App() {
         ) : (
           <div className="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-500">
             <div className="text-center">
-              <p className="text-lg">Select a document to view</p>
+              <p className="text-lg">
+                {selected.length > 0 && selected[0].type === 'folder' 
+                  ? 'Sélectionnez un fichier pour l\'éditer' 
+                  : 'Sélectionnez un document pour l\'éditer'}
+              </p>
             </div>
           </div>
         )}

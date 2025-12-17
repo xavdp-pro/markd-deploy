@@ -12,6 +12,7 @@ import { api } from '../services/api';
 import { websocket } from '../services/websocket';
 import { Tag as TagType, PasswordItem, PasswordDetail } from '../types';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent } from '@dnd-kit/core';
+import { getHashSelection, setHashSelection, onHashChange } from '../utils/urlHash';
 
 const VaultPage: React.FC = () => {
   const { user } = useAuth();
@@ -123,7 +124,7 @@ const VaultPage: React.FC = () => {
     
     const interval = setInterval(() => {
         api.heartbeatPassword(editingId).catch(console.error);
-    }, 60000);
+      }, 120000);
     
     return () => clearInterval(interval);
   }, [editingId, user]);
@@ -210,17 +211,39 @@ const VaultPage: React.FC = () => {
     localStorage.setItem('vaultSidebarWidth', sidebarWidth.toString());
   }, [sidebarWidth]);
 
-  // Save selected password to sessionStorage
-  const saveSelectedPassword = useCallback((passwordId: string | null) => {
+  // Save selected passwords to sessionStorage (all selected items)
+  const prevSelectedIdsRef = React.useRef<string>('');
+  const isRestoringRef = React.useRef<boolean>(false);
+  const saveSelectedPasswords = useCallback((selectedIds: string[]) => {
+    // Don't save if we're currently restoring from hash
+    if (isRestoringRef.current) {
+      return;
+    }
+    
     try {
-      sessionStorage.setItem('markd_passwords_selected_id', passwordId || '');
+      const idsString = selectedIds.sort().join(',');
+      // Avoid saving if selection hasn't changed
+      if (prevSelectedIdsRef.current === idsString) {
+        return;
+      }
+      prevSelectedIdsRef.current = idsString;
+      
+      if (selectedIds.length > 0) {
+        console.log('VaultPage: Saving selected IDs:', selectedIds);
+        setHashSelection('password', selectedIds);
+        sessionStorage.setItem('markd_passwords_selected_ids', JSON.stringify(selectedIds));
+      } else {
+        console.log('VaultPage: Clearing selected IDs');
+        setHashSelection('password', []);
+        sessionStorage.removeItem('markd_passwords_selected_ids');
+      }
     } catch (error) {
-      console.error('Error saving selected password:', error);
+      console.error('Error saving selected passwords:', error);
     }
   }, []);
 
-  // Load selected password from sessionStorage
-  const loadSelectedPassword = useCallback(async (passwordId: string, treeData: PasswordItem[]) => {
+  // Load selected passwords from sessionStorage (restore all selected items)
+  const loadSelectedPasswords = useCallback(async (selectedIds: string[], treeData: PasswordItem[]) => {
     try {
       // Find item in tree
       const findItem = (nodes: PasswordItem[], targetId: string): PasswordItem | null => {
@@ -234,48 +257,70 @@ const VaultPage: React.FC = () => {
         return null;
       };
       
-      const item = findItem(treeData, passwordId);
-      if (!item) {
-        saveSelectedPassword(null);
-        return;
-      }
+      // Find all items in tree
+      const foundItems: PasswordItem[] = [];
+      const pathsToExpand: string[][] = [];
       
-      // Expand parent folders
-      const findAndExpand = (nodes: PasswordItem[], targetId: string, path: string[] = []): boolean => {
+      const findItemWithPath = (nodes: PasswordItem[], targetId: string, path: string[] = []): PasswordItem | null => {
         for (const node of nodes) {
           const newPath = [...path, node.id];
           if (node.id === targetId) {
-            setExpanded(prev => {
-              const next = { ...prev };
-              for (let i = 0; i < newPath.length - 1; i++) {
-                next[newPath[i]] = true;
-              }
-              return next;
-            });
-            return true;
+            pathsToExpand.push(newPath);
+            return node;
           }
           if (node.children) {
-            if (findAndExpand(node.children, targetId, newPath)) {
-              return true;
-            }
+            const found = findItemWithPath(node.children, targetId, newPath);
+            if (found) return found;
           }
         }
-        return false;
+        return null;
       };
-      findAndExpand(treeData, passwordId);
       
-      // Select the item
-      setSelected([item]);
-      
-      // If it's a password (not folder), load details
-      if (item.type === 'password') {
-        await fetchPasswordDetail(passwordId);
+      // Find all selected items
+      for (const id of selectedIds) {
+        const item = findItemWithPath(treeData, id);
+        if (item) {
+          foundItems.push(item);
+        }
       }
+      
+      if (foundItems.length === 0) {
+        saveSelectedPasswords([]);
+        return;
+      }
+      
+      // Expand all parent folders first
+      const newExpanded: Record<string, boolean> = {};
+      pathsToExpand.forEach(path => {
+        for (let i = 0; i < path.length - 1; i++) {
+          newExpanded[path[i]] = true;
+        }
+      });
+      setExpanded(prev => ({ ...prev, ...newExpanded }));
+      
+      // Set flag to prevent saving during restoration
+      isRestoringRef.current = true;
+      
+      // Wait a bit for expansion to render, then select
+      setTimeout(async () => {
+        setSelected(foundItems);
+        
+        // Load details for the first password (if any)
+        const firstPassword = foundItems.find(item => item.type === 'password');
+        if (firstPassword) {
+          await fetchPasswordDetail(firstPassword.id);
+        }
+        
+        // Reset flag after a short delay
+        setTimeout(() => {
+          isRestoringRef.current = false;
+        }, 200);
+      }, 100);
     } catch (err) {
-      console.error('Error loading selected password:', err);
-      saveSelectedPassword(null);
+      console.error('Error loading selected passwords:', err);
+      saveSelectedPasswords([]);
     }
-  }, [saveSelectedPassword]);
+  }, [saveSelectedPasswords]);
 
   const fetchTree = useCallback(async (workspaceId: string) => {
     if (!workspaceId) return;
@@ -290,10 +335,30 @@ const VaultPage: React.FC = () => {
         prevTreeRef.current = treeData;
         console.log('Tree set:', treeData);
         
-        // Restore selected password from sessionStorage
-        const savedSelectedId = sessionStorage.getItem('markd_passwords_selected_id');
-        if (savedSelectedId && treeData.length > 0) {
-          await loadSelectedPassword(savedSelectedId, treeData);
+        // Restore selected passwords (try URL hash first, then sessionStorage)
+        let selectedIds: string[] = getHashSelection('password');
+        console.log('VaultPage: Restoring from hash:', selectedIds, 'treeData.length:', treeData.length);
+        
+        // Fallback to sessionStorage if no hash
+        if (selectedIds.length === 0) {
+          const savedSelectedIdsJson = sessionStorage.getItem('markd_passwords_selected_ids');
+          console.log('VaultPage: Restoring from sessionStorage, savedSelectedIdsJson:', savedSelectedIdsJson);
+          
+          if (savedSelectedIdsJson && treeData.length > 0) {
+            try {
+              selectedIds = JSON.parse(savedSelectedIdsJson);
+              console.log('VaultPage: Parsed selectedIds:', selectedIds);
+              // Update hash with sessionStorage value
+              setHashSelection('password', selectedIds);
+            } catch (e) {
+              console.error('Error parsing saved selected IDs:', e);
+            }
+          }
+        }
+        
+        if (selectedIds.length > 0 && treeData.length > 0) {
+          console.log('VaultPage: Restoring', selectedIds.length, 'items');
+          await loadSelectedPasswords(selectedIds, treeData);
         }
       } else {
         console.error('Failed to load tree:', result);
@@ -306,7 +371,7 @@ const VaultPage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [loadSelectedPassword]);
+  }, [loadSelectedPasswords]);
 
   // Fetch tree when workspace changes or when workspaces are loaded
   useEffect(() => {
@@ -319,6 +384,32 @@ const VaultPage: React.FC = () => {
       loadAllTags();
     }
   }, [currentWorkspace, fetchTree]);
+  
+  // Listen to hash changes (when navigating back to this module)
+  useEffect(() => {
+    const cleanup = onHashChange((selections) => {
+      const hashIds = selections.password;
+      if (hashIds.length > 0 && tree.length > 0) {
+        // Check if selection is already correct to avoid loop
+        const currentIds = selected.map(s => s.id).sort().join(',');
+        const hashIdsString = hashIds.sort().join(',');
+        if (currentIds === hashIdsString) {
+          return; // Already selected, no need to restore
+        }
+        
+        // Set flag to prevent saving during restoration
+        isRestoringRef.current = true;
+        loadSelectedPasswords(hashIds, tree).then(() => {
+          // Reset flag after restoration
+          setTimeout(() => {
+            isRestoringRef.current = false;
+          }, 200);
+        });
+      }
+    });
+    
+    return cleanup;
+  }, [tree, loadSelectedPasswords, selected]);
 
   // Load tags for a password
   const loadPasswordTags = useCallback(async (passwordId: string) => {
@@ -414,11 +505,9 @@ const VaultPage: React.FC = () => {
       fetchPasswordDetail(item.id);
     }
     
-    // Save selection to sessionStorage (only for single selection)
-    if (!event || (!event.ctrlKey && !event.metaKey && !event.shiftKey)) {
-      saveSelectedPassword(item.id);
-    }
-  }, [tree, flattenTree, lastSelectedIndex, selected, fetchPasswordDetail, saveSelectedPassword]);
+    // Save selection to sessionStorage (all selected items)
+    saveSelectedPasswords(selected.map(s => s.id));
+  }, [tree, flattenTree, lastSelectedIndex, selected, fetchPasswordDetail, saveSelectedPasswords]);
 
   const expandToAndSelect = useCallback(async (id: string, treeDataLocal: PasswordItem[]) => {
     const findPath = (nodes: PasswordItem[], targetId: string, path: string[] = []): string[] | null => {
@@ -731,8 +820,39 @@ const VaultPage: React.FC = () => {
           }
         }
 
+        // Preserve current selection before updating tree
+        const selectedIds = selected.map(s => s.id);
+        
         setTree(result.tree || []);
         prevTreeRef.current = result.tree || [];
+        
+        // Restore selection after tree update
+        if (selectedIds.length > 0 && (result.tree || []).length > 0) {
+          const findItem = (nodes: PasswordItem[], targetId: string): PasswordItem | null => {
+            for (const node of nodes) {
+              if (node.id === targetId) return node;
+              if (node.children) {
+                const found = findItem(node.children, targetId);
+                if (found) return found;
+              }
+            }
+            return null;
+          };
+          
+          const foundItems: PasswordItem[] = [];
+          for (const id of selectedIds) {
+            const item = findItem(result.tree || [], id);
+            if (item) foundItems.push(item);
+          }
+          
+          // Only update selection if we found at least one item
+          if (foundItems.length > 0) {
+            setSelected(foundItems);
+          } else if (selectedIds.length > 0) {
+            // Items were deleted, clear selection
+            setSelected([]);
+          }
+        }
       } catch (err) {
         console.error('Error reloading tree:', err);
       }
