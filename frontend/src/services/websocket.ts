@@ -30,6 +30,7 @@ class WebSocketService {
   private socket: Socket | null = null;
   private connectingPromise: Promise<void> | null = null;
   private connectionRefCount: number = 0;
+  private listenersRegistered: boolean = false;
   private treeUpdateCallbacks: Set<TreeUpdateCallback> = new Set();
   private treeChangedCallbacks: Set<TreeChangedCallback> = new Set();
   private lockUpdateCallbacks: Set<LockUpdateCallback> = new Set();
@@ -56,57 +57,9 @@ class WebSocketService {
   private schemaLockUpdateCallbacks: Set<SchemaLockUpdateCallback> = new Set();
   private schemaContentUpdatedCallbacks: Set<SchemaContentUpdatedCallback> = new Set();
 
-  connect() {
-    // Increment reference count (each module that needs websocket increments)
-    this.connectionRefCount++;
-    
-    // If already connected, just return
-    if (this.socket?.connected) {
-      return;
-    }
-    
-    // If a connection attempt is already in progress, wait for it
-    if (this.connectingPromise) {
-      return this.connectingPromise;
-    }
-    
-    // If socket exists but not connected, and we're within retry attempts, let Socket.IO handle it
-    if (this.socket && !this.socket.connected) {
-      return;
-    }
-
-    // Create new connection
-    this.connectingPromise = new Promise<void>((resolve) => {
-      this.socket = io({
-        path: '/socket.io',
-        transports: ['websocket', 'polling'],
-        reconnection: true,
-        reconnectionDelay: 2000,
-        reconnectionDelayMax: 10000,
-        reconnectionAttempts: 3, // Reduced to 3 attempts
-        timeout: 20000,
-        autoConnect: true,
-      });
-
-      this.socket.on('connect', () => {
-        this.connectingPromise = null;
-        resolve();
-      });
-
-      this.socket.on('disconnect', () => {
-        // Connection lost - Socket.IO will handle reconnection automatically
-      });
-      
-      this.socket.on('connect_error', (error) => {
-        // Connection failed - will retry automatically (limited attempts)
-        // Only log after all retries are exhausted
-        if (this.socket && !this.socket.connected) {
-          // Silent - let Socket.IO handle retries
-        }
-      });
-    });
-
-    return this.connectingPromise;
+  private registerListeners() {
+    if (!this.socket || this.listenersRegistered) return;
+    this.listenersRegistered = true;
 
     this.socket.on('tree_updated', (data: { tree: Document[] }) => {
       this.treeUpdateCallbacks.forEach(cb => cb(data.tree));
@@ -123,6 +76,7 @@ class WebSocketService {
     this.socket.on('user_editing', (data: { document_id: string; user_name: string }) => {
       this.userEditingCallbacks.forEach(cb => cb(data));
     });
+
     this.socket.on('document_content_updated', (data: { document_id: string; name?: string | null }) => {
       this.documentUpdatedCallbacks.forEach(cb => cb(data));
     });
@@ -183,6 +137,64 @@ class WebSocketService {
     });
   }
 
+  connect() {
+    // Increment reference count (each module that needs websocket increments)
+    this.connectionRefCount++;
+    
+    // If already connected, just return
+    if (this.socket?.connected) {
+      this.registerListeners();
+      return;
+    }
+    
+    // If a connection attempt is already in progress, wait for it
+    if (this.connectingPromise) {
+      this.registerListeners();
+      return this.connectingPromise;
+    }
+    
+    // If socket exists but not connected, and we're within retry attempts, let Socket.IO handle it
+    if (this.socket && !this.socket.connected) {
+      this.registerListeners();
+      return;
+    }
+
+    // Create new connection
+    this.connectingPromise = new Promise<void>((resolve) => {
+      this.listenersRegistered = false;
+      this.socket = io({
+        path: '/socket.io',
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionDelay: 2000,
+        reconnectionDelayMax: 10000,
+        reconnectionAttempts: 3, // Reduced to 3 attempts
+        timeout: 20000,
+        autoConnect: true,
+      });
+
+      this.socket.on('connect', () => {
+        this.connectingPromise = null;
+        resolve();
+      });
+
+      this.socket.on('disconnect', () => {
+        // Connection lost - Socket.IO will handle reconnection automatically
+      });
+      
+      this.socket.on('connect_error', (error) => {
+        // Connection failed - will retry automatically (limited attempts)
+        // Only log after all retries are exhausted
+        if (this.socket && !this.socket.connected) {
+          // Silent - let Socket.IO handle retries
+        }
+      });
+    });
+
+    this.registerListeners();
+    return this.connectingPromise;
+  }
+
   disconnect() {
     // Decrement reference count
     this.connectionRefCount = Math.max(0, this.connectionRefCount - 1);
@@ -192,6 +204,7 @@ class WebSocketService {
       this.socket.disconnect();
       this.socket = null;
       this.connectingPromise = null;
+      this.listenersRegistered = false;
     }
   }
 

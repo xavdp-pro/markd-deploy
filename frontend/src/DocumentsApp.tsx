@@ -971,8 +971,6 @@ function App() {
       await api.updateDocument(doc.id, { content: editContent });
       const userId = getUserId();
       await api.unlockDocument(doc.id, userId);
-      // Inform others via websocket as redundancy (server also emits)
-      websocket.notifyDocumentUpdated(doc.id, doc.name);
       
       setSelected(prev => prev.length > 0 ? [{ ...prev[0], content: editContent, locked_by: null }] : []);
       setEditMode(false);
