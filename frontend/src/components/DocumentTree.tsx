@@ -20,10 +20,13 @@ import {
   X,
   Maximize2,
   Minimize2,
+  FolderTree,
 } from 'lucide-react';
 import { Document, Tag as TagType } from '../types';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { useAuth } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
+import { useWorkspace } from '../contexts/WorkspaceContext';
 import ConfirmModal from './ConfirmModal';
 import InputModal from './InputModal';
 import TagFilter from './TagFilter';
@@ -55,6 +58,9 @@ interface DocumentTreeProps {
   allTags?: TagType[];
   selectedTags?: string[];
   onTagFilterChange?: (tagIds: string[]) => void;
+  mcpConfigs?: Record<string, any>; // folder_id -> config
+  onOpenMcpModal?: (folderId: string) => void;
+  workspaceId?: string;
 }
 
 interface ContextMenuProps {
@@ -71,6 +77,10 @@ interface ContextMenuProps {
   onUpload?: (parentId: string, file: File) => void;
   onUnlock?: (id: string) => void;
   readOnly?: boolean;
+  tree?: Document[];
+  workspaceId?: string;
+  onOpenMcpModal?: (folderId: string) => void;
+  mcpConfigs?: Record<string, any>;
 }
 
 const ContextMenu: React.FC<ContextMenuProps> = ({
@@ -86,8 +96,49 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
   onDownload,
   onUpload,
   onUnlock,
+  tree,
+  workspaceId,
+  onOpenMcpModal,
+  mcpConfigs,
 }) => {
   const { user } = useAuth();
+  const navigate = useNavigate();
+  
+  // Helper: Get full path of a node in the tree
+  const getNodePath = (nodeId: string, nodes: Document[] = tree || [], path: string[] = []): string[] | null => {
+    if (!nodes || nodes.length === 0) return null;
+    
+    for (const n of nodes) {
+      if (n.id === nodeId) {
+        // If it's root, return empty path
+        if (n.id === 'root') return [];
+        // Otherwise, include the node's name in the path
+        return [...path, n.name];
+      }
+      if (n.children && n.children.length > 0) {
+        // Build path: skip root, include others
+        const newPath = n.id === 'root' ? [] : [...path, n.name];
+        const result = getNodePath(nodeId, n.children, newPath);
+        if (result) return result;
+      }
+    }
+    return null;
+  };
+  
+  const handleConfigureMCP = () => {
+    if (onOpenMcpModal && node.type === 'folder') {
+      onOpenMcpModal(node.id);
+      onClose();
+    } else if (workspaceId && tree) {
+      // Fallback to navigation if modal not available
+      const pathParts = getNodePath(node.id, tree);
+      const destinationPath = pathParts && pathParts.length > 0 
+        ? pathParts.join('/') 
+        : '';
+      navigate(`/mcp-config?workspace_id=${workspaceId}&destination_path=${encodeURIComponent(destinationPath)}`);
+      onClose();
+    }
+  };
   const menuRef = useRef<HTMLDivElement>(null);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -192,6 +243,18 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             <Upload size={14} />
             Importer un fichier
           </button>
+          {workspaceId && node.type === 'folder' && (
+            <>
+              <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
+              <button
+                onClick={handleConfigureMCP}
+                className="w-full px-3 py-2 text-left text-sm text-blue-600 dark:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+              >
+                <FolderTree size={14} />
+                {mcpConfigs && mcpConfigs[node.id] ? 'Ouvrir le MCP' : 'Créer un MCP'}
+              </button>
+            </>
+          )}
           <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
         </>
       )}
@@ -393,6 +456,10 @@ interface TreeNodeProps {
   onDownload: (doc: Document) => void;
   onUpload?: (parentId: string, file: File) => void;
   onUnlock?: (id: string) => void;
+  tree?: Document[];
+  workspaceId?: string;
+  mcpConfigs?: Record<string, any>;
+  onOpenMcpModal?: (folderId: string) => void;
 }
 
 const TreeNode: React.FC<TreeNodeProps> = ({
@@ -410,10 +477,22 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   onDownload,
   onUpload,
   onUnlock,
+  tree,
+  workspaceId,
+  mcpConfigs = {},
+  onOpenMcpModal,
 }) => {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const isExpanded = expanded[node.id];
   const isSelected = selected.some(s => s.id === node.id);
+  
+  // Debug: log MCP config check for folders
+  if (node.type === 'folder' && mcpConfigs) {
+    const hasConfig = !!mcpConfigs[node.id];
+    if (hasConfig || node.name === 'TEST') {
+      console.log(`🔍 Folder "${node.name}" (id: ${node.id}): hasConfig=${hasConfig}, config=`, mcpConfigs[node.id]);
+    }
+  }
 
   const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
     id: node.id,
@@ -461,7 +540,10 @@ const TreeNode: React.FC<TreeNodeProps> = ({
         
         {node.type === 'folder' && (
           <button
-            onClick={(e) => { e.stopPropagation(); onToggleExpand(node.id); }}
+            onClick={(e) => { 
+              e.stopPropagation(); 
+              onToggleExpand(node.id);
+            }}
             className="p-0 text-gray-600 dark:text-gray-400"
             type="button"
           >
@@ -479,7 +561,14 @@ const TreeNode: React.FC<TreeNodeProps> = ({
               if (e.ctrlKey || e.metaKey || e.shiftKey) {
                 onSelect(node, e);
               } else {
-                onToggleExpand(node.id);
+                // If folder has MCP config, open MCP modal to edit
+                // If folder doesn't have MCP config, open MCP modal to create
+                if (onOpenMcpModal) {
+                  e.stopPropagation();
+                  onOpenMcpModal(node.id);
+                } else {
+                  onToggleExpand(node.id);
+                }
               }
             }
           }}
@@ -495,6 +584,20 @@ const TreeNode: React.FC<TreeNodeProps> = ({
           )}
           <div className="flex items-center gap-1.5 flex-1 min-w-0 text-sm">
             <span className="truncate text-gray-900 dark:text-gray-100">{node.name}</span>
+            {node.type === 'folder' && mcpConfigs && mcpConfigs[node.id] && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (onOpenMcpModal) onOpenMcpModal(node.id);
+                }}
+                className={`flex-shrink-0 w-3 h-3 rounded-full border-2 border-white dark:border-gray-800 shadow-sm ${
+                  mcpConfigs[node.id].is_active
+                    ? 'bg-green-500 hover:bg-green-600'
+                    : 'bg-gray-400 hover:bg-gray-500'
+                }`}
+                title={`MCP ${mcpConfigs[node.id].is_active ? 'actif' : 'inactif'} - Cliquer pour configurer`}
+              />
+            )}
             {node.locked_by && (
               <span className="flex items-center gap-0.5 text-red-600 text-[10px] whitespace-nowrap flex-shrink-0 font-medium">
                 <Lock size={10} className="flex-shrink-0" />
@@ -519,6 +622,10 @@ const TreeNode: React.FC<TreeNodeProps> = ({
           onDownload={onDownload}
           onUpload={onUpload}
           onUnlock={onUnlock}
+          tree={tree}
+          workspaceId={workspaceId}
+          onOpenMcpModal={onOpenMcpModal}
+          mcpConfigs={mcpConfigs}
         />
       )}
 
@@ -541,6 +648,8 @@ const TreeNode: React.FC<TreeNodeProps> = ({
               onDownload={onDownload}
               onUpload={onUpload}
               onUnlock={onUnlock}
+              tree={tree}
+              workspaceId={workspaceId}
             />
           ))}
         </div>
@@ -575,7 +684,11 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
   allTags = [],
   selectedTags = [],
   onTagFilterChange,
+  mcpConfigs = {},
+  onOpenMcpModal,
+  workspaceId,
 }) => {
+  const { currentWorkspace } = useWorkspace();
   const [inputModal, setInputModal] = useState<{
     isOpen: boolean;
     title: string;
@@ -807,12 +920,16 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
               onDownload={onDownload}
               onUpload={onUpload}
               onUnlock={onUnlock}
+              tree={tree}
+              workspaceId={currentWorkspace}
+              mcpConfigs={mcpConfigs}
+              onOpenMcpModal={onOpenMcpModal}
             />
           ))}
         </div>
         <div 
           ref={setRootDropRef}
-          className={`flex-1 min-h-[100px] cursor-context-menu transition-colors flex items-center justify-center ${
+          className={`flex-1 min-h-[100px] cursor-context-menu transition-colors flex items-center justify-center relative ${
             isRootOver ? 'bg-blue-50 dark:bg-blue-900/30 ring-2 ring-blue-300 dark:ring-blue-600 ring-inset' : 'hover:bg-gray-50 dark:hover:bg-gray-900'
           }`}
           onContextMenu={handleContextMenu}
@@ -830,6 +947,21 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
               </>
             )}
           </div>
+          {/* MCP Badge for root */}
+          {mcpConfigs['root'] && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onOpenMcpModal) onOpenMcpModal('root');
+              }}
+              className={`absolute top-2 right-2 flex-shrink-0 w-3 h-3 rounded-full border-2 border-white dark:border-gray-800 shadow-sm ${
+                mcpConfigs['root'].is_active
+                  ? 'bg-green-500 hover:bg-green-600'
+                  : 'bg-gray-400 hover:bg-gray-500'
+              }`}
+              title={`MCP ${mcpConfigs['root'].is_active ? 'actif' : 'inactif'} - Cliquer pour configurer`}
+            />
+          )}
         </div>
       </div>
       
@@ -889,6 +1021,21 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
             <Folder size={14} />
             Créer un dossier
           </button>
+          {workspaceId && onOpenMcpModal && (
+            <>
+              <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
+              <button
+                onClick={() => {
+                  onOpenMcpModal('root');
+                  closeContextMenu();
+                }}
+                className="w-full px-3 py-2 text-left text-sm text-blue-600 dark:text-blue-400 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+              >
+                <FolderTree size={14} />
+                {mcpConfigs && mcpConfigs['root'] ? 'Ouvrir le MCP' : 'Créer un MCP'}
+              </button>
+            </>
+          )}
         </div>
       )}
       

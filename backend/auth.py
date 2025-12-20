@@ -15,6 +15,8 @@ load_dotenv()
 # JWT Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
 ALGORITHM = "HS256"
+# Cookie secure flag - only True in production with HTTPS
+USE_SECURE_COOKIE = os.getenv("USE_SECURE_COOKIE", "false").lower() == "true"
 
 router = APIRouter(prefix="/api")
 
@@ -103,7 +105,7 @@ async def login(request: LoginRequest, response: Response):
             httponly=True,
             max_age=7 * 24 * 60 * 60,  # 7 jours en secondes
             samesite="lax",
-            secure=True  # Required for HTTPS
+            secure=USE_SECURE_COOKIE  # Only True in production with HTTPS
         )
         
         return {

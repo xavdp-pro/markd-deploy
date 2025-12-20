@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, File, UploadFile, Depends, Request, Cookie
+from fastapi import FastAPI, HTTPException, File, UploadFile, Depends, Request, Cookie, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -389,6 +389,12 @@ def build_tree(parent_id: Optional[str] = 'root', workspace_id: str = 'demo', de
 
 async def broadcast_tree_update():
     """Broadcast tree update signal to all connected clients - they will reload their current workspace"""
+    await sio.emit('tree_changed', {'action': 'reload'})
+
+async def delayed_broadcast_tree_update(delay_ms: int = 100):
+    """Broadcast tree update after a small delay to ensure HTTP response arrives first"""
+    import asyncio
+    await asyncio.sleep(delay_ms / 1000)  # Convert ms to seconds
     await sio.emit('tree_changed', {'action': 'reload'})
 
 async def broadcast_lock_update(document_id: str, lock_info: Optional[Dict] = None):
@@ -1082,9 +1088,10 @@ async def create_document(document: DocumentBase, request: Request, user: Dict =
             item_name=document.name
         )
         
-        await broadcast_tree_update()
-        
-        return {
+        # Prepare response first, then broadcast
+        # This ensures the client receives the response with the new ID
+        # before the WebSocket triggers a tree reload
+        response = {
             "success": True,
             "document": {
                 "id": doc_id,
@@ -1093,6 +1100,12 @@ async def create_document(document: DocumentBase, request: Request, user: Dict =
                 "parent_id": document.parent_id
             }
         }
+        
+        # Schedule broadcast after a small delay to ensure HTTP response arrives first
+        import asyncio
+        asyncio.create_task(delayed_broadcast_tree_update())
+        
+        return response
     except HTTPException:
         raise
     except Exception as e:
@@ -1494,9 +1507,30 @@ async def get_mcp_activity(limit: int = 100):
 
 # ===== MCP Configuration Endpoints =====
 
+import secrets
+import hashlib
+
+def generate_api_key():
+    """Generate a unique API key for MCP access"""
+    return f"mcp_{secrets.token_hex(16)}"
+
+def generate_api_secret():
+    """Generate a secure API secret"""
+    return secrets.token_hex(32)
+
+def hash_secret(secret: str) -> str:
+    """Hash the API secret for storage"""
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+def generate_mcp_token() -> str:
+    """Generate a unique MCP token for authentication"""
+    # Generate a secure token (64 characters)
+    return secrets.token_urlsafe(48)
+
 class MCPConfigBase(BaseModel):
     workspace_id: str
-    source_path: str
+    folder_id: Optional[str] = None  # ID of the folder in the document tree
+    source_path: Optional[str] = None  # Optional - can be set later
     destination_path: str = ''
     enabled: bool = True
 
@@ -1504,6 +1538,14 @@ class MCPConfigUpdate(BaseModel):
     source_path: Optional[str] = None
     destination_path: Optional[str] = None
     enabled: Optional[bool] = None
+    is_active: Optional[bool] = None
+
+class MCPAuthRequest(BaseModel):
+    api_key: str
+    api_secret: str
+
+class MCPTokenAuthRequest(BaseModel):
+    mcp_token: str
 
 @app.get("/api/mcp/configs")
 async def get_mcp_configs(request: Request, user: Dict = Depends(get_current_user)):
@@ -1511,7 +1553,8 @@ async def get_mcp_configs(request: Request, user: Dict = Depends(get_current_use
     try:
         query = """
             SELECT mc.id, mc.workspace_id, mc.source_path, mc.destination_path, 
-                   mc.enabled, mc.created_at, mc.updated_at,
+                   mc.enabled, mc.created_at, mc.updated_at, mc.api_key,
+                   mc.folder_id, mc.mcp_username, mc.is_active,
                    w.name as workspace_name
             FROM mcp_configs mc
             LEFT JOIN workspaces w ON mc.workspace_id = w.id
@@ -1550,30 +1593,53 @@ async def create_mcp_config(config: MCPConfigBase, request: Request, user: Dict 
                 detail="MCP requires 'write' or 'admin' permission on the workspace"
             )
         
-        # Vérifier qu'il n'existe pas déjà une config pour ce user/workspace/source_path
-        check_query = """
-            SELECT id FROM mcp_configs 
-            WHERE user_id = %s AND workspace_id = %s AND source_path = %s
-        """
-        existing = db.execute_query(check_query, (user['id'], config.workspace_id, config.source_path))
-        if existing:
-            raise HTTPException(
-                status_code=400,
-                detail="A configuration already exists for this user/workspace/source_path"
-            )
+        # Vérifier qu'il n'existe pas déjà une config pour ce user/workspace/destination_path
+        if config.source_path:
+            check_query = """
+                SELECT id FROM mcp_configs 
+                WHERE user_id = %s AND workspace_id = %s AND source_path = %s
+            """
+            existing = db.execute_query(check_query, (user['id'], config.workspace_id, config.source_path))
+            if existing:
+                raise HTTPException(
+                    status_code=400,
+                    detail="A configuration already exists for this user/workspace/source_path"
+                )
+        
+        # Générer automatiquement les credentials API
+        api_key = generate_api_key()
+        api_secret = generate_api_secret()
+        api_secret_hash = hash_secret(api_secret)
+        
+        # Générer automatiquement un token MCP unique
+        mcp_token = generate_mcp_token()
+        # Vérifier l'unicité du token (en comparant les hash)
+        while True:
+            mcp_token_hash = hashlib.sha256(mcp_token.encode()).hexdigest()
+            check_token = db.execute_query("SELECT id FROM mcp_configs WHERE mcp_token_hash = %s", (mcp_token_hash,))
+            if not check_token:
+                break
+            mcp_token = generate_mcp_token()
         
         config_id = str(uuid.uuid4())
         query = """
-            INSERT INTO mcp_configs (id, user_id, workspace_id, source_path, destination_path, enabled)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO mcp_configs (id, user_id, workspace_id, folder_id, source_path, destination_path, 
+                                     enabled, api_key, api_secret, mcp_token_hash, mcp_token, is_active)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         db.execute_update(query, (
             config_id,
             user['id'],
             config.workspace_id,
+            config.folder_id,
             config.source_path,
             config.destination_path,
-            config.enabled
+            config.enabled,
+            api_key,
+            api_secret_hash,  # On stocke le hash, pas le secret en clair
+            mcp_token_hash,  # On stocke le hash du token pour l'authentification
+            mcp_token,  # On stocke le token en clair pour l'API
+            True  # is_active par défaut
         ))
         
         return {
@@ -1581,10 +1647,16 @@ async def create_mcp_config(config: MCPConfigBase, request: Request, user: Dict 
             "config": {
                 "id": config_id,
                 "workspace_id": config.workspace_id,
+                "folder_id": config.folder_id,
                 "source_path": config.source_path,
                 "destination_path": config.destination_path,
-                "enabled": config.enabled
-            }
+                "enabled": config.enabled,
+                "is_active": True,
+                "api_key": api_key,
+                "api_secret": api_secret,  # Retourné UNE SEULE fois à la création (en clair)
+                "mcp_token": mcp_token  # Retourné UNE SEULE fois à la création (en clair)
+            },
+            "message": "⚠️ Conservez le api_secret et le mcp_token, ils ne seront plus jamais affichés !"
         }
     except HTTPException:
         raise
@@ -1628,6 +1700,10 @@ async def update_mcp_config(config_id: str, config: MCPConfigUpdate, request: Re
             updates.append("enabled = %s")
             params.append(config.enabled)
         
+        if config.is_active is not None:
+            updates.append("is_active = %s")
+            params.append(config.is_active)
+        
         if updates:
             params.append(config_id)
             query = f"UPDATE mcp_configs SET {', '.join(updates)} WHERE id = %s"
@@ -1658,6 +1734,227 @@ async def delete_mcp_config(config_id: str, request: Request, user: Dict = Depen
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/mcp/configs/{config_id}/regenerate")
+async def regenerate_mcp_credentials(config_id: str, request: Request, user: Dict = Depends(get_current_user)):
+    """Regenerate API credentials for an MCP configuration"""
+    try:
+        # Vérifier que la config existe et appartient à l'utilisateur
+        check_query = "SELECT workspace_id FROM mcp_configs WHERE id = %s AND user_id = %s"
+        existing = db.execute_query(check_query, (config_id, user['id']))
+        if not existing:
+            raise HTTPException(status_code=404, detail="Configuration not found")
+        
+        # Générer de nouveaux credentials API
+        api_key = generate_api_key()
+        api_secret = generate_api_secret()
+        api_secret_hash = hash_secret(api_secret)
+        
+        # Générer un nouveau token MCP
+        mcp_token = generate_mcp_token()
+        # Vérifier l'unicité du token
+        while True:
+            check_token = db.execute_query("SELECT id FROM mcp_configs WHERE mcp_token_hash = %s AND id != %s", (hashlib.sha256(mcp_token.encode()).hexdigest(), config_id))
+            if not check_token:
+                break
+            mcp_token = generate_mcp_token()
+        
+        mcp_token_hash = hashlib.sha256(mcp_token.encode()).hexdigest()
+        
+        query = "UPDATE mcp_configs SET api_key = %s, api_secret = %s, mcp_token_hash = %s, mcp_token = %s WHERE id = %s"
+        db.execute_update(query, (api_key, api_secret_hash, mcp_token_hash, mcp_token, config_id))
+        
+        return {
+            "success": True,
+            "api_key": api_key,
+            "api_secret": api_secret,  # Retourné UNE SEULE fois
+            "mcp_token": mcp_token,  # Retourné UNE SEULE fois
+            "message": "⚠️ Conservez le api_secret et le mcp_token, ils ne seront plus jamais affichés !"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/mcp/auth")
+async def mcp_authenticate(request: MCPAuthRequest):
+    """Authenticate MCP client using API credentials (no user login required)"""
+    try:
+        # Rechercher la config par api_key
+        query = """
+            SELECT mc.id, mc.user_id, mc.workspace_id, mc.source_path, mc.destination_path, 
+                   mc.enabled, mc.api_secret, u.username
+            FROM mcp_configs mc
+            JOIN users u ON mc.user_id = u.id
+            WHERE mc.api_key = %s AND mc.enabled = TRUE
+        """
+        config = db.execute_query(query, (request.api_key,))
+        
+        if not config:
+            raise HTTPException(status_code=401, detail="Invalid API key or configuration disabled")
+        
+        config = config[0]
+        
+        # Vérifier le secret
+        if config['api_secret'] != hash_secret(request.api_secret):
+            raise HTTPException(status_code=401, detail="Invalid API secret")
+        
+        # Générer un token JWT temporaire pour les opérations MCP
+        token_data = {
+            "user_id": config['user_id'],
+            "username": config['username'],
+            "mcp_config_id": config['id'],
+            "workspace_id": config['workspace_id'],
+            "exp": datetime.utcnow() + timedelta(hours=24)
+        }
+        token = jwt.encode(token_data, SECRET_KEY, algorithm=ALGORITHM)
+        
+        return {
+            "success": True,
+            "token": token,
+            "workspace_id": config['workspace_id'],
+            "source_path": config['source_path'],
+            "destination_path": config['destination_path'],
+            "expires_in": 86400  # 24 heures en secondes
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/mcp/token-auth")
+async def mcp_token_authenticate(request: MCPTokenAuthRequest):
+    """Authenticate MCP client using MCP token (no user login required)"""
+    try:
+        # Hash le token pour la recherche
+        token_hash = hashlib.sha256(request.mcp_token.encode()).hexdigest()
+        
+        # Rechercher la config par token hash
+        query = """
+            SELECT mc.id, mc.user_id, mc.workspace_id, mc.source_path, mc.destination_path, 
+                   mc.enabled, mc.is_active, u.username
+            FROM mcp_configs mc
+            JOIN users u ON mc.user_id = u.id
+            WHERE mc.mcp_token_hash = %s AND mc.enabled = TRUE AND mc.is_active = TRUE
+        """
+        config = db.execute_query(query, (token_hash,))
+        
+        if not config:
+            raise HTTPException(status_code=401, detail="Invalid MCP token or configuration disabled/inactive")
+        
+        config = config[0]
+        
+        # Générer un token JWT temporaire pour les opérations MCP
+        token_data = {
+            "user_id": config['user_id'],
+            "username": config['username'],
+            "mcp_config_id": config['id'],
+            "workspace_id": config['workspace_id'],
+            "exp": datetime.utcnow() + timedelta(hours=24)
+        }
+        token = jwt.encode(token_data, SECRET_KEY, algorithm=ALGORITHM)
+        
+        return {
+            "success": True,
+            "token": token,
+            "workspace_id": config['workspace_id'],
+            "source_path": config['source_path'],
+            "destination_path": config['destination_path'],
+            "expires_in": 86400  # 24 heures en secondes
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/mcp/configs/by-folder/{folder_id}")
+async def get_mcp_config_by_folder(folder_id: str, request: Request, user: Dict = Depends(get_current_user)):
+    """Get MCP configuration for a specific folder"""
+    try:
+        query = """
+            SELECT mc.id, mc.workspace_id, mc.source_path, mc.destination_path, 
+                   mc.enabled, mc.is_active, mc.created_at, mc.updated_at, mc.api_key,
+                   mc.folder_id, mc.mcp_token,
+                   w.name as workspace_name
+            FROM mcp_configs mc
+            LEFT JOIN workspaces w ON mc.workspace_id = w.id
+            WHERE mc.folder_id = %s AND mc.user_id = %s
+            LIMIT 1
+        """
+        configs = db.execute_query(query, (folder_id, user['id']))
+        
+        if not configs:
+            return {"success": True, "config": None}
+        
+        config = configs[0]
+        
+        # Vérifier les permissions
+        workspace_id = config['workspace_id']
+        try:
+            permission = await check_workspace_permission(workspace_id, user, 'read')
+            config['user_permission'] = permission
+            config['mcp_allowed'] = permission in ['write', 'admin']
+        except HTTPException:
+            config['user_permission'] = 'none'
+            config['mcp_allowed'] = False
+        
+        return {"success": True, "config": config}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/mcp/configs/by-workspace/{workspace_id}")
+async def get_mcp_configs_by_workspace(workspace_id: str, request: Request, user: Dict = Depends(get_current_user)):
+    """Get all MCP configurations for a specific workspace"""
+    try:
+        query = """
+            SELECT mc.id, mc.workspace_id, mc.source_path, mc.destination_path, 
+                   mc.enabled, mc.is_active, mc.created_at, mc.updated_at, mc.api_key,
+                   mc.folder_id, mc.mcp_token,
+                   w.name as workspace_name
+            FROM mcp_configs mc
+            LEFT JOIN workspaces w ON mc.workspace_id = w.id
+            WHERE mc.workspace_id = %s AND mc.user_id = %s
+            ORDER BY mc.created_at DESC
+        """
+        configs = db.execute_query(query, (workspace_id, user['id']))
+        
+        # Vérifier les permissions pour chaque config
+        for config in configs:
+            try:
+                permission = await check_workspace_permission(workspace_id, user, 'read')
+                config['user_permission'] = permission
+                config['mcp_allowed'] = permission in ['write', 'admin']
+            except HTTPException:
+                config['user_permission'] = 'none'
+                config['mcp_allowed'] = False
+        
+        return {"success": True, "configs": configs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/mcp/configs/{config_id}/toggle-active")
+async def toggle_mcp_config_active(config_id: str, request: Request, user: Dict = Depends(get_current_user)):
+    """Toggle is_active status of an MCP configuration"""
+    try:
+        # Vérifier que la config existe et appartient à l'utilisateur
+        check_query = "SELECT is_active FROM mcp_configs WHERE id = %s AND user_id = %s"
+        existing = db.execute_query(check_query, (config_id, user['id']))
+        if not existing:
+            raise HTTPException(status_code=404, detail="Configuration not found")
+        
+        new_status = not existing[0]['is_active']
+        query = "UPDATE mcp_configs SET is_active = %s WHERE id = %s"
+        db.execute_update(query, (new_status, config_id))
+        
+        return {
+            "success": True,
+            "is_active": new_status,
+            "message": f"Configuration {'activated' if new_status else 'deactivated'}"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/mcp/configs/check")
 async def check_mcp_permission(workspace_id: str, request: Request, user: Dict = Depends(get_current_user)):
     """Check if user has permission to use MCP on a workspace (requires write/admin)"""
@@ -1679,16 +1976,6 @@ async def check_mcp_permission(workspace_id: str, request: Request, user: Dict =
             "user_permission": "none",
             "mcp_allowed": False
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    try:
-        query = """
-            SELECT * FROM mcp_activity_log
-            ORDER BY created_at DESC
-            LIMIT %s
-        """
-        activities = db.execute_query(query, (limit,))
-        return {"success": True, "activities": activities}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

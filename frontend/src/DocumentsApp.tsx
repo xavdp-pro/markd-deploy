@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import toast from 'react-hot-toast';
 import { Document, Tag } from './types';
 import { api } from './services/api';
@@ -9,6 +9,7 @@ import { useAuth } from './contexts/AuthContext';
 import DocumentTree from './components/DocumentTree';
 import DocumentViewer from './components/DocumentViewer';
 import DocumentEditor from './components/DocumentEditor';
+import MCPConfigModal from './components/MCPConfigModal';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent } from '@dnd-kit/core';
 import { File, Folder, X, Trash2 } from 'lucide-react';
 import { getHashSelection, setHashSelection, onHashChange } from './utils/urlHash';
@@ -36,6 +37,23 @@ function App() {
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [documentTags, setDocumentTags] = useState<Record<string, Tag[]>>({});
   const [pendingSelection, setPendingSelection] = useState<string | null>(null);
+  const pendingSelectionRef = useRef<string | null>(null);
+  const expandedRef = useRef<Record<string, boolean>>({});
+  
+  // MCP Configuration state
+  const [mcpConfigs, setMcpConfigs] = useState<Record<string, any>>({}); // folder_id -> config
+  const [showMcpModal, setShowMcpModal] = useState(false);
+  const [mcpModalFolderId, setMcpModalFolderId] = useState<string | null>(null);
+  const [mcpModalConfig, setMcpModalConfig] = useState<any | null>(null);
+  const [mcpModalFolderPath, setMcpModalFolderPath] = useState<string | null>(null);
+  
+  // Keep refs in sync with state
+  useEffect(() => {
+    pendingSelectionRef.current = pendingSelection;
+  }, [pendingSelection]);
+  useEffect(() => {
+    expandedRef.current = expanded;
+  }, [expanded]);
   const prevTreeRef = React.useRef<Document[] | null>(null);
   const lastLocalChangeAtRef = React.useRef<number>(0);
   const processingHashRef = React.useRef<boolean>(false);
@@ -91,14 +109,17 @@ function App() {
         }
       }
       
-      if (node.type === 'folder' && node.children) {
+      if (node.type === 'folder') {
         // Filter children recursively
-        const filteredChildren = node.children
+        const filteredChildren = (node.children || [])
           .map(child => filterNode(child))
           .filter((child): child is Document => child !== null);
         
-        // Keep folder if it matches OR has matching children
-        if (nameMatches && filteredChildren.length > 0) {
+        // Keep folder if:
+        // 1. No search query (show all folders)
+        // 2. Name matches search query
+        // 3. Has matching children
+        if (!lowerQuery || nameMatches || filteredChildren.length > 0) {
           return {
             ...node,
             children: filteredChildren
@@ -182,13 +203,44 @@ function App() {
     return `User-${Math.random().toString(36).substr(2, 5)}`;
   }, []);
 
+  // Load MCP configs for current workspace
+  const loadMcpConfigs = useCallback(async () => {
+    if (!currentWorkspace) return;
+    try {
+      const response = await fetch(`/api/mcp/configs/by-workspace/${currentWorkspace}`, {
+        credentials: 'include'
+      });
+      const data = await response.json();
+      if (data.success) {
+        // Create a map: folder_id -> config
+        const configMap: Record<string, any> = {};
+        data.configs.forEach((config: any) => {
+          if (config.folder_id) {
+            configMap[config.folder_id] = config;
+            console.log(`📋 MCP Config mapped: folder_id=${config.folder_id}, is_active=${config.is_active}`);
+          } else {
+            console.warn('⚠️ MCP Config without folder_id:', config);
+          }
+        });
+        console.log(`📋 MCP Configs loaded for workspace ${currentWorkspace}:`, configMap);
+        console.log(`📋 Total configs: ${data.configs.length}, Mapped: ${Object.keys(configMap).length}`);
+        setMcpConfigs(configMap);
+      } else {
+        console.error('❌ Failed to load MCP configs:', data);
+      }
+    } catch (error) {
+      console.error('Error loading MCP configs:', error);
+    }
+  }, [currentWorkspace]);
+
   // Load tags when workspace changes
   useEffect(() => {
     if (currentWorkspace) {
       loadAllTags();
+      loadMcpConfigs();
       setSelectedTags([]);
     }
-  }, [currentWorkspace, loadAllTags]);
+  }, [currentWorkspace, loadAllTags, loadMcpConfigs]);
 
   // Load initial data
   useEffect(() => {
@@ -451,27 +503,108 @@ function App() {
   // Auto-select pending folder after tree is updated
   useEffect(() => {
     if (pendingSelection && tree.length > 0) {
-      const findAndSelectItem = (nodes: Document[], targetId: string): boolean => {
+      console.log('🟢 [PENDING SELECTION] Processing:', pendingSelection, 'Tree nodes:', tree.length);
+      
+      // Helper to find path to target node
+      const findPathToNode = (nodes: Document[], targetId: string, path: string[] = []): string[] | null => {
         for (const node of nodes) {
           if (node.id === targetId) {
-            // Select the folder (single selection for auto-select)
-            setSelected([node]);
-            setPendingSelection(null);
-            return true;
+            return path; // Return path to parent (not including target itself)
           }
           if (node.children) {
-            // Expand parent to show the item
-            if (node.type === 'folder') {
-              setExpanded(prev => ({ ...prev, [node.id]: true }));
-            }
-            if (findAndSelectItem(node.children, targetId)) {
-              return true;
-            }
+            const newPath = [...path, node.id];
+            const result = findPathToNode(node.children, targetId, newPath);
+            if (result) return result;
           }
         }
-        return false;
+        return null;
       };
-      findAndSelectItem(tree, pendingSelection);
+
+      // Find path to the target node
+      const pathToNode = findPathToNode(tree, pendingSelection);
+      console.log('🟢 [PENDING SELECTION] Path to node:', pathToNode);
+      
+      if (pathToNode) {
+        // Expand only the path to the node (not the whole tree)
+        setExpanded(prev => {
+          const newExpanded = { ...prev };
+          pathToNode.forEach(nodeId => {
+            newExpanded[nodeId] = true;
+          });
+          console.log('🟢 [PENDING SELECTION] Expanded path:', pathToNode, 'all expanded:', Object.keys(newExpanded));
+          return newExpanded;
+        });
+      } else {
+        console.warn('🟡 [PENDING SELECTION] Path to node not found, node might be at root');
+      }
+
+      // Then find and select the item - also expand parent if needed
+      const findAndSelectItem = (nodes: Document[], targetId: string, parentPath: string[] = []): Document | null => {
+        for (const node of nodes) {
+          if (node.id === targetId) {
+            console.log('✅ [PENDING SELECTION] Found folder:', node.name, node.id, 'type:', node.type, 'parentPath:', parentPath);
+            return node;
+          }
+          if (node.children) {
+            const newPath = [...parentPath, node.id];
+            const found = findAndSelectItem(node.children, targetId, newPath);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+      
+      // Find the node first
+      const foundNode = findAndSelectItem(tree, pendingSelection);
+      
+      if (foundNode) {
+        // Calculate parent path
+        const calculateParentPath = (nodes: Document[], targetId: string, path: string[] = []): string[] => {
+          for (const node of nodes) {
+            if (node.id === targetId) {
+              return path;
+            }
+            if (node.children) {
+              const newPath = [...path, node.id];
+              const result = calculateParentPath(node.children, targetId, newPath);
+              if (result.length >= 0 && (result.length > 0 || node.id === targetId)) {
+                return result;
+              }
+            }
+          }
+          return [];
+        };
+        
+        const parentPath = calculateParentPath(tree, pendingSelection);
+        console.log('✅ [PENDING SELECTION] Parent path calculated:', parentPath);
+        
+        // Expand all parents in the path
+        if (parentPath.length > 0) {
+          setExpanded(prev => {
+            const newExpanded = { ...prev };
+            parentPath.forEach(parentId => {
+              newExpanded[parentId] = true;
+            });
+            console.log('✅ [PENDING SELECTION] Expanded parent path:', parentPath);
+            return newExpanded;
+          });
+        }
+        
+        // Select the folder (single selection for auto-select)
+        // Use requestAnimationFrame to ensure DOM is updated
+        requestAnimationFrame(() => {
+          setSelected([foundNode]);
+          setPendingSelection(null);
+          pendingSelectionRef.current = null;
+          console.log('✅ [PENDING SELECTION] Selected folder:', foundNode.name, foundNode.id);
+        });
+      } else {
+        // Node not found in tree yet - this is expected when the folder was just created
+        // The WebSocket handler will reload the tree and then process pendingSelection
+        // So we just log and wait - don't clear pendingSelection here!
+        console.log('🟡 [PENDING SELECTION] Node not found in tree yet, waiting for WebSocket reload:', pendingSelection);
+        // DO NOT clear pendingSelection here - let the WebSocket handler process it
+      }
     }
   }, [pendingSelection, tree]);
 
@@ -766,23 +899,92 @@ function App() {
   }, [currentWorkspace]);
 
   const handleCreateFolder = useCallback(async (parentId: string, name: string) => {
+    console.log('🔵 [CREATE FOLDER] Starting - name:', name, 'parentId:', parentId, 'workspace:', currentWorkspace);
     try {
       lastLocalChangeAtRef.current = Date.now();
+      
+      // Calculate path to parent before creating (to expand only this path)
+      const findPathToNode = (nodes: Document[], targetId: string, path: string[] = []): string[] | null => {
+        for (const node of nodes) {
+          if (node.id === targetId) {
+            return path; // Return path to this node
+          }
+          if (node.children) {
+            const newPath = [...path, node.id];
+            const result = findPathToNode(node.children, targetId, newPath);
+            if (result) return result;
+          }
+        }
+        return null;
+      };
+      
+      // Expand path to parent before creating
+      if (parentId && parentId !== 'root') {
+        const pathToParent = findPathToNode(tree, parentId);
+        console.log('🔵 [CREATE FOLDER] Path to parent:', pathToParent);
+        if (pathToParent) {
+          // Update ref IMMEDIATELY (synchronous) before setExpanded (async)
+          const newExpanded = { ...expandedRef.current };
+          pathToParent.forEach(nodeId => {
+            newExpanded[nodeId] = true;
+          });
+          // Also expand the parent itself
+          newExpanded[parentId] = true;
+          expandedRef.current = newExpanded; // Update ref synchronously
+          setExpanded(newExpanded); // Update state
+          console.log('🔵 [CREATE FOLDER] Expanded path:', Object.keys(newExpanded));
+        } else {
+          // If path not found, at least expand the parent
+          console.log('🔵 [CREATE FOLDER] Path not found, expanding parent only:', parentId);
+          expandedRef.current = { ...expandedRef.current, [parentId]: true }; // Update ref synchronously
+          setExpanded(prev => ({ ...prev, [parentId]: true }));
+        }
+      }
+      
+      console.log('🔵 [CREATE FOLDER] Calling API with:', { name, type: 'folder', parent_id: parentId, workspace_id: currentWorkspace });
+      
       const result = await api.createDocument({
         name,
         type: 'folder',
         parent_id: parentId,
         workspace_id: currentWorkspace,
       });
+      
+      console.log('🔵 [CREATE FOLDER] API Response:', result);
+      
       // Store the created folder ID for auto-selection after tree update
       if (result.success && result.document) {
-        setPendingSelection(result.document.id);
+        const folderId = result.document.id;
+        console.log('✅ [CREATE FOLDER] SUCCESS - Folder created:', result.document.name, 'ID:', folderId, 'Parent:', parentId);
+        // Update both state and ref IMMEDIATELY with REAL ID (before WebSocket can arrive)
+        // Use a synchronous update to ensure the ref is set before any async operations
+        pendingSelectionRef.current = folderId;
+        setPendingSelection(folderId);
+        console.log('✅ [CREATE FOLDER] Set pendingSelection:', folderId, 'ref:', pendingSelectionRef.current);
+        // Ensure parent is expanded immediately (before WebSocket reload)
+        if (parentId && parentId !== 'root') {
+          // Update ref synchronously to ensure WebSocket handler sees the latest state
+          expandedRef.current = { ...expandedRef.current, [parentId]: true };
+          setExpanded(prev => {
+            const updated = { ...prev, [parentId]: true };
+            console.log('✅ [CREATE FOLDER] Expanded parent:', parentId, 'expanded state:', Object.keys(updated));
+            return updated;
+          });
+        } else if (parentId === 'root') {
+          // For root, ensure root is expanded
+          setExpanded(prev => ({ ...prev, root: true }));
+        }
+      } else {
+        console.error('❌ [CREATE FOLDER] FAILED - API response:', result);
+        pendingSelectionRef.current = null;
+        toast.error('Échec de la création du dossier');
       }
     } catch (err) {
-      console.error('Error creating folder:', err);
+      console.error('❌ [CREATE FOLDER] ERROR:', err);
       setError(err instanceof Error ? err.message : 'Failed to create folder');
+      toast.error('Erreur lors de la création du dossier');
     }
-  }, [currentWorkspace]);
+  }, [currentWorkspace, tree]);
 
   const handleDelete = useCallback(async (id: string) => {
     try {
@@ -1102,7 +1304,51 @@ function App() {
     const unsubscribeTreeChanged = websocket.onTreeChanged(async () => {
       // Reload current workspace when tree changes
       try {
+        // Preserve current expansion state and pending selection before reloading
+        // Use ref to get the LATEST expanded state (may have been updated by handleCreateFolder)
+        const currentExpanded = { ...expandedRef.current };
+        // Use ref to get the latest pendingSelection value (may have been set after WebSocket event)
+        // Skip if it's a temp ID (will be updated after API response)
+        const currentPendingSelection = (pendingSelectionRef.current && !pendingSelectionRef.current.startsWith('temp-')) 
+          ? pendingSelectionRef.current 
+          : (pendingSelection && !pendingSelection.startsWith('temp-') ? pendingSelection : null);
+        
+        console.log('🟡 [WEBSOCKET] tree_changed received - currentExpanded:', Object.keys(currentExpanded), 'pendingSelection:', currentPendingSelection, 'ref:', pendingSelectionRef.current);
+        
         const result = await api.getTree(currentWorkspace);
+        console.log('🟡 [WEBSOCKET] Tree reloaded - nodes:', result.tree?.length || 0);
+        
+        // Debug: Check if pendingSelection node exists in the reloaded tree and log folder-guides children
+        if (currentPendingSelection) {
+          const checkNodeExists = (nodes: Document[], targetId: string): boolean => {
+            for (const node of nodes) {
+              if (node.id === targetId) return true;
+              if (node.children && checkNodeExists(node.children, targetId)) return true;
+            }
+            return false;
+          };
+          const exists = checkNodeExists(result.tree, currentPendingSelection);
+          console.log('🟡 [WEBSOCKET] PendingSelection exists in reloaded tree:', exists, 'ID:', currentPendingSelection);
+          
+          // Log the structure of folder-guides to see what's inside
+          const findFolder = (nodes: Document[], folderId: string): Document | null => {
+            for (const node of nodes) {
+              if (node.id === folderId) return node;
+              if (node.children) {
+                const found = findFolder(node.children, folderId);
+                if (found) return found;
+              }
+            }
+            return null;
+          };
+          const parentFolder = findFolder(result.tree, 'folder-guides');
+          if (parentFolder) {
+            console.log('🟡 [WEBSOCKET] folder-guides found, children count:', parentFolder.children?.length || 0);
+            console.log('🟡 [WEBSOCKET] folder-guides children:', parentFolder.children?.map(c => ({ id: c.id, name: c.name, type: c.type })) || []);
+          } else {
+            console.warn('🟡 [WEBSOCKET] folder-guides not found in tree');
+          }
+        }
 
         // Build quick lookup maps to detect changes
         const flatten = (
@@ -1307,6 +1553,102 @@ function App() {
         setTree(result.tree);
         prevTreeRef.current = result.tree;
         treeRef.current = result.tree;
+        
+        // If we have a pending selection, process it FIRST before preserving expansion
+        if (currentPendingSelection && result.tree.length > 0) {
+          console.log('🟡 [WEBSOCKET] Processing pendingSelection:', currentPendingSelection);
+          
+          // Helper to find and select the node
+          const findAndSelectNode = (nodes: Document[], targetId: string, parentPath: string[] = []): Document | null => {
+            for (const node of nodes) {
+              if (node.id === targetId) {
+                console.log('✅ [WEBSOCKET] Found pendingSelection node:', node.name, node.id, 'parentPath:', parentPath);
+                return node;
+              }
+              if (node.children) {
+                const newPath = [...parentPath, node.id];
+                const found = findAndSelectNode(node.children, targetId, newPath);
+                if (found) return found;
+              }
+            }
+            return null;
+          };
+          
+          const foundNode = findAndSelectNode(result.tree, currentPendingSelection);
+          
+          if (foundNode) {
+            // Calculate path to node for expansion
+            const findPathToNode = (nodes: Document[], targetId: string, path: string[] = []): string[] | null => {
+              for (const node of nodes) {
+                if (node.id === targetId) {
+                  return path; // Return path to this node
+                }
+                if (node.children) {
+                  const newPath = [...path, node.id];
+                  const result = findPathToNode(node.children, targetId, newPath);
+                  if (result) return result;
+                }
+              }
+              return null;
+            };
+            
+            const pathToNode = findPathToNode(result.tree, currentPendingSelection);
+            console.log('🟡 [WEBSOCKET] Path to pendingSelection:', pathToNode);
+            
+            // Merge preserved expansion with path expansion
+            setExpanded(prev => {
+              const newExpanded = { ...prev, ...currentExpanded };
+              // Expand path to node
+              if (pathToNode !== null) {
+                pathToNode.forEach(nodeId => {
+                  newExpanded[nodeId] = true;
+                });
+              }
+              // If path is empty, ensure root is expanded
+              if (pathToNode === null || pathToNode.length === 0) {
+                newExpanded.root = true;
+              }
+              console.log('🟡 [WEBSOCKET] Expanded path:', pathToNode, 'final expanded:', Object.keys(newExpanded));
+              return newExpanded;
+            });
+            
+            // Select the node after a short delay to ensure DOM is updated
+            requestAnimationFrame(() => {
+              setSelected([foundNode]);
+              setPendingSelection(null);
+              pendingSelectionRef.current = null;
+              console.log('✅ [WEBSOCKET] Selected folder:', foundNode.name, foundNode.id);
+            });
+          } else {
+            console.warn('🟡 [WEBSOCKET] pendingSelection node not found in tree:', currentPendingSelection);
+            // Preserve expansion even if node not found
+            setExpanded(currentExpanded);
+            // Try to find parent and expand it
+            const findParent = (nodes: Document[], targetId: string, parentId: string | null = null): string | null => {
+              for (const node of nodes) {
+                if (node.id === targetId) {
+                  return parentId;
+                }
+                if (node.children) {
+                  const found = findParent(node.children, targetId, node.id);
+                  if (found !== null) return found;
+                }
+              }
+              return null;
+            };
+            const parentId = findParent(result.tree, currentPendingSelection);
+            if (parentId) {
+              console.log('🟡 [WEBSOCKET] Found parent, expanding:', parentId);
+              setExpanded(prev => ({ ...prev, [parentId]: true }));
+            } else {
+              console.warn('🟡 [WEBSOCKET] Node not found in tree yet, might need to wait');
+            }
+          }
+        } else {
+          // No pending selection, just preserve expansion
+          setExpanded(currentExpanded);
+          console.log('🟡 [WEBSOCKET] Preserved expansion:', Object.keys(currentExpanded));
+        }
       } catch (err) {
         console.error('Error reloading tree:', err);
       }
@@ -1463,6 +1805,65 @@ function App() {
   
   const activeNode = activeId ? findNode(tree, activeId) : null;
 
+  // Helper function to get folder path
+  const getFolderPath = useCallback((folderId: string, treeData: Document[]): string => {
+    if (folderId === 'root') {
+      return '/';
+    }
+    
+    const buildPath = (itemId: string, nodes: Document[], parentPath: string = ''): string | null => {
+      for (const node of nodes) {
+        const currentPath = parentPath ? `${parentPath}/${node.name}` : node.name;
+        if (node.id === itemId) {
+          return currentPath;
+        }
+        if (node.children && node.children.length > 0) {
+          const found = buildPath(itemId, node.children, currentPath);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    
+    const path = buildPath(folderId, treeData);
+    return path ? `/${path}` : '/';
+  }, []);
+
+  // Handle MCP modal
+  const handleOpenMcpModal = useCallback(async (folderId: string) => {
+    setMcpModalFolderId(folderId);
+    
+    // Calculate folder path
+    const folderPath = getFolderPath(folderId, tree);
+    setMcpModalFolderPath(folderPath);
+    
+    // Try to load existing config
+    try {
+      const response = await fetch(`/api/mcp/configs/by-folder/${folderId}`, {
+        credentials: 'include'
+      });
+      const data = await response.json();
+      if (data.success && data.config) {
+        setMcpModalConfig(data.config);
+      } else {
+        setMcpModalConfig(null);
+      }
+    } catch (error) {
+      console.error('Error loading MCP config:', error);
+      setMcpModalConfig(null);
+    }
+    
+    setShowMcpModal(true);
+  }, [tree, getFolderPath]);
+
+  const handleCloseMcpModal = useCallback(() => {
+    setShowMcpModal(false);
+    setMcpModalFolderId(null);
+    setMcpModalConfig(null);
+    setMcpModalFolderPath(null);
+    loadMcpConfigs(); // Reload configs after modal closes
+  }, [loadMcpConfigs]);
+
   return (
     <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div 
@@ -1498,6 +1899,9 @@ function App() {
             allTags={allTags}
             selectedTags={selectedTags}
             onTagFilterChange={setSelectedTags}
+            mcpConfigs={mcpConfigs}
+            onOpenMcpModal={handleOpenMcpModal}
+            workspaceId={currentWorkspace}
           />
         </div>
         
@@ -1570,6 +1974,17 @@ function App() {
           </div>
         ) : null}
       </DragOverlay>
+      
+      {/* MCP Configuration Modal */}
+      {showMcpModal && mcpModalFolderId && (
+        <MCPConfigModal
+          folderId={mcpModalFolderId}
+          config={mcpModalConfig}
+          workspaceId={currentWorkspace}
+          folderPath={mcpModalFolderPath || '/'}
+          onClose={handleCloseMcpModal}
+        />
+      )}
     </DndContext>
   );
 }
