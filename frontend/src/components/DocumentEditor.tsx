@@ -6,7 +6,8 @@ import toast from 'react-hot-toast';
 import TagSelector from './TagSelector';
 import { api } from '../services/api';
 import PresenceBar from './PresenceBar';
-import { CursorOverlay, StreamingIndicator } from './RemoteCursor';
+import { StreamingIndicator } from './RemoteCursor';
+import CollaborativeCursors from './CollaborativeCursors';
 import { useCollaborativeEditing } from '../hooks/useCollaborativeEditing';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -27,6 +28,7 @@ const DocumentEditor: React.FC<DocumentEditorProps> = ({
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const editorContainerRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [tags, setTags] = useState<TagType[]>([]);
@@ -132,10 +134,13 @@ const DocumentEditor: React.FC<DocumentEditorProps> = ({
     }
   }, [content, getLineAndColumn, updateCursorPosition]);
 
-  // Listen for selection changes in the editor
+  // Listen for selection changes in the editor and capture textarea ref
   useEffect(() => {
     const textarea = editorContainerRef.current?.querySelector('textarea');
     if (textarea) {
+      // Store textarea ref for cursor overlay
+      (textareaRef as React.MutableRefObject<HTMLTextAreaElement>).current = textarea;
+      
       textarea.addEventListener('select', handleSelectionChange);
       textarea.addEventListener('click', handleSelectionChange);
       textarea.addEventListener('keyup', handleSelectionChange);
@@ -393,12 +398,15 @@ const DocumentEditor: React.FC<DocumentEditorProps> = ({
         
         {/* Editor container with cursor overlay */}
         <div ref={editorContainerRef} className="relative h-full">
-          {/* Remote cursors overlay */}
-          <CursorOverlay 
-            users={mappedPresenceUsers}
-            currentUserId={user?.id}
-            content={content}
-          />
+          {/* Remote cursors overlay - positioned over the textarea */}
+          {textareaRef.current && (
+            <CollaborativeCursors 
+              users={mappedPresenceUsers}
+              currentUserId={user?.id}
+              textareaRef={textareaRef}
+              content={content}
+            />
+          )}
           
           <MDEditor
             value={content}
