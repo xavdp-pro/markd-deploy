@@ -73,6 +73,17 @@ const PresenceAvatar: React.FC<PresenceAvatarProps> = ({ user, isCurrentUser }) 
         border: `2px solid ${user.color}`,
       }}
     >
+      {/* Type badge (WEB or MCP) */}
+      <span 
+        className={`text-[9px] font-bold px-1 py-0.5 rounded ${
+          user.is_agent 
+            ? 'bg-purple-500 text-white' 
+            : 'bg-blue-500 text-white'
+        }`}
+      >
+        {user.is_agent ? 'MCP' : 'WEB'}
+      </span>
+      
       {/* Avatar */}
       <div 
         className="w-6 h-6 rounded-full flex items-center justify-center text-white text-xs font-bold"
@@ -96,10 +107,13 @@ const PresenceAvatar: React.FC<PresenceAvatarProps> = ({ user, isCurrentUser }) 
       
       {/* Tooltip with more info */}
       <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">
-        <div className="font-semibold">{user.username}</div>
-        {user.is_agent && (
-          <div className="text-gray-300">🤖 {user.agent_name || 'AI Agent'}</div>
-        )}
+        <div className="font-semibold">
+          {user.is_agent ? '🤖 ' : '👤 '}
+          {user.username}
+        </div>
+        <div className="text-gray-300 text-[10px] mt-0.5">
+          {user.is_agent ? `Agent MCP: ${user.agent_name || 'AI Agent'}` : 'Utilisateur Web'}
+        </div>
         {user.cursor_line !== undefined && (
           <div className="text-gray-400 mt-1">
             Ligne {user.cursor_line}, Col {user.cursor_column || 0}

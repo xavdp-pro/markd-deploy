@@ -187,3 +187,69 @@ textarea {
 .dark textarea {
   scrollbar-color: #4b5563 transparent;
 }
+
+/* ===== Collaborative Editing Animations ===== */
+
+/* Fade in animation for cursor labels */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+/* Slide up animation for streaming indicator */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out;
+}
+
+/* Typing dots animation */
+@keyframes typing-bounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+/* Remote cursor highlight animation */
+@keyframes cursor-glow {
+  0%, 100% {
+    box-shadow: 0 0 4px currentColor;
+  }
+  50% {
+    box-shadow: 0 0 8px currentColor;
+  }
+}
+
+.animate-cursor-glow {
+  animation: cursor-glow 1.5s ease-in-out infinite;
+}
+
+/* Selection highlight for remote users */
+.remote-selection {
+  position: absolute;
+  pointer-events: none;
+  opacity: 0.3;
+  z-index: 20;
+}

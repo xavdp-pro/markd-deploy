@@ -132,7 +132,10 @@ def get_user_color(document_id: str, user_id: str, is_agent: bool = False, agent
 async def join_document(sid: str, document_id: str, user_info: Dict) -> List[Dict]:
     """
     User joins a document for collaborative editing
-    Returns list of current users in the document
+    Returns list of current users in the document (deduplicated by user_id)
+    
+    Note: MCP agents use REST API and don't have real Socket.IO connections,
+    so we skip room operations for them (sid starts with 'mcp_')
     """
     global document_presence
     
@@ -143,6 +146,22 @@ async def join_document(sid: str, document_id: str, user_info: Dict) -> List[Dic
     username = user_info.get('username', 'Anonymous')
     is_agent = user_info.get('is_agent', False)
     agent_name = user_info.get('agent_name')
+    is_mcp_agent = sid.startswith('mcp_')
+    
+    # Remove any existing sessions for this user_id in this document (deduplication)
+    sids_to_remove = []
+    for existing_sid, existing_presence in document_presence[document_id].items():
+        if existing_presence.user_id == user_id and existing_sid != sid:
+            sids_to_remove.append(existing_sid)
+    
+    for old_sid in sids_to_remove:
+        del document_presence[document_id][old_sid]
+        # Only try to leave room for real Socket.IO connections
+        if sio and not old_sid.startswith('mcp_'):
+            try:
+                await sio.leave_room(old_sid, f"doc_{document_id}")
+            except:
+                pass  # Old session might already be disconnected
     
     color = get_user_color(document_id, user_id, is_agent, agent_name)
     
@@ -156,18 +175,19 @@ async def join_document(sid: str, document_id: str, user_info: Dict) -> List[Dic
     
     document_presence[document_id][sid] = presence
     
-    # Join Socket.IO room
+    # Join Socket.IO room (only for real Socket.IO connections)
+    if sio and not is_mcp_agent:
+        await sio.enter_room(sid, f"doc_{document_id}")
+    
+    # Broadcast to all users that someone joined
     if sio:
-        sio.enter_room(sid, f"doc_{document_id}")
-        
-        # Broadcast to others that someone joined
         await sio.emit('presence:join', {
             'document_id': document_id,
             'user': presence.to_dict()
-        }, room=f"doc_{document_id}", skip_sid=sid)
+        }, room=f"doc_{document_id}")
     
-    # Return current users
-    return [p.to_dict() for p in document_presence[document_id].values()]
+    # Return current users (deduplicated by user_id)
+    return get_deduplicated_users(document_id)
 
 
 async def leave_document(sid: str, document_id: str) -> None:
@@ -184,11 +204,14 @@ async def leave_document(sid: str, document_id: str) -> None:
             if document_id in document_color_index:
                 del document_color_index[document_id]
         
-        # Leave Socket.IO room
+        is_mcp_agent = sid.startswith('mcp_')
+        
+        # Leave Socket.IO room (only for real Socket.IO connections)
+        if sio and not is_mcp_agent:
+            await sio.leave_room(sid, f"doc_{document_id}")
+        
+        # Broadcast to others that someone left
         if sio:
-            sio.leave_room(sid, f"doc_{document_id}")
-            
-            # Broadcast to others that someone left
             await sio.emit('presence:leave', {
                 'document_id': document_id,
                 'user_id': user.user_id,
@@ -238,11 +261,66 @@ async def update_cursor_position(sid: str, document_id: str, position: Dict) -> 
             }, room=f"doc_{document_id}", skip_sid=sid)
 
 
-async def get_document_presence(document_id: str) -> List[Dict]:
-    """Get all users currently in a document"""
+def get_deduplicated_users(document_id: str) -> List[Dict]:
+    """
+    Get users deduplicated by unique key (user_id + is_agent).
+    This allows the same user to appear both as web user and MCP agent.
+    """
     if document_id not in document_presence:
         return []
-    return [p.to_dict() for p in document_presence[document_id].values()]
+    
+    # Group by unique key (user_id + is_agent), keep the most recent (last added)
+    users_by_key: Dict[str, UserPresence] = {}
+    for presence in document_presence[document_id].values():
+        # Create unique key: user_id for web users, user_id_agent for MCP agents
+        key = f"{presence.user_id}_agent" if presence.is_agent else presence.user_id
+        users_by_key[key] = presence
+    
+    return [p.to_dict() for p in users_by_key.values()]
+
+
+async def get_document_presence(document_id: str) -> List[Dict]:
+    """Get all users currently in a document (deduplicated)"""
+    return get_deduplicated_users(document_id)
+
+
+async def cleanup_stale_presence(max_age_seconds: int = 60) -> int:
+    """
+    Clean up stale presence entries (users who haven't updated in max_age_seconds)
+    Returns number of cleaned entries
+    """
+    global document_presence
+    
+    now = datetime.utcnow()
+    cleaned = 0
+    
+    for doc_id in list(document_presence.keys()):
+        sids_to_remove = []
+        for sid, presence in document_presence[doc_id].items():
+            age = (now - presence.last_activity).total_seconds()
+            if age > max_age_seconds:
+                sids_to_remove.append(sid)
+        
+        for sid in sids_to_remove:
+            user = document_presence[doc_id][sid]
+            del document_presence[doc_id][sid]
+            cleaned += 1
+            
+            # Notify others
+            if sio:
+                await sio.emit('presence:leave', {
+                    'document_id': doc_id,
+                    'user_id': user.user_id,
+                    'username': user.username
+                }, room=f"doc_{doc_id}")
+        
+        # Clean up empty documents
+        if not document_presence[doc_id]:
+            del document_presence[doc_id]
+            if doc_id in document_color_index:
+                del document_color_index[doc_id]
+    
+    return cleaned
 
 
 # ===== Streaming Management (for AI agents) =====

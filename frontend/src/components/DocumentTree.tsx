@@ -639,6 +639,8 @@ const TreeNode: React.FC<TreeNodeProps> = ({
               onUnlock={onUnlock}
               tree={tree}
               workspaceId={workspaceId}
+              mcpConfigs={mcpConfigs}
+              onOpenMcpModal={onOpenMcpModal}
             />
           ))}
         </div>

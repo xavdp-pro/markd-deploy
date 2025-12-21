@@ -1,10 +1,14 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import MDEditor from '@uiw/react-md-editor';
 import { Document, Tag as TagType } from '../types';
 import { Image, Upload, Tag } from 'lucide-react';
 import toast from 'react-hot-toast';
 import TagSelector from './TagSelector';
 import { api } from '../services/api';
+import PresenceBar from './PresenceBar';
+import { CursorOverlay, StreamingIndicator } from './RemoteCursor';
+import { useCollaborativeEditing } from '../hooks/useCollaborativeEditing';
+import { useAuth } from '../contexts/AuthContext';
 
 interface DocumentEditorProps {
   document: Document;
@@ -22,13 +26,127 @@ const DocumentEditor: React.FC<DocumentEditorProps> = ({
   onCancel,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const editorContainerRef = useRef<HTMLDivElement>(null);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [tags, setTags] = useState<TagType[]>([]);
   const [availableTags, setAvailableTags] = useState<TagType[]>([]);
   
+  // Auth context for user info
+  const { user } = useAuth();
+  
   // Detect dark mode
   const isDarkMode = typeof window !== 'undefined' && window.document.documentElement.classList.contains('dark');
+  
+  // Track if we're receiving remote content (to avoid echo)
+  const isReceivingRemoteContent = useRef(false);
+  const lastLocalChangeTime = useRef(0);
+  
+  // Handle streaming content updates from remote agents
+  const handleStreamChunk = useCallback((chunk: string, position: number, agentName: string) => {
+    // For streaming, we append to the current content
+    isReceivingRemoteContent.current = true;
+    onContentChange(content + chunk);
+    setTimeout(() => { isReceivingRemoteContent.current = false; }, 100);
+  }, [content, onContentChange]);
+  
+  // Handle remote content changes from other users
+  const handleRemoteContentChange = useCallback((newContent: string) => {
+    // Only apply if we haven't made a local change recently (avoid conflicts)
+    const now = Date.now();
+    if (now - lastLocalChangeTime.current > 500) {
+      isReceivingRemoteContent.current = true;
+      onContentChange(newContent);
+      setTimeout(() => { isReceivingRemoteContent.current = false; }, 100);
+    }
+  }, [onContentChange]);
+
+  // Collaborative editing hook
+  const {
+    users: presenceUsers,
+    isConnected,
+    streamingSessions,
+    updateCursorPosition,
+    broadcastContentChange,
+    joinDocument,
+    leaveDocument,
+  } = useCollaborativeEditing({
+    documentId: document.id,
+    userId: user?.id || '',
+    username: user?.username || 'Anonymous',
+    onStreamChunk: handleStreamChunk,
+    onContentChange: handleRemoteContentChange,
+  });
+  
+  // Track typing state for remote users
+  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
+
+  // Join document on mount, leave on unmount
+  useEffect(() => {
+    if (document.id && user?.id) {
+      joinDocument();
+      return () => {
+        leaveDocument();
+      };
+    }
+  }, [document.id, user?.id, joinDocument, leaveDocument]);
+
+  // Calculate line and column from cursor position
+  const getLineAndColumn = useCallback((text: string, position: number) => {
+    const lines = text.substring(0, position).split('\n');
+    const line = lines.length;
+    const column = lines[lines.length - 1].length;
+    return { line, column };
+  }, []);
+
+  // Track cursor position in editor
+  const handleEditorChange = useCallback((value: string | undefined) => {
+    // Skip if this is a remote change being applied
+    if (isReceivingRemoteContent.current) {
+      return;
+    }
+    
+    const newContent = value || '';
+    lastLocalChangeTime.current = Date.now();
+    onContentChange(newContent);
+    
+    // Try to get cursor position from the textarea
+    const textarea = editorContainerRef.current?.querySelector('textarea');
+    if (textarea) {
+      const position = textarea.selectionStart || 0;
+      const { line, column } = getLineAndColumn(newContent, position);
+      updateCursorPosition(line, column, position, textarea.selectionStart, textarea.selectionEnd);
+      
+      // Broadcast content change to other users (debounced slightly)
+      broadcastContentChange(newContent, position);
+    }
+  }, [onContentChange, getLineAndColumn, updateCursorPosition, broadcastContentChange]);
+
+  // Handle cursor movement (selection change)
+  const handleSelectionChange = useCallback(() => {
+    const textarea = editorContainerRef.current?.querySelector('textarea');
+    if (textarea && content) {
+      const position = textarea.selectionStart || 0;
+      const { line, column } = getLineAndColumn(content, position);
+      updateCursorPosition(line, column, position, textarea.selectionStart, textarea.selectionEnd);
+    }
+  }, [content, getLineAndColumn, updateCursorPosition]);
+
+  // Listen for selection changes in the editor
+  useEffect(() => {
+    const textarea = editorContainerRef.current?.querySelector('textarea');
+    if (textarea) {
+      textarea.addEventListener('select', handleSelectionChange);
+      textarea.addEventListener('click', handleSelectionChange);
+      textarea.addEventListener('keyup', handleSelectionChange);
+      
+      return () => {
+        textarea.removeEventListener('select', handleSelectionChange);
+        textarea.removeEventListener('click', handleSelectionChange);
+        textarea.removeEventListener('keyup', handleSelectionChange);
+      };
+    }
+  }, [handleSelectionChange]);
   
   useEffect(() => {
     if (document.id) {
@@ -163,11 +281,42 @@ const DocumentEditor: React.FC<DocumentEditorProps> = ({
     }
   };
 
+  // Map presence users for components
+  const mappedPresenceUsers = presenceUsers.map(u => ({
+    user_id: u.user_id,
+    username: u.username,
+    color: u.color,
+    is_agent: u.is_agent,
+    agent_name: u.agent_name,
+    cursor_position: u.cursor_position,
+    cursor_line: u.cursor_line,
+    cursor_column: u.cursor_column,
+    is_typing: typingUsers.has(u.user_id),
+  }));
+
+  // Find active streaming session for indicator
+  const activeStreaming = streamingSessions.length > 0 ? streamingSessions[0] : null;
+
   return (
     <>
+      {/* Presence Bar - shows connected users */}
+      <PresenceBar 
+        users={mappedPresenceUsers}
+        currentUserId={user?.id}
+        documentName={document.name}
+      />
+      
       <div className="p-4 border-b bg-white dark:bg-gray-800 dark:border-gray-700">
         <div className="flex items-center justify-between mb-3">
-        <h2 className="font-bold text-lg text-gray-900 dark:text-white">{document.name}</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="font-bold text-lg text-gray-900 dark:text-white">{document.name}</h2>
+          {isConnected && (
+            <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
+              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+              Temps réel
+            </span>
+          )}
+        </div>
         <div className="flex gap-2">
           <input
             ref={fileInputRef}
@@ -241,16 +390,36 @@ const DocumentEditor: React.FC<DocumentEditorProps> = ({
             </div>
           </div>
         )}
-        <MDEditor
-          value={content}
-          onChange={(val) => onContentChange(val || '')}
-          height="100%"
-          data-color-mode={isDarkMode ? 'dark' : 'light'}
-          preview="edit"
-          hideToolbar={false}
-          extraCommands={[]}
-        />
+        
+        {/* Editor container with cursor overlay */}
+        <div ref={editorContainerRef} className="relative h-full">
+          {/* Remote cursors overlay */}
+          <CursorOverlay 
+            users={mappedPresenceUsers}
+            currentUserId={user?.id}
+            content={content}
+          />
+          
+          <MDEditor
+            value={content}
+            onChange={handleEditorChange}
+            height="100%"
+            data-color-mode={isDarkMode ? 'dark' : 'light'}
+            preview="edit"
+            hideToolbar={false}
+            extraCommands={[]}
+          />
+        </div>
       </div>
+      
+      {/* Streaming indicator - shows when an AI agent is writing */}
+      {activeStreaming && (
+        <StreamingIndicator
+          agentName={activeStreaming.agent_name}
+          color={activeStreaming.color || '#9333EA'}
+          position={activeStreaming.position}
+        />
+      )}
     </>
   );
 };

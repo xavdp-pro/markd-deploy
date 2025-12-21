@@ -6,6 +6,7 @@ from typing import Optional, List, Dict, Any
 import socketio
 import uvicorn
 import os
+import asyncio
 from dotenv import load_dotenv
 import uuid
 from datetime import datetime, timedelta
@@ -23,6 +24,7 @@ load_dotenv()
 
 # Constants
 LOCK_TIMEOUT_MINUTES = 30
+LOCKS_ENABLED = False  # Set to False to disable document locking (collaborative editing mode)
 
 # JWT Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
@@ -486,6 +488,22 @@ async def cursor_update(sid, data):
     })
 
 @sio.event
+async def content_change(sid, data):
+    """Broadcast content change to all users in the document (real-time sync)"""
+    document_id = data.get('document_id')
+    if not document_id:
+        return
+    
+    # Broadcast to all users in the document except the sender
+    await sio.emit('content:change', {
+        'document_id': document_id,
+        'content': data.get('content'),
+        'cursor_position': data.get('cursor_position'),
+        'user_id': data.get('user_id'),
+        'username': data.get('username'),
+    }, room=f"doc_{document_id}", skip_sid=sid)
+
+@sio.event
 async def task_activity_updated(sid, data):
     """Broadcast task activity updates to all clients except sender"""
     await sio.emit('task_activity_updated', data, skip_sid=sid)
@@ -719,6 +737,21 @@ def ensure_default_setup():
 async def startup_event():
     """Initialize default workspace and permissions on startup"""
     ensure_default_setup()
+    
+    # Start background task for cleaning stale presence
+    asyncio.create_task(presence_cleanup_task())
+
+
+async def presence_cleanup_task():
+    """Background task to periodically clean stale presence entries"""
+    while True:
+        try:
+            await asyncio.sleep(60)  # Run every 60 seconds
+            cleaned = await collaborative.cleanup_stale_presence(max_age_seconds=120)
+            if cleaned > 0:
+                print(f"[Presence] Cleaned {cleaned} stale presence entries")
+        except Exception as e:
+            print(f"[Presence] Cleanup error: {e}")
 
 # ===== REST API Endpoints =====
 
@@ -1281,11 +1314,30 @@ async def copy_document(document_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 # ===== Lock Management =====
+# Note: Locks are disabled by default for collaborative editing mode.
+# Set LOCKS_ENABLED = True to enable traditional document locking.
+
+@app.get("/api/locks/status")
+async def get_locks_status():
+    """Get the current lock configuration status"""
+    return {
+        "success": True,
+        "locks_enabled": LOCKS_ENABLED,
+        "mode": "collaborative" if not LOCKS_ENABLED else "locking"
+    }
 
 @app.post("/api/documents/{document_id}/lock")
 async def lock_document(document_id: str, lock_req: LockRequest):
-    """Lock document for editing"""
+    """Lock document for editing (no-op if locks are disabled)"""
     try:
+        # If locks are disabled, always return success (collaborative mode)
+        if not LOCKS_ENABLED:
+            return {
+                "success": True,
+                "message": "Collaborative mode - locks disabled",
+                "collaborative_mode": True
+            }
+        
         # Check if already locked
         check_query = "SELECT user_id, user_name, locked_at FROM document_locks WHERE document_id = %s"
         existing = db.execute_query(check_query, (document_id,))
@@ -1330,8 +1382,12 @@ async def lock_document(document_id: str, lock_req: LockRequest):
 
 @app.post("/api/documents/{document_id}/heartbeat")
 async def heartbeat_document(document_id: str, user: Dict = Depends(get_current_user)):
-    """Update lock timestamp to prevent expiration"""
+    """Update lock timestamp to prevent expiration (no-op if locks are disabled)"""
     try:
+        # If locks are disabled, always return success
+        if not LOCKS_ENABLED:
+            return {"success": True, "message": "Collaborative mode - heartbeat not needed"}
+        
         user_id = str(user['id'])
         # Check if user owns the lock
         check_query = "SELECT user_id FROM document_locks WHERE document_id = %s"
@@ -1353,8 +1409,12 @@ async def heartbeat_document(document_id: str, user: Dict = Depends(get_current_
 
 @app.delete("/api/documents/{document_id}/lock")
 async def unlock_document(document_id: str, user_id: str):
-    """Unlock document"""
+    """Unlock document (no-op if locks are disabled)"""
     try:
+        # If locks are disabled, always return success
+        if not LOCKS_ENABLED:
+            return {"success": True, "message": "Collaborative mode - unlock not needed"}
+        
         query = "DELETE FROM document_locks WHERE document_id = %s AND user_id = %s"
         affected = db.execute_update(query, (document_id, user_id))
         
@@ -2085,6 +2145,47 @@ async def document_content_updated(sid, data):
         }, skip_sid=sid)
     except Exception:
         pass
+
+@sio.event
+async def presence_heartbeat(sid, data):
+    """Update user's last activity timestamp to keep presence alive"""
+    try:
+        document_id = data.get('document_id')
+        if document_id and document_id in collaborative.document_presence:
+            if sid in collaborative.document_presence[document_id]:
+                from datetime import datetime
+                collaborative.document_presence[document_id][sid].last_activity = datetime.utcnow()
+    except Exception:
+        pass
+
+@sio.event
+async def content_change(sid, data):
+    """Broadcast content change to all users in the document"""
+    try:
+        document_id = data.get('document_id')
+        if not document_id:
+            return
+        
+        # Get user info from presence
+        user_info = {}
+        if document_id in collaborative.document_presence and sid in collaborative.document_presence[document_id]:
+            presence = collaborative.document_presence[document_id][sid]
+            user_info = {
+                'user_id': presence.user_id,
+                'username': presence.username,
+                'color': presence.color,
+                'is_agent': presence.is_agent,
+            }
+        
+        # Broadcast to all other users in the document
+        await sio.emit('content:change', {
+            'document_id': document_id,
+            'content': data.get('content'),
+            'cursor_position': data.get('cursor_position'),
+            **user_info,
+        }, room=f"doc_{document_id}", skip_sid=sid)
+    except Exception as e:
+        print(f"[Content Change] Error: {e}")
 
 # ===== Task Management WebSocket Events =====
 

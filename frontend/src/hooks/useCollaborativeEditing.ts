@@ -18,13 +18,15 @@ interface UseCollaborativeEditingOptions {
   username: string;
   onContentChange?: (content: string) => void;
   onStreamChunk?: (chunk: string, position: number, agentName: string) => void;
+  onRemoteContentChange?: (content: string) => void;
 }
 
 interface UseCollaborativeEditingReturn {
   users: PresenceUser[];
   isConnected: boolean;
   streamingSessions: StreamingSession[];
-  updateCursorPosition: (line: number, column: number, position: number) => void;
+  updateCursorPosition: (line: number, column: number, position: number, selectionStart?: number, selectionEnd?: number) => void;
+  broadcastContentChange: (newContent: string, cursorPosition: number) => void;
   joinDocument: () => void;
   leaveDocument: () => void;
 }
@@ -37,6 +39,7 @@ export function useCollaborativeEditing({
   username,
   onContentChange,
   onStreamChunk,
+  onRemoteContentChange,
 }: UseCollaborativeEditingOptions): UseCollaborativeEditingReturn {
   const [users, setUsers] = useState<PresenceUser[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -73,6 +76,16 @@ export function useCollaborativeEditing({
       console.log('[Collaborative] Disconnected from server');
     });
 
+    // Heartbeat to keep presence alive (every 30 seconds)
+    const heartbeatInterval = setInterval(() => {
+      if (socket.connected && hasJoinedRef.current) {
+        socket.emit('presence_heartbeat', {
+          document_id: documentId,
+          user_id: userId,
+        });
+      }
+    }, 30000);
+
     // Presence events
     socket.on('presence:list', (data: { document_id: string; users: PresenceUser[] }) => {
       if (data.document_id === documentId) {
@@ -83,9 +96,13 @@ export function useCollaborativeEditing({
     socket.on('presence:join', (data: { document_id: string; user: PresenceUser }) => {
       if (data.document_id === documentId) {
         setUsers(prev => {
-          // Avoid duplicates
-          if (prev.some(u => u.user_id === data.user.user_id)) {
-            return prev;
+          // Check if user already exists
+          const existingIndex = prev.findIndex(u => u.user_id === data.user.user_id);
+          if (existingIndex >= 0) {
+            // Update existing user (important for is_agent flag)
+            const updated = [...prev];
+            updated[existingIndex] = data.user;
+            return updated;
           }
           return [...prev, data.user];
         });
@@ -154,16 +171,40 @@ export function useCollaborativeEditing({
       }
     });
 
-    // Content change events
+    // Content change events from other users
     socket.on('content:change', (data: {
       document_id: string;
       content?: string;
       text?: string;
       position?: number;
       change_type?: string;
+      user_id?: string;
+      username?: string;
     }) => {
-      if (data.document_id === documentId && onContentChange && data.content) {
-        onContentChange(data.content);
+      if (data.document_id === documentId && data.content) {
+        // Mark the user as typing
+        if (data.user_id) {
+          setUsers(prev => prev.map(u => 
+            u.user_id === data.user_id 
+              ? { ...u, is_typing: true } 
+              : u
+          ));
+          // Clear typing indicator after 2 seconds
+          setTimeout(() => {
+            setUsers(prev => prev.map(u => 
+              u.user_id === data.user_id 
+                ? { ...u, is_typing: false } 
+                : u
+            ));
+          }, 2000);
+        }
+        
+        // Use the dedicated remote content change handler if available
+        if (onRemoteContentChange) {
+          onRemoteContentChange(data.content);
+        } else if (onContentChange) {
+          onContentChange(data.content);
+        }
       }
     });
 
@@ -177,13 +218,14 @@ export function useCollaborativeEditing({
     });
 
     return () => {
+      clearInterval(heartbeatInterval);
       if (hasJoinedRef.current) {
         socket.emit('leave_document', { document_id: documentId });
       }
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [documentId]);
+  }, [documentId, userId]);
 
   const joinDocumentInternal = useCallback(() => {
     if (socketRef.current && documentId && userId) {
@@ -216,7 +258,9 @@ export function useCollaborativeEditing({
   const updateCursorPosition = useCallback((
     line: number,
     column: number,
-    position: number
+    position: number,
+    selectionStart?: number,
+    selectionEnd?: number
   ) => {
     if (socketRef.current && documentId && hasJoinedRef.current) {
       socketRef.current.emit('cursor_update', {
@@ -224,15 +268,34 @@ export function useCollaborativeEditing({
         line,
         column,
         position,
+        selection_start: selectionStart,
+        selection_end: selectionEnd,
       });
     }
   }, [documentId]);
+
+  // Broadcast content change to other users
+  const broadcastContentChange = useCallback((
+    newContent: string,
+    cursorPosition: number
+  ) => {
+    if (socketRef.current && documentId && hasJoinedRef.current) {
+      socketRef.current.emit('content_change', {
+        document_id: documentId,
+        content: newContent,
+        cursor_position: cursorPosition,
+        user_id: userId,
+        username: username,
+      });
+    }
+  }, [documentId, userId, username]);
 
   return {
     users,
     isConnected,
     streamingSessions,
     updateCursorPosition,
+    broadcastContentChange,
     joinDocument,
     leaveDocument,
   };
