@@ -1846,7 +1846,43 @@ function App() {
       if (data.success && data.config) {
         setMcpModalConfig(data.config);
       } else {
-        setMcpModalConfig(null);
+        // No config exists, create it automatically
+        try {
+          // Ensure destination_path starts with "/"
+          let destPath = folderPath || '';
+          if (destPath && !destPath.startsWith('/')) {
+            destPath = '/' + destPath;
+          } else if (!destPath || folderId === 'root') {
+            destPath = '/';
+          }
+          
+          const createResponse = await fetch('/api/mcp/configs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              workspace_id: currentWorkspace,
+              folder_id: folderId,
+              source_path: null,
+              destination_path: destPath,
+              enabled: true,
+              is_active: true
+            })
+          });
+          
+          const createData = await createResponse.json();
+          if (createData.success && createData.config) {
+            setMcpModalConfig(createData.config);
+            // Reload MCP configs to update the badge
+            loadMcpConfigs();
+          } else {
+            console.error('Error creating MCP config:', createData);
+            setMcpModalConfig(null);
+          }
+        } catch (createError) {
+          console.error('Error creating MCP config:', createError);
+          setMcpModalConfig(null);
+        }
       }
     } catch (error) {
       console.error('Error loading MCP config:', error);
@@ -1854,7 +1890,7 @@ function App() {
     }
     
     setShowMcpModal(true);
-  }, [tree, getFolderPath]);
+  }, [tree, getFolderPath, loadMcpConfigs, currentWorkspace]);
 
   const handleCloseMcpModal = useCallback(() => {
     setShowMcpModal(false);

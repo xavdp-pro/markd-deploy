@@ -11,6 +11,7 @@ import EmailTestPage from './pages/EmailTestPage';
 import ProfilePage from './pages/ProfilePage';
 import SettingsPage from './pages/SettingsPage';
 import MCPConfigPage from './pages/MCPConfigPage';
+import MCPAdminPage from './pages/MCPAdminPage';
 import WorkspacesAdmin from './pages/WorkspacesAdmin';
 import GroupsAdmin from './pages/GroupsAdmin';
 import TagsAdmin from './pages/TagsAdmin';
@@ -67,6 +68,14 @@ function AppContent() {
           element={
             <ProtectedRoute>
               <EmailTestPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/mcp"
+          element={
+            <ProtectedRoute>
+              <MCPAdminPage />
             </ProtectedRoute>
           }
         />

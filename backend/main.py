@@ -72,6 +72,10 @@ app.include_router(settings_router)
 from admin_routes import router as admin_router
 app.include_router(admin_router)
 
+# Include MCP streaming routes
+from mcp_streaming import router as mcp_streaming_router
+app.include_router(mcp_streaming_router)
+
 
 # Socket.IO server
 sio = socketio.AsyncServer(
@@ -87,6 +91,10 @@ socket_app = socketio.ASGIApp(sio, app)
 # Initialize shared WebSocket broadcasts
 from websocket_broadcasts import set_sio
 set_sio(sio)
+
+# Initialize collaborative module
+from collaborative import set_sio as set_collaborative_sio
+set_collaborative_sio(sio)
 
 # ===== Upload Configuration =====
 
@@ -404,9 +412,11 @@ async def broadcast_lock_update(document_id: str, lock_info: Optional[Dict] = No
         'locked_by': lock_info
     })
 
-# Presence Management
+# Presence Management - using collaborative module
+import collaborative
+
+# Legacy connected users tracking (for backward compatibility)
 connected_users: Dict[str, Dict] = {} # sid -> user_info
-document_presence: Dict[str, Dict[str, Dict]] = {} # document_id -> {sid: user_info}
 
 @sio.event
 async def connect(sid, environ):
@@ -416,42 +426,38 @@ async def connect(sid, environ):
 @sio.event
 async def disconnect(sid):
     # print(f"Client disconnected: {sid}")
-    # Remove user from presence
+    # Remove user from presence using collaborative module
+    await collaborative.leave_all_documents(sid)
+    
+    # Legacy cleanup
     if sid in connected_users:
         del connected_users[sid]
-    
-    # Remove from all documents
-    for doc_id, users in document_presence.items():
-        if sid in users:
-            del users[sid]
-            # Broadcast updated list
-            await sio.emit('presence_updated', {
-                'document_id': doc_id,
-                'users': list(users.values())
-            }, room=f"doc_{doc_id}")
 
 @sio.event
 async def join_document(sid, data):
-    """Join a document room for presence"""
+    """Join a document room for collaborative editing"""
     document_id = data.get('document_id')
     user_info = data.get('user')
     
     if not document_id or not user_info:
         return
-        
-    sio.enter_room(sid, f"doc_{document_id}")
     
-    if document_id not in document_presence:
-        document_presence[document_id] = {}
-        
-    # Store user presence with sid as key to handle multiple tabs/devices
-    document_presence[document_id][sid] = user_info
+    # Use collaborative module
+    users = await collaborative.join_document(sid, document_id, user_info)
+    
+    # Legacy tracking
     connected_users[sid] = user_info
     
-    # Broadcast to room
+    # Send current users to the joining client
+    await sio.emit('presence:list', {
+        'document_id': document_id,
+        'users': users
+    }, room=sid)
+    
+    # Also emit legacy event for backward compatibility
     await sio.emit('presence_updated', {
         'document_id': document_id,
-        'users': list(document_presence[document_id].values())
+        'users': users
     }, room=f"doc_{document_id}")
 
 @sio.event
@@ -460,16 +466,24 @@ async def leave_document(sid, data):
     document_id = data.get('document_id')
     if not document_id:
         return
-        
-    sio.leave_room(sid, f"doc_{document_id}")
     
-    if document_id in document_presence and sid in document_presence[document_id]:
-        del document_presence[document_id][sid]
-        
-        await sio.emit('presence_updated', {
-            'document_id': document_id,
-            'users': list(document_presence[document_id].values())
-        }, room=f"doc_{document_id}")
+    # Use collaborative module
+    await collaborative.leave_document(sid, document_id)
+
+@sio.event
+async def cursor_update(sid, data):
+    """Update cursor position for collaborative editing"""
+    document_id = data.get('document_id')
+    if not document_id:
+        return
+    
+    await collaborative.update_cursor_position(sid, document_id, {
+        'position': data.get('position'),
+        'line': data.get('line'),
+        'column': data.get('column'),
+        'selection_start': data.get('selection_start'),
+        'selection_end': data.get('selection_end')
+    })
 
 @sio.event
 async def task_activity_updated(sid, data):
@@ -1554,10 +1568,14 @@ async def get_mcp_configs(request: Request, user: Dict = Depends(get_current_use
         query = """
             SELECT mc.id, mc.workspace_id, mc.source_path, mc.destination_path, 
                    mc.enabled, mc.created_at, mc.updated_at, mc.api_key,
-                   mc.folder_id, mc.mcp_username, mc.is_active,
-                   w.name as workspace_name
+                   mc.folder_id, mc.mcp_token, mc.is_active,
+                   w.name as workspace_name,
+                   u.username,
+                   d.name as folder_name
             FROM mcp_configs mc
             LEFT JOIN workspaces w ON mc.workspace_id = w.id
+            LEFT JOIN users u ON mc.user_id = u.id
+            LEFT JOIN documents d ON mc.folder_id = d.id
             WHERE mc.user_id = %s
             ORDER BY mc.created_at DESC
         """
@@ -1593,7 +1611,20 @@ async def create_mcp_config(config: MCPConfigBase, request: Request, user: Dict 
                 detail="MCP requires 'write' or 'admin' permission on the workspace"
             )
         
-        # Vérifier qu'il n'existe pas déjà une config pour ce user/workspace/destination_path
+        # Vérifier qu'il n'existe pas déjà une config pour ce user/workspace/folder_id
+        if config.folder_id:
+            check_query = """
+                SELECT id FROM mcp_configs 
+                WHERE user_id = %s AND workspace_id = %s AND folder_id = %s
+            """
+            existing = db.execute_query(check_query, (user['id'], config.workspace_id, config.folder_id))
+            if existing:
+                raise HTTPException(
+                    status_code=400,
+                    detail="A configuration already exists for this folder"
+                )
+        
+        # Vérifier qu'il n'existe pas déjà une config pour ce user/workspace/destination_path (si source_path est fourni)
         if config.source_path:
             check_query = """
                 SELECT id FROM mcp_configs 

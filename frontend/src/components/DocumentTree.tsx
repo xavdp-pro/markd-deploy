@@ -557,19 +557,8 @@ const TreeNode: React.FC<TreeNodeProps> = ({
             if (node.type === 'file') {
               onSelect(node, e);
             } else {
-              // For folders, only toggle expand on simple click, but allow selection with Ctrl/Shift
-              if (e.ctrlKey || e.metaKey || e.shiftKey) {
-                onSelect(node, e);
-              } else {
-                // If folder has MCP config, open MCP modal to edit
-                // If folder doesn't have MCP config, open MCP modal to create
-                if (onOpenMcpModal) {
-                  e.stopPropagation();
-                  onOpenMcpModal(node.id);
-                } else {
-                  onToggleExpand(node.id);
-                }
-              }
+              // For folders, select on click
+              onSelect(node, e);
             }
           }}
         >

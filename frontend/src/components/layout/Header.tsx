@@ -322,6 +322,16 @@ const Header: React.FC = () => {
                     <Mail className="w-4 h-4" />
                     Test Email
                   </button>
+                  <button
+                    onClick={() => {
+                      navigate('/admin/mcp');
+                      setShowMenu(false);
+                    }}
+                    className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+                  >
+                    <FolderTree className="w-4 h-4" />
+                    Admin MCP
+                  </button>
                 </>
               )}
 

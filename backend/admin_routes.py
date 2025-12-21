@@ -7,6 +7,7 @@ from typing import Optional, Dict, List
 from pydantic import BaseModel
 from auth import get_current_user
 from activity_logger import get_activity_logs, get_activity_stats
+from database import db
 
 router = APIRouter()
 
@@ -184,3 +185,33 @@ async def export_activity_logs(
     except Exception as e:
         print(f"Error exporting activity logs: {e}")
         raise HTTPException(status_code=500, detail="Failed to export activity logs")
+
+@router.get("/api/admin/mcp/configs")
+async def get_all_mcp_configs(
+    user: Dict = Depends(get_current_user)
+):
+    """
+    Récupère toutes les configurations MCP (Admin uniquement)
+    """
+    if user.get('role') != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    try:
+        query = """
+            SELECT mc.id, mc.workspace_id, mc.source_path, mc.destination_path, 
+                   mc.enabled, mc.created_at, mc.updated_at, mc.api_key,
+                   mc.folder_id, mc.mcp_token, mc.is_active, mc.user_id,
+                   w.name as workspace_name,
+                   u.username,
+                   d.name as folder_name
+            FROM mcp_configs mc
+            LEFT JOIN workspaces w ON mc.workspace_id = w.id
+            LEFT JOIN users u ON mc.user_id = u.id
+            LEFT JOIN documents d ON mc.folder_id = d.id
+            ORDER BY mc.created_at DESC
+        """
+        configs = db.execute_query(query)
+        
+        return {"success": True, "configs": configs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
