@@ -9,10 +9,12 @@ import { useAuth } from './contexts/AuthContext';
 import DocumentTree from './components/DocumentTree';
 import DocumentViewer from './components/DocumentViewer';
 import DocumentEditor from './components/DocumentEditor';
+import CollaborativeEditor from './components/CollaborativeEditor';
 import MCPConfigModal from './components/MCPConfigModal';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent } from '@dnd-kit/core';
 import { File, Folder, X, Trash2 } from 'lucide-react';
 import { getHashSelection, setHashSelection, onHashChange } from './utils/urlHash';
+import { USE_COLLABORATIVE_EDITING } from './config/features';
 
 function App() {
   const { user } = useAuth();
@@ -39,14 +41,14 @@ function App() {
   const [pendingSelection, setPendingSelection] = useState<string | null>(null);
   const pendingSelectionRef = useRef<string | null>(null);
   const expandedRef = useRef<Record<string, boolean>>({});
-  
+
   // MCP Configuration state
   const [mcpConfigs, setMcpConfigs] = useState<Record<string, any>>({}); // folder_id -> config
   const [showMcpModal, setShowMcpModal] = useState(false);
   const [mcpModalFolderId, setMcpModalFolderId] = useState<string | null>(null);
   const [mcpModalConfig, setMcpModalConfig] = useState<any | null>(null);
   const [mcpModalFolderPath, setMcpModalFolderPath] = useState<string | null>(null);
-  
+
   // Keep refs in sync with state
   useEffect(() => {
     pendingSelectionRef.current = pendingSelection;
@@ -60,7 +62,7 @@ function App() {
   const userInitiatedSelectionRef = React.useRef<boolean>(false);
   const treeRef = React.useRef<Document[]>([]);
   const selectedRef = React.useRef<Document[]>([]);
-  
+
   // Load all tags for filter
   const loadAllTags = useCallback(async () => {
     try {
@@ -72,7 +74,7 @@ function App() {
       console.error('Error loading tags:', error);
     }
   }, []);
-  
+
   // Load tags for a document
   const loadDocumentTags = useCallback(async (documentId: string) => {
     if (documentTags[documentId]) return; // Already loaded
@@ -85,15 +87,15 @@ function App() {
       console.error('Error loading document tags:', error);
     }
   }, [documentTags]);
-  
+
   // Filter tree based on search query and tags - Show results in their hierarchy
   const filterTree = useCallback((nodes: Document[], query: string, tagIds: string[]): Document[] => {
     const lowerQuery = query.trim().toLowerCase();
     const hasTagFilter = tagIds.length > 0;
-    
+
     const filterNode = (node: Document): Document | null => {
       const nameMatches = !lowerQuery || node.name.toLowerCase().includes(lowerQuery);
-      
+
       // Check tag filter for files
       let tagMatches = true;
       if (hasTagFilter && node.type === 'file') {
@@ -108,13 +110,13 @@ function App() {
           tagMatches = true; // Include until tags are loaded
         }
       }
-      
+
       if (node.type === 'folder') {
         // Filter children recursively
         const filteredChildren = (node.children || [])
           .map(child => filterNode(child))
           .filter((child): child is Document => child !== null);
-        
+
         // Keep folder if:
         // 1. No search query (show all folders)
         // 2. Name matches search query
@@ -129,15 +131,15 @@ function App() {
         // Keep file if it matches search and tags
         return node;
       }
-      
+
       return null;
     };
-    
+
     return nodes
       .map(node => filterNode(node))
       .filter((node): node is Document => node !== null);
   }, [documentTags, loadDocumentTags]);
-  
+
   // Auto-expand folders when searching or filtering by tags
   useEffect(() => {
     if (searchQuery.trim() || selectedTags.length > 0) {
@@ -152,29 +154,29 @@ function App() {
         });
         return acc;
       };
-      
+
       const filteredTree = filterTree(tree, searchQuery, selectedTags);
       setExpanded({ root: true, ...expandAll(filteredTree) });
     }
   }, [searchQuery, selectedTags, tree, filterTree]);
-  
+
   const filteredTree = filterTree(tree, searchQuery, selectedTags);
-  
+
   // Keep refs in sync with state
   useEffect(() => {
     treeRef.current = tree;
   }, [tree]);
-  
+
   useEffect(() => {
     selectedRef.current = selected;
   }, [selected]);
-  
+
   // Clear search and collapse tree
   const handleClearSearch = () => {
     setSearchQuery('');
     setExpanded({ root: true }); // Collapse all except root
   };
-  
+
   // Get user info dynamically
   const getUserId = useCallback(() => {
     const storedUser = localStorage.getItem('markd_user');
@@ -189,7 +191,7 @@ function App() {
     const fallbackId = `user-${Math.random().toString(36).substr(2, 9)}`;
     return fallbackId;
   }, []);
-  
+
   const getUserName = useCallback(() => {
     const storedUser = localStorage.getItem('markd_user');
     if (storedUser) {
@@ -247,7 +249,7 @@ function App() {
     const loadData = async () => {
       try {
         setLoading(true);
-        
+
         // Load tree from API with workspace
         const result = await api.getTree(currentWorkspace);
         setTree(result.tree);
@@ -258,20 +260,20 @@ function App() {
         const sessionState = sessionStorageService.loadState();
         if (sessionState) {
           setExpanded(sessionState.expandedNodes);
-          
+
           // Restore tree width if exists
           const savedWidth = localStorage.getItem('markd_tree_width');
           if (savedWidth) {
             setTreeWidth(parseInt(savedWidth, 10));
           }
-          
+
           // Restore selected documents (try URL hash first, then sessionStorage, then fallback)
           let selectedIds: string[] = getHashSelection('document');
-          
+
           // Fallback to sessionStorage if no hash
           if (selectedIds.length === 0) {
             const savedSelectedIdsJson = sessionStorage.getItem('markd_documents_selected_ids');
-            
+
             if (savedSelectedIdsJson) {
               try {
                 selectedIds = JSON.parse(savedSelectedIdsJson);
@@ -285,7 +287,7 @@ function App() {
               }
             }
           }
-          
+
           // Fallback to single selection if no multi-selection saved
           if (selectedIds.length === 0 && sessionState.selectedId) {
             selectedIds = [sessionState.selectedId];
@@ -294,7 +296,7 @@ function App() {
               setHashSelection('document', selectedIds);
             }
           }
-          
+
           if (selectedIds.length > 0) {
             // Find all items in tree
             const findItem = (nodes: Document[], targetId: string): Document | null => {
@@ -307,10 +309,10 @@ function App() {
               }
               return null;
             };
-            
+
             const foundItems: Document[] = [];
             const pathsToExpand: string[][] = [];
-            
+
             const findItemWithPath = (nodes: Document[], targetId: string, path: string[] = []): Document | null => {
               for (const node of nodes) {
                 const newPath = [...path, node.id];
@@ -325,7 +327,7 @@ function App() {
               }
               return null;
             };
-            
+
             // Find all selected items
             for (const id of selectedIds) {
               const item = findItemWithPath(result.tree, id);
@@ -333,7 +335,7 @@ function App() {
                 foundItems.push(item);
               }
             }
-            
+
             if (foundItems.length > 0) {
               // Expand all parent folders first
               const newExpanded: Record<string, boolean> = { ...sessionState.expandedNodes };
@@ -343,10 +345,10 @@ function App() {
                 }
               });
               setExpanded(newExpanded);
-              
+
               // Set flag to prevent saving during restoration
               isRestoringRef.current = true;
-              
+
               // Wait a bit for expansion to render, then select
               setTimeout(() => {
                 // Load content for the first file before setting selection to avoid visual jump
@@ -356,8 +358,8 @@ function App() {
                     if (docResult.success) {
                       setEditContent(docResult.document.content || '');
                       // Update the selected document with full content
-                      const updatedItems = foundItems.map(item => 
-                        item.id === firstFile.id 
+                      const updatedItems = foundItems.map(item =>
+                        item.id === firstFile.id
                           ? { ...item, content: docResult.document.content || '' }
                           : item
                       );
@@ -374,7 +376,7 @@ function App() {
                   setEditContent('');
                   setSelected(foundItems);
                 }
-                
+
                 // Reset flag after a short delay
                 setTimeout(() => {
                   isRestoringRef.current = false;
@@ -399,26 +401,26 @@ function App() {
         setLoading(false);
       }
     };
-    
+
     loadData();
-    
+
     // Listen to hash changes (when navigating back to this module)
     const cleanup = onHashChange((selections) => {
       // Prevent processing if already restoring to avoid infinite loop
       if (isRestoringRef.current) {
         return;
       }
-      
+
       // Don't restore if the change was initiated by user click
       if (userInitiatedSelectionRef.current) {
         return;
       }
-      
+
       const hashIds = selections.document;
       // Use refs to get latest values without causing re-renders
       const currentTree = treeRef.current;
       const currentSelected = selectedRef.current;
-      
+
       if (hashIds.length > 0 && currentTree.length > 0) {
         // Check if selection is already correct to avoid loop
         const currentIds = currentSelected.map(s => s.id).sort().join(',');
@@ -426,10 +428,10 @@ function App() {
         if (currentIds === hashIdsString) {
           return; // Already selected, no need to restore
         }
-        
+
         // Set flag to prevent saving during restoration
         isRestoringRef.current = true;
-        
+
         // Restore selection from hash
         const findItemWithPath = (nodes: Document[], targetId: string, path: string[] = []): Document | null => {
           for (const node of nodes) {
@@ -444,13 +446,13 @@ function App() {
           }
           return null;
         };
-        
+
         const foundItems: Document[] = [];
         for (const id of hashIds) {
           const item = findItemWithPath(currentTree, id);
           if (item) foundItems.push(item);
         }
-        
+
         if (foundItems.length > 0) {
           const firstFile = foundItems.find(item => item.type === 'file');
           if (firstFile) {
@@ -459,8 +461,8 @@ function App() {
               if (docResult.success) {
                 setEditContent(docResult.document.content || '');
                 // Update the selected document with full content
-                const updatedItems = foundItems.map(item => 
-                  item.id === firstFile.id 
+                const updatedItems = foundItems.map(item =>
+                  item.id === firstFile.id
                     ? { ...item, content: docResult.document.content || '' }
                     : item
                 );
@@ -483,7 +485,7 @@ function App() {
         }
       }
     });
-    
+
     return cleanup;
   }, [currentWorkspace]);
 
@@ -504,7 +506,7 @@ function App() {
   useEffect(() => {
     if (pendingSelection && tree.length > 0) {
       console.log('🟢 [PENDING SELECTION] Processing:', pendingSelection, 'Tree nodes:', tree.length);
-      
+
       // Helper to find path to target node
       const findPathToNode = (nodes: Document[], targetId: string, path: string[] = []): string[] | null => {
         for (const node of nodes) {
@@ -523,7 +525,7 @@ function App() {
       // Find path to the target node
       const pathToNode = findPathToNode(tree, pendingSelection);
       console.log('🟢 [PENDING SELECTION] Path to node:', pathToNode);
-      
+
       if (pathToNode) {
         // Expand only the path to the node (not the whole tree)
         setExpanded(prev => {
@@ -553,10 +555,10 @@ function App() {
         }
         return null;
       };
-      
+
       // Find the node first
       const foundNode = findAndSelectItem(tree, pendingSelection);
-      
+
       if (foundNode) {
         // Calculate parent path
         const calculateParentPath = (nodes: Document[], targetId: string, path: string[] = []): string[] => {
@@ -574,10 +576,10 @@ function App() {
           }
           return [];
         };
-        
+
         const parentPath = calculateParentPath(tree, pendingSelection);
         console.log('✅ [PENDING SELECTION] Parent path calculated:', parentPath);
-        
+
         // Expand all parents in the path
         if (parentPath.length > 0) {
           setExpanded(prev => {
@@ -589,7 +591,7 @@ function App() {
             return newExpanded;
           });
         }
-        
+
         // Select the folder (single selection for auto-select)
         // Use requestAnimationFrame to ensure DOM is updated
         requestAnimationFrame(() => {
@@ -615,10 +617,10 @@ function App() {
 
     // Leave previous document(s)
     // For now, we only track presence on single selection
-    
+
     // Join new document if single selection
     const currentDocumentId = selected.length === 1 ? selected[0].id : null;
-    
+
     if (currentDocumentId) {
       websocket.joinDocument(currentDocumentId);
     }
@@ -634,10 +636,10 @@ function App() {
   // Heartbeat loop for locked documents
   useEffect(() => {
     if (!editMode || selected.length !== 1) return;
-    
+
     const activeDoc = selected[0];
     const currentUserId = getUserId();
-    
+
     // Only heartbeat if we own the lock
     if (activeDoc.locked_by?.user_id && String(activeDoc.locked_by.user_id) === currentUserId) {
       // Send initial heartbeat
@@ -646,7 +648,7 @@ function App() {
       const interval = setInterval(() => {
         api.heartbeatDocument(activeDoc.id).catch(console.error);
       }, 120000); // Every 2 minutes
-      
+
       return () => clearInterval(interval);
     }
   }, [editMode, selected, getUserId]);
@@ -654,14 +656,14 @@ function App() {
   const handleSelectDocument = useCallback(async (doc: Document, event?: React.MouseEvent) => {
     // Mark this as user-initiated selection to prevent hash-based restoration
     userInitiatedSelectionRef.current = true;
-    
+
     const allNodes = flattenTree(tree);
     const currentIndex = allNodes.findIndex(n => n.id === doc.id);
-    
+
     if (event) {
       const isCtrl = event.ctrlKey || event.metaKey;
       const isShift = event.shiftKey;
-      
+
       if (isShift && lastSelectedIndex !== null && currentIndex !== -1) {
         // Shift+Click: select range
         const start = Math.min(lastSelectedIndex, currentIndex);
@@ -688,12 +690,12 @@ function App() {
       setSelected([doc]);
       setLastSelectedIndex(currentIndex);
     }
-    
+
     // Reset flag after a short delay
     setTimeout(() => {
       userInitiatedSelectionRef.current = false;
     }, 500);
-    
+
     // If it's a file, load it for editing (only if single selection)
     if (doc.type === 'file' && (!event || (!event.ctrlKey && !event.metaKey && !event.shiftKey))) {
       try {
@@ -713,11 +715,11 @@ function App() {
         if (result.success) {
           // Update content before selection to ensure smooth transition
           setEditContent(result.document.content || '');
-          
+
           // Update the selected document with the full content to avoid visual jump
           const updatedDoc = { ...doc, content: result.document.content || '' };
           setSelected([updatedDoc]);
-          
+
           // Only close edit mode if selecting a different document
           if (selected.length === 0 || selected[0].id !== doc.id) {
             setEditMode(false);
@@ -783,12 +785,12 @@ function App() {
       expandedNodes: expanded,
       selectedId: selected.length > 0 ? selected[0].id : null, // Keep for backward compatibility
     });
-    
+
     // Don't save if we're currently restoring from hash
     if (isRestoringRef.current) {
       return;
     }
-    
+
     // Save all selected IDs to both URL hash and sessionStorage
     try {
       const ids = selected.map(s => s.id);
@@ -798,7 +800,7 @@ function App() {
         return;
       }
       prevSelectedIdsRef.current = idsString;
-      
+
       if (selected.length > 0) {
         // Only update hash if different from current to avoid loop
         const currentHashIds = getHashSelection('document');
@@ -827,7 +829,7 @@ function App() {
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizing) return;
-      
+
       const newWidth = e.clientX;
       if (newWidth >= 200 && newWidth <= 600) {
         setTreeWidth(newWidth);
@@ -902,7 +904,7 @@ function App() {
     console.log('🔵 [CREATE FOLDER] Starting - name:', name, 'parentId:', parentId, 'workspace:', currentWorkspace);
     try {
       lastLocalChangeAtRef.current = Date.now();
-      
+
       // Calculate path to parent before creating (to expand only this path)
       const findPathToNode = (nodes: Document[], targetId: string, path: string[] = []): string[] | null => {
         for (const node of nodes) {
@@ -917,7 +919,7 @@ function App() {
         }
         return null;
       };
-      
+
       // Expand path to parent before creating
       if (parentId && parentId !== 'root') {
         const pathToParent = findPathToNode(tree, parentId);
@@ -940,18 +942,18 @@ function App() {
           setExpanded(prev => ({ ...prev, [parentId]: true }));
         }
       }
-      
+
       console.log('🔵 [CREATE FOLDER] Calling API with:', { name, type: 'folder', parent_id: parentId, workspace_id: currentWorkspace });
-      
+
       const result = await api.createDocument({
         name,
         type: 'folder',
         parent_id: parentId,
         workspace_id: currentWorkspace,
       });
-      
+
       console.log('🔵 [CREATE FOLDER] API Response:', result);
-      
+
       // Store the created folder ID for auto-selection after tree update
       if (result.success && result.document) {
         const folderId = result.document.id;
@@ -1136,7 +1138,17 @@ function App() {
     try {
       const userId = getUserId();
       const userName = getUserName();
-      
+
+      // In collaborative mode, no locking needed - Yjs handles conflicts
+      if (USE_COLLABORATIVE_EDITING) {
+        console.log('[Collaborative] Starting edit without lock');
+        setEditMode(true);
+        setEditContent(doc.content || '');
+        websocket.notifyEditing(doc.id, userName);
+        return;
+      }
+
+      // Traditional lock-based editing
       // Check if document is already locked by current user
       if (doc.locked_by && String(doc.locked_by.user_id) === String(userId)) {
         // User already owns the lock, allow editing
@@ -1146,11 +1158,11 @@ function App() {
         websocket.notifyEditing(doc.id, userName);
         return;
       }
-      
+
       // Try to lock the document
       console.log('Locking document with:', { userId, userName, documentId: doc.id });
       const result = await api.lockDocument(doc.id, userId, userName);
-      
+
       if (result.success) {
         setEditMode(true);
         setEditContent(doc.content || '');
@@ -1173,10 +1185,10 @@ function App() {
       await api.updateDocument(doc.id, { content: editContent });
       const userId = getUserId();
       await api.unlockDocument(doc.id, userId);
-      
+
       setSelected(prev => prev.length > 0 ? [{ ...prev[0], content: editContent, locked_by: null }] : []);
       setEditMode(false);
-      
+
       // Reload all tags after saving (tags may have been extracted from markdown)
       await loadAllTags();
       // Reload tags for the current document
@@ -1219,7 +1231,7 @@ function App() {
   const handleForceUnlock = useCallback(async (id: string) => {
     try {
       await api.forceUnlockDocument(id);
-      
+
       // Update tree to remove lock
       setTree(prevTree => {
         const updateLock = (docs: Document[]): Document[] => {
@@ -1240,7 +1252,7 @@ function App() {
       if (selected.length > 0 && selected[0].id === id) {
         setSelected(prev => prev.length > 0 ? [{ ...prev[0], locked_by: null }] : []);
       }
-      
+
       toast.success('Document déverrouillé avec succès');
     } catch (err) {
       console.error('Error force unlocking:', err);
@@ -1257,7 +1269,7 @@ function App() {
       if (userInitiatedSelectionRef.current) {
         return;
       }
-      
+
       const hash = window.location.hash;
       if (hash.startsWith('#doc=')) {
         const docId = hash.replace('#doc=', '');
@@ -1309,15 +1321,15 @@ function App() {
         const currentExpanded = { ...expandedRef.current };
         // Use ref to get the latest pendingSelection value (may have been set after WebSocket event)
         // Skip if it's a temp ID (will be updated after API response)
-        const currentPendingSelection = (pendingSelectionRef.current && !pendingSelectionRef.current.startsWith('temp-')) 
-          ? pendingSelectionRef.current 
+        const currentPendingSelection = (pendingSelectionRef.current && !pendingSelectionRef.current.startsWith('temp-'))
+          ? pendingSelectionRef.current
           : (pendingSelection && !pendingSelection.startsWith('temp-') ? pendingSelection : null);
-        
+
         console.log('🟡 [WEBSOCKET] tree_changed received - currentExpanded:', Object.keys(currentExpanded), 'pendingSelection:', currentPendingSelection, 'ref:', pendingSelectionRef.current);
-        
+
         const result = await api.getTree(currentWorkspace);
         console.log('🟡 [WEBSOCKET] Tree reloaded - nodes:', result.tree?.length || 0);
-        
+
         // Debug: Check if pendingSelection node exists in the reloaded tree and log folder-guides children
         if (currentPendingSelection) {
           const checkNodeExists = (nodes: Document[], targetId: string): boolean => {
@@ -1329,7 +1341,7 @@ function App() {
           };
           const exists = checkNodeExists(result.tree, currentPendingSelection);
           console.log('🟡 [WEBSOCKET] PendingSelection exists in reloaded tree:', exists, 'ID:', currentPendingSelection);
-          
+
           // Log the structure of folder-guides to see what's inside
           const findFolder = (nodes: Document[], folderId: string): Document | null => {
             for (const node of nodes) {
@@ -1392,11 +1404,11 @@ function App() {
             const prev = prevMap[id];
             // Build path from previous tree
             const path = prevTreeRef.current ? buildPath(id, prevTreeRef.current) : prev.name;
-            deleted.push({ 
-              id, 
-              name: prev.name, 
-              type: prev.type, 
-              path: path || prev.name 
+            deleted.push({
+              id,
+              name: prev.name,
+              type: prev.type,
+              path: path || prev.name
             });
           }
         }
@@ -1470,7 +1482,7 @@ function App() {
         // Show up to 5 toasts to prevent flooding. Skip if this client just performed a local change.
         const justDidLocalChange = Date.now() - lastLocalChangeAtRef.current < 2000;
         if (!justDidLocalChange) {
-        const showLimited = <T,>(arr: T[]) => arr.slice(0, 5);
+          const showLimited = <T,>(arr: T[]) => arr.slice(0, 5);
 
           for (const ch of showLimited(created)) {
             toast.custom(
@@ -1501,7 +1513,7 @@ function App() {
               { duration: 25000 }
             );
           }
-          
+
           // Toast for deletions (without "Voir" button)
           for (const del of showLimited(deleted)) {
             const ToastDelete: React.FC<{ title: string; path: string }> = ({ title, path }) => {
@@ -1553,11 +1565,11 @@ function App() {
         setTree(result.tree);
         prevTreeRef.current = result.tree;
         treeRef.current = result.tree;
-        
+
         // If we have a pending selection, process it FIRST before preserving expansion
         if (currentPendingSelection && result.tree.length > 0) {
           console.log('🟡 [WEBSOCKET] Processing pendingSelection:', currentPendingSelection);
-          
+
           // Helper to find and select the node
           const findAndSelectNode = (nodes: Document[], targetId: string, parentPath: string[] = []): Document | null => {
             for (const node of nodes) {
@@ -1573,9 +1585,9 @@ function App() {
             }
             return null;
           };
-          
+
           const foundNode = findAndSelectNode(result.tree, currentPendingSelection);
-          
+
           if (foundNode) {
             // Calculate path to node for expansion
             const findPathToNode = (nodes: Document[], targetId: string, path: string[] = []): string[] | null => {
@@ -1591,10 +1603,10 @@ function App() {
               }
               return null;
             };
-            
+
             const pathToNode = findPathToNode(result.tree, currentPendingSelection);
             console.log('🟡 [WEBSOCKET] Path to pendingSelection:', pathToNode);
-            
+
             // Merge preserved expansion with path expansion
             setExpanded(prev => {
               const newExpanded = { ...prev, ...currentExpanded };
@@ -1611,7 +1623,7 @@ function App() {
               console.log('🟡 [WEBSOCKET] Expanded path:', pathToNode, 'final expanded:', Object.keys(newExpanded));
               return newExpanded;
             });
-            
+
             // Select the node after a short delay to ensure DOM is updated
             requestAnimationFrame(() => {
               setSelected([foundNode]);
@@ -1690,7 +1702,7 @@ function App() {
       });
 
       // Update selected documents if one is being locked/unlocked
-      setSelected(prev => prev.map(doc => 
+      setSelected(prev => prev.map(doc =>
         doc.id === documentId ? { ...doc, locked_by: lockInfo } : doc
       ));
     });
@@ -1736,21 +1748,21 @@ function App() {
       // Check target
       const targetId = over.id === 'root-drop-zone' ? 'root' : over.id as string;
       let targetNode: Document | null = null;
-      
+
       if (targetId !== 'root') {
         targetNode = findNode(tree, targetId);
         if (!targetNode || targetNode.type !== 'folder') return;
       }
 
       lastLocalChangeAtRef.current = Date.now();
-      
+
       let successCount = 0;
       const errors: string[] = [];
 
       for (const item of itemsToMove) {
         // Skip if moving into itself or if parent is already target
         if (item.id === targetId) continue;
-        
+
         const result = await api.moveDocument(item.id, targetId);
         if (result.success) {
           successCount++;
@@ -1761,18 +1773,18 @@ function App() {
 
       if (successCount > 0) {
         const targetName = targetId === 'root' ? 'la racine' : `"${targetNode?.name}"`;
-        const message = itemsToMove.length === 1 
+        const message = itemsToMove.length === 1
           ? `"${itemsToMove[0].name}" déplacé vers ${targetName}`
           : `${successCount} documents déplacés vers ${targetName}`;
-        
+
         toast.success(message);
-        
+
         // Refresh tree
         const treeResult = await api.getTree(currentWorkspace);
         setTree(treeResult.tree);
         treeRef.current = treeResult.tree;
       }
-      
+
       if (errors.length > 0) {
         toast.error(`Erreur lors du déplacement de : ${errors.slice(0, 3).join(', ')}${errors.length > 3 ? '...' : ''}`);
       }
@@ -1783,13 +1795,7 @@ function App() {
     }
   }, [tree, selected, currentWorkspace]);
 
-  if (error) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="text-red-600">Error: {error}</div>
-      </div>
-    );
-  }
+
 
   // Get active node for drag overlay
   const findNode = (nodes: Document[], id: string): Document | null => {
@@ -1802,7 +1808,7 @@ function App() {
     }
     return null;
   };
-  
+
   const activeNode = activeId ? findNode(tree, activeId) : null;
 
   // Helper function to get folder path
@@ -1810,7 +1816,7 @@ function App() {
     if (folderId === 'root') {
       return '/';
     }
-    
+
     const buildPath = (itemId: string, nodes: Document[], parentPath: string = ''): string | null => {
       for (const node of nodes) {
         const currentPath = parentPath ? `${parentPath}/${node.name}` : node.name;
@@ -1824,7 +1830,7 @@ function App() {
       }
       return null;
     };
-    
+
     const path = buildPath(folderId, treeData);
     return path ? `/${path}` : '/';
   }, []);
@@ -1832,11 +1838,11 @@ function App() {
   // Handle MCP modal
   const handleOpenMcpModal = useCallback(async (folderId: string) => {
     setMcpModalFolderId(folderId);
-    
+
     // Calculate folder path
     const folderPath = getFolderPath(folderId, tree);
     setMcpModalFolderPath(folderPath);
-    
+
     // Try to load existing config
     try {
       const response = await fetch(`/api/mcp/configs/by-folder/${folderId}`, {
@@ -1855,7 +1861,7 @@ function App() {
           } else if (!destPath || folderId === 'root') {
             destPath = '/';
           }
-          
+
           const createResponse = await fetch('/api/mcp/configs', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1869,7 +1875,7 @@ function App() {
               is_active: true
             })
           });
-          
+
           const createData = await createResponse.json();
           if (createData.success && createData.config) {
             setMcpModalConfig(createData.config);
@@ -1888,7 +1894,7 @@ function App() {
       console.error('Error loading MCP config:', error);
       setMcpModalConfig(null);
     }
-    
+
     setShowMcpModal(true);
   }, [tree, getFolderPath, loadMcpConfigs, currentWorkspace]);
 
@@ -1900,12 +1906,20 @@ function App() {
     loadMcpConfigs(); // Reload configs after modal closes
   }, [loadMcpConfigs]);
 
+  if (error) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        <div className="text-red-600">Error: {error}</div>
+      </div>
+    );
+  }
+
   return (
     <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-      <div 
-        className="flex h-full bg-gray-50 dark:bg-gray-900" 
-        style={{ 
-          cursor: isResizing ? 'col-resize' : (activeId ? 'grabbing' : 'default') 
+      <div
+        className="flex h-full bg-gray-50 dark:bg-gray-900"
+        style={{
+          cursor: isResizing ? 'col-resize' : (activeId ? 'grabbing' : 'default')
         }}
       >
         <div className="flex flex-col" style={{ width: treeWidth }}>
@@ -1940,7 +1954,7 @@ function App() {
             workspaceId={currentWorkspace}
           />
         </div>
-        
+
         {/* Resizer handle */}
         <div
           className="w-1 bg-gray-300 dark:bg-gray-700 hover:bg-blue-500 cursor-col-resize transition-colors relative group"
@@ -1952,31 +1966,59 @@ function App() {
 
         {selected.length > 0 && selected[0].type === 'file' ? (
           editMode ? (
-            <>
-              <div className="flex-1 flex flex-col border-r">
-                <DocumentViewer
-                  document={{...selected[0], content: editContent}}
-                  onEdit={handleStartEdit}
-                  currentUserId={getUserId()}
-                  presenceUsers={presence[selected[0].id]}
-                  onUnlock={handleUnlock}
-                  isEditing={true}
-                />
-              </div>
+            USE_COLLABORATIVE_EDITING ? (
+              // Collaborative editing mode - uses Yjs for real-time sync
               <div className="flex-1 flex flex-col">
-                <DocumentEditor
+                <CollaborativeEditor
                   document={selected[0]}
-                  content={editContent}
-                  onContentChange={setEditContent}
-                  onSave={handleSaveEdit}
-                  onCancel={handleCancelEdit}
+                  initialContent={editContent}
+                  onSave={async (content: string) => {
+                    // Save to backend API
+                    try {
+                      await api.updateDocument(selected[0].id, { content });
+                      setEditContent(content);
+                      setSelected(prev => prev.length > 0 ? [{ ...prev[0], content }] : []);
+                      toast.success('Document enregistré');
+                    } catch (err) {
+                      console.error('Error saving document:', err);
+                      toast.error('Erreur lors de la sauvegarde');
+                    }
+                  }}
+                  onCancel={() => {
+                    setEditMode(false);
+                  }}
+                  currentUserId={getUserId()}
+                  currentUserName={getUserName()}
                 />
               </div>
-            </>
+            ) : (
+              // Traditional lock-based editing mode
+              <>
+                <div className="flex-1 flex flex-col border-r">
+                  <DocumentViewer
+                    document={{ ...selected[0], content: editContent }}
+                    onEdit={handleStartEdit}
+                    currentUserId={getUserId()}
+                    presenceUsers={presence[selected[0].id]}
+                    onUnlock={handleUnlock}
+                    isEditing={true}
+                  />
+                </div>
+                <div className="flex-1 flex flex-col">
+                  <DocumentEditor
+                    document={selected[0]}
+                    content={editContent}
+                    onContentChange={setEditContent}
+                    onSave={handleSaveEdit}
+                    onCancel={handleCancelEdit}
+                  />
+                </div>
+              </>
+            )
           ) : (
             <div className="flex-1 flex flex-col">
               <DocumentViewer
-                document={{...selected[0], content: editContent || selected[0].content}}
+                document={{ ...selected[0], content: editContent || selected[0].content }}
                 onEdit={handleStartEdit}
                 currentUserId={getUserId()}
                 presenceUsers={presence[selected[0].id]}
@@ -1989,8 +2031,8 @@ function App() {
           <div className="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-500">
             <div className="text-center">
               <p className="text-lg">
-                {selected.length > 0 && selected[0].type === 'folder' 
-                  ? 'Sélectionnez un fichier pour l\'éditer' 
+                {selected.length > 0 && selected[0].type === 'folder'
+                  ? 'Sélectionnez un fichier pour l\'éditer'
                   : 'Sélectionnez un document pour l\'éditer'}
               </p>
             </div>
@@ -2010,7 +2052,7 @@ function App() {
           </div>
         ) : null}
       </DragOverlay>
-      
+
       {/* MCP Configuration Modal */}
       {showMcpModal && mcpModalFolderId && (
         <MCPConfigModal

@@ -29,37 +29,83 @@ const MCPConfigModal: React.FC<MCPConfigModalProps> = ({ folderId, config, works
     variant?: 'danger' | 'warning' | 'info';
   } | null>(null);
 
+  // Reload config from API to get fresh data (especially is_active status)
   useEffect(() => {
-    if (config) {
-      // Ensure destination_path starts with "/"
+    const loadConfig = async () => {
+      if (config?.id) {
+        try {
+          const response = await fetch(`/api/mcp/configs/by-folder/${folderId}`, {
+            credentials: 'include'
+          });
+          const data = await response.json();
+
+          if (data.success && data.config) {
+            const freshConfig = data.config;
+
+            // Ensure destination_path starts with "/"
+            let destPath = freshConfig.destination_path || '';
+            if (destPath && !destPath.startsWith('/')) {
+              destPath = '/' + destPath;
+            } else if (!destPath) {
+              destPath = folderId === 'root' ? '/' : '';
+            }
+
+            setFormData({
+              source_path: freshConfig.source_path || '',
+              destination_path: destPath,
+              is_active: freshConfig.is_active === 1 || freshConfig.is_active === true
+            });
+
+            // Load token from fresh config
+            if (freshConfig.mcp_token) {
+              setMcpToken(freshConfig.mcp_token);
+            } else {
+              setMcpToken(null);
+            }
+          }
+        } catch (error) {
+          console.error('Error loading fresh config:', error);
+          // Fallback to props config
+          initFromPropsConfig();
+        }
+      } else if (config) {
+        // Config exists in props but no id (shouldn't happen)
+        initFromPropsConfig();
+      } else {
+        // New config - use defaults
+        setFormData({
+          source_path: '',
+          destination_path: folderPath || (folderId === 'root' ? '/' : ''),
+          is_active: true
+        });
+        setMcpToken(null);
+      }
+    };
+
+    const initFromPropsConfig = () => {
+      if (!config) return;
+
       let destPath = config.destination_path || '';
       if (destPath && !destPath.startsWith('/')) {
         destPath = '/' + destPath;
       } else if (!destPath) {
         destPath = folderId === 'root' ? '/' : '';
       }
-      
+
       setFormData({
         source_path: config.source_path || '',
         destination_path: destPath,
-        is_active: config.is_active !== false
+        is_active: config.is_active === 1 || config.is_active === true
       });
-      
-      // Load token from config (from API/BDD)
+
       if (config.mcp_token) {
         setMcpToken(config.mcp_token);
       } else {
         setMcpToken(null);
       }
-    } else {
-      // For new config, set destination_path based on folder_path
-      setFormData({
-        source_path: '',
-        destination_path: folderPath || (folderId === 'root' ? '/' : ''),
-        is_active: true
-      });
-      setMcpToken(null);
-    }
+    };
+
+    loadConfig();
   }, [config, folderId, folderPath]);
 
   const handleSave = async () => {
@@ -72,7 +118,7 @@ const MCPConfigModal: React.FC<MCPConfigModalProps> = ({ folderId, config, works
       } else if (!destPath || folderId === 'root') {
         destPath = '/';
       }
-      
+
       if (config) {
         // Update existing config
         const response = await fetch(`/api/mcp/configs/${config.id}`, {
@@ -128,37 +174,30 @@ const MCPConfigModal: React.FC<MCPConfigModalProps> = ({ folderId, config, works
     }
   };
 
-  const handleRegenerateCredentials = () => {
+  const handleRegenerateCredentials = async () => {
     if (!config) return;
-    setConfirmModal({
-      isOpen: true,
-      title: 'Régénérer les credentials',
-      message: '⚠️ Régénérer les credentials invalidera les anciens. Continuer ?',
-      onConfirm: async () => {
-        setConfirmModal(null);
-        setLoading(true);
-        try {
-          const response = await fetch(`/api/mcp/configs/${config.id}/regenerate`, {
-            method: 'POST',
-            credentials: 'include'
-          });
 
-          const data = await response.json();
-          if (data.success && config) {
-            // Token is stored in BDD and returned by API
-            setMcpToken(data.mcp_token);
-            toast.success('Token régénéré');
-          } else {
-            toast.error(data.detail || 'Erreur lors de la régénération');
-          }
-        } catch (error) {
-          console.error('Error regenerating credentials:', error);
-          toast.error('Erreur lors de la régénération');
-        } finally {
-          setLoading(false);
-        }
+    setLoading(true);
+    try {
+      const response = await fetch(`/api/mcp/configs/${config.id}/regenerate`, {
+        method: 'POST',
+        credentials: 'include'
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        // Token is stored in BDD and returned by API
+        setMcpToken(data.mcp_token);
+        toast.success('Token régénéré');
+      } else {
+        toast.error(data.detail || 'Erreur lors de la régénération');
       }
-    });
+    } catch (error) {
+      console.error('Error regenerating credentials:', error);
+      toast.error('Erreur lors de la régénération');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const copyToClipboard = (text: string, label: string) => {
@@ -168,10 +207,10 @@ const MCPConfigModal: React.FC<MCPConfigModalProps> = ({ folderId, config, works
 
   const handleToggleActive = async () => {
     if (!config) return;
-    
+
     const newStatus = !formData.is_active;
     setFormData({ ...formData, is_active: newStatus });
-    
+
     try {
       const response = await fetch(`/api/mcp/configs/${config.id}/toggle-active`, {
         method: 'POST',
@@ -262,16 +301,14 @@ const MCPConfigModal: React.FC<MCPConfigModalProps> = ({ folderId, config, works
             </div>
             <button
               onClick={handleToggleActive}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                formData.is_active
-                  ? 'bg-green-500'
-                  : 'bg-gray-300 dark:bg-gray-600'
-              }`}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${formData.is_active
+                ? 'bg-green-500'
+                : 'bg-gray-300 dark:bg-gray-600'
+                }`}
             >
               <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  formData.is_active ? 'translate-x-6' : 'translate-x-1'
-                }`}
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${formData.is_active ? 'translate-x-6' : 'translate-x-1'
+                  }`}
               />
             </button>
           </div>
@@ -334,7 +371,7 @@ const MCPConfigModal: React.FC<MCPConfigModalProps> = ({ folderId, config, works
                   Régénérer
                 </button>
               </div>
-              
+
               {mcpToken ? (
                 <div className="p-4 bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-md">
                   <label className="block text-xs font-medium text-blue-800 dark:text-blue-200 mb-1">
@@ -396,7 +433,7 @@ const MCPConfigModal: React.FC<MCPConfigModalProps> = ({ folderId, config, works
           </div>
         </div>
       </div>
-      
+
       {/* Confirm Modal */}
       {confirmModal && (
         <ConfirmModal

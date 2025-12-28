@@ -6,7 +6,6 @@ from typing import Optional, List, Dict, Any
 import socketio
 import uvicorn
 import os
-import asyncio
 from dotenv import load_dotenv
 import uuid
 from datetime import datetime, timedelta
@@ -24,7 +23,6 @@ load_dotenv()
 
 # Constants
 LOCK_TIMEOUT_MINUTES = 30
-LOCKS_ENABLED = False  # Set to False to disable document locking (collaborative editing mode)
 
 # JWT Configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
@@ -74,10 +72,6 @@ app.include_router(settings_router)
 from admin_routes import router as admin_router
 app.include_router(admin_router)
 
-# Include MCP streaming routes
-from mcp_streaming import router as mcp_streaming_router
-app.include_router(mcp_streaming_router)
-
 
 # Socket.IO server
 sio = socketio.AsyncServer(
@@ -93,10 +87,6 @@ socket_app = socketio.ASGIApp(sio, app)
 # Initialize shared WebSocket broadcasts
 from websocket_broadcasts import set_sio
 set_sio(sio)
-
-# Initialize collaborative module
-from collaborative import set_sio as set_collaborative_sio
-set_collaborative_sio(sio)
 
 # ===== Upload Configuration =====
 
@@ -414,11 +404,9 @@ async def broadcast_lock_update(document_id: str, lock_info: Optional[Dict] = No
         'locked_by': lock_info
     })
 
-# Presence Management - using collaborative module
-import collaborative
-
-# Legacy connected users tracking (for backward compatibility)
+# Presence Management
 connected_users: Dict[str, Dict] = {} # sid -> user_info
+document_presence: Dict[str, Dict[str, Dict]] = {} # document_id -> {sid: user_info}
 
 @sio.event
 async def connect(sid, environ):
@@ -428,38 +416,70 @@ async def connect(sid, environ):
 @sio.event
 async def disconnect(sid):
     # print(f"Client disconnected: {sid}")
-    # Remove user from presence using collaborative module
-    await collaborative.leave_all_documents(sid)
-    
-    # Legacy cleanup
+    # Remove user from presence
     if sid in connected_users:
         del connected_users[sid]
+    
+    # Remove from all documents
+    for doc_id, users in document_presence.items():
+        if sid in users:
+            del users[sid]
+            # Broadcast updated list
+            await sio.emit('presence_updated', {
+                'document_id': doc_id,
+                'users': list(users.values())
+            }, room=f"doc_{doc_id}")
+
+def generate_user_color(user_id: str) -> str:
+    """Generate a consistent color for a user based on their ID"""
+    colors = [
+        '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
+        '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1',
+        '#14b8a6', '#a855f7', '#eab308', '#22c55e', '#f43f5e'
+    ]
+    # Simple hash function to get consistent color
+    hash_val = sum(ord(c) for c in str(user_id))
+    return colors[hash_val % len(colors)]
 
 @sio.event
 async def join_document(sid, data):
-    """Join a document room for collaborative editing"""
+    """Join a document room for presence"""
     document_id = data.get('document_id')
     user_info = data.get('user')
     
-    if not document_id or not user_info:
+    if not document_id:
         return
     
-    # Use collaborative module
-    users = await collaborative.join_document(sid, document_id, user_info)
+    # If user_info not provided, try to get from connected_users
+    if not user_info and sid in connected_users:
+        user_info = connected_users[sid]
     
-    # Legacy tracking
+    # If still no user_info, create minimal one
+    if not user_info:
+        user_info = {
+            'id': str(sid),
+            'username': 'Unknown',
+            'color': generate_user_color(str(sid))
+        }
+    else:
+        # Ensure color is set
+        if 'color' not in user_info:
+            user_id = str(user_info.get('id', sid))
+            user_info['color'] = generate_user_color(user_id)
+        
+    sio.enter_room(sid, f"doc_{document_id}")
+    
+    if document_id not in document_presence:
+        document_presence[document_id] = {}
+        
+    # Store user presence with sid as key to handle multiple tabs/devices
+    document_presence[document_id][sid] = user_info
     connected_users[sid] = user_info
     
-    # Send current users to the joining client
-    await sio.emit('presence:list', {
-        'document_id': document_id,
-        'users': users
-    }, room=sid)
-    
-    # Also emit legacy event for backward compatibility
+    # Broadcast to room
     await sio.emit('presence_updated', {
         'document_id': document_id,
-        'users': users
+        'users': list(document_presence[document_id].values())
     }, room=f"doc_{document_id}")
 
 @sio.event
@@ -468,39 +488,41 @@ async def leave_document(sid, data):
     document_id = data.get('document_id')
     if not document_id:
         return
+        
+    sio.leave_room(sid, f"doc_{document_id}")
     
-    # Use collaborative module
-    await collaborative.leave_document(sid, document_id)
+    if document_id in document_presence and sid in document_presence[document_id]:
+        del document_presence[document_id][sid]
+        
+        await sio.emit('presence_updated', {
+            'document_id': document_id,
+            'users': list(document_presence[document_id].values())
+        }, room=f"doc_{document_id}")
 
 @sio.event
 async def cursor_update(sid, data):
-    """Update cursor position for collaborative editing"""
+    """Broadcast cursor position update to other users in the same document"""
     document_id = data.get('document_id')
     if not document_id:
         return
     
-    await collaborative.update_cursor_position(sid, document_id, {
-        'position': data.get('position'),
-        'line': data.get('line'),
-        'column': data.get('column'),
-        'selection_start': data.get('selection_start'),
-        'selection_end': data.get('selection_end')
-    })
-
-@sio.event
-async def content_change(sid, data):
-    """Broadcast content change to all users in the document (real-time sync)"""
-    document_id = data.get('document_id')
-    if not document_id:
+    # Get user info from connected users
+    user_info = connected_users.get(sid, {})
+    if not user_info:
         return
     
-    # Broadcast to all users in the document except the sender
-    await sio.emit('content:change', {
+    # Broadcast cursor update to other users in the room (excluding sender)
+    await sio.emit('cursor_update', {
         'document_id': document_id,
-        'content': data.get('content'),
+        'user_id': user_info.get('id'),
+        'username': user_info.get('username'),
+        'cursor_line': data.get('cursor_line'),
+        'cursor_column': data.get('cursor_column'),
         'cursor_position': data.get('cursor_position'),
-        'user_id': data.get('user_id'),
-        'username': data.get('username'),
+        'is_typing': data.get('is_typing', False),
+        'is_agent': user_info.get('is_agent', False),
+        'agent_name': user_info.get('agent_name'),
+        'color': user_info.get('color', '#3b82f6'),
     }, room=f"doc_{document_id}", skip_sid=sid)
 
 @sio.event
@@ -737,21 +759,6 @@ def ensure_default_setup():
 async def startup_event():
     """Initialize default workspace and permissions on startup"""
     ensure_default_setup()
-    
-    # Start background task for cleaning stale presence
-    asyncio.create_task(presence_cleanup_task())
-
-
-async def presence_cleanup_task():
-    """Background task to periodically clean stale presence entries"""
-    while True:
-        try:
-            await asyncio.sleep(60)  # Run every 60 seconds
-            cleaned = await collaborative.cleanup_stale_presence(max_age_seconds=120)
-            if cleaned > 0:
-                print(f"[Presence] Cleaned {cleaned} stale presence entries")
-        except Exception as e:
-            print(f"[Presence] Cleanup error: {e}")
 
 # ===== REST API Endpoints =====
 
@@ -1314,30 +1321,11 @@ async def copy_document(document_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 # ===== Lock Management =====
-# Note: Locks are disabled by default for collaborative editing mode.
-# Set LOCKS_ENABLED = True to enable traditional document locking.
-
-@app.get("/api/locks/status")
-async def get_locks_status():
-    """Get the current lock configuration status"""
-    return {
-        "success": True,
-        "locks_enabled": LOCKS_ENABLED,
-        "mode": "collaborative" if not LOCKS_ENABLED else "locking"
-    }
 
 @app.post("/api/documents/{document_id}/lock")
 async def lock_document(document_id: str, lock_req: LockRequest):
-    """Lock document for editing (no-op if locks are disabled)"""
+    """Lock document for editing"""
     try:
-        # If locks are disabled, always return success (collaborative mode)
-        if not LOCKS_ENABLED:
-            return {
-                "success": True,
-                "message": "Collaborative mode - locks disabled",
-                "collaborative_mode": True
-            }
-        
         # Check if already locked
         check_query = "SELECT user_id, user_name, locked_at FROM document_locks WHERE document_id = %s"
         existing = db.execute_query(check_query, (document_id,))
@@ -1382,12 +1370,8 @@ async def lock_document(document_id: str, lock_req: LockRequest):
 
 @app.post("/api/documents/{document_id}/heartbeat")
 async def heartbeat_document(document_id: str, user: Dict = Depends(get_current_user)):
-    """Update lock timestamp to prevent expiration (no-op if locks are disabled)"""
+    """Update lock timestamp to prevent expiration"""
     try:
-        # If locks are disabled, always return success
-        if not LOCKS_ENABLED:
-            return {"success": True, "message": "Collaborative mode - heartbeat not needed"}
-        
         user_id = str(user['id'])
         # Check if user owns the lock
         check_query = "SELECT user_id FROM document_locks WHERE document_id = %s"
@@ -1409,12 +1393,8 @@ async def heartbeat_document(document_id: str, user: Dict = Depends(get_current_
 
 @app.delete("/api/documents/{document_id}/lock")
 async def unlock_document(document_id: str, user_id: str):
-    """Unlock document (no-op if locks are disabled)"""
+    """Unlock document"""
     try:
-        # If locks are disabled, always return success
-        if not LOCKS_ENABLED:
-            return {"success": True, "message": "Collaborative mode - unlock not needed"}
-        
         query = "DELETE FROM document_locks WHERE document_id = %s AND user_id = %s"
         affected = db.execute_update(query, (document_id, user_id))
         
@@ -2145,47 +2125,6 @@ async def document_content_updated(sid, data):
         }, skip_sid=sid)
     except Exception:
         pass
-
-@sio.event
-async def presence_heartbeat(sid, data):
-    """Update user's last activity timestamp to keep presence alive"""
-    try:
-        document_id = data.get('document_id')
-        if document_id and document_id in collaborative.document_presence:
-            if sid in collaborative.document_presence[document_id]:
-                from datetime import datetime
-                collaborative.document_presence[document_id][sid].last_activity = datetime.utcnow()
-    except Exception:
-        pass
-
-@sio.event
-async def content_change(sid, data):
-    """Broadcast content change to all users in the document"""
-    try:
-        document_id = data.get('document_id')
-        if not document_id:
-            return
-        
-        # Get user info from presence
-        user_info = {}
-        if document_id in collaborative.document_presence and sid in collaborative.document_presence[document_id]:
-            presence = collaborative.document_presence[document_id][sid]
-            user_info = {
-                'user_id': presence.user_id,
-                'username': presence.username,
-                'color': presence.color,
-                'is_agent': presence.is_agent,
-            }
-        
-        # Broadcast to all other users in the document
-        await sio.emit('content:change', {
-            'document_id': document_id,
-            'content': data.get('content'),
-            'cursor_position': data.get('cursor_position'),
-            **user_info,
-        }, room=f"doc_{document_id}", skip_sid=sid)
-    except Exception as e:
-        print(f"[Content Change] Error: {e}")
 
 # ===== Task Management WebSocket Events =====
 

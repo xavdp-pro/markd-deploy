@@ -1,0 +1,18 @@
+{
+  "name": "markd-yjs-server",
+  "version": "1.0.0",
+  "description": "Yjs WebSocket server for MarkD collaborative editing",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "ws": "^8.14.2",
+    "y-websocket": "^1.5.0",
+    "yjs": "^13.6.10",
+    "lib0": "^0.2.88"
+  }
+}

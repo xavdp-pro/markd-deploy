@@ -30,6 +30,7 @@ import { useWorkspace } from '../contexts/WorkspaceContext';
 import ConfirmModal from './ConfirmModal';
 import InputModal from './InputModal';
 import TagFilter from './TagFilter';
+import { USE_COLLABORATIVE_EDITING } from '../config/features';
 
 interface DocumentTreeProps {
   tree: Document[];
@@ -103,11 +104,11 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
 }) => {
   const { user } = useAuth();
   const navigate = useNavigate();
-  
+
   // Helper: Get full path of a node in the tree
   const getNodePath = (nodeId: string, nodes: Document[] = tree || [], path: string[] = []): string[] | null => {
     if (!nodes || nodes.length === 0) return null;
-    
+
     for (const n of nodes) {
       if (n.id === nodeId) {
         // If it's root, return empty path
@@ -124,7 +125,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
     }
     return null;
   };
-  
+
   const handleConfigureMCP = () => {
     if (onOpenMcpModal && node.type === 'folder') {
       onOpenMcpModal(node.id);
@@ -132,8 +133,8 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
     } else if (workspaceId && tree) {
       // Fallback to navigation if modal not available
       const pathParts = getNodePath(node.id, tree);
-      const destinationPath = pathParts && pathParts.length > 0 
-        ? pathParts.join('/') 
+      const destinationPath = pathParts && pathParts.length > 0
+        ? pathParts.join('/')
         : '';
       navigate(`/mcp-config?workspace_id=${workspaceId}&destination_path=${encodeURIComponent(destinationPath)}`);
       onClose();
@@ -258,7 +259,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
           <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
         </>
       )}
-      
+
       {node.id !== 'root' && (
         <>
           <button
@@ -296,12 +297,12 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
               Télécharger
             </button>
           )}
-          {node.type === 'file' && node.locked_by && onUnlock && (() => {
+          {!USE_COLLABORATIVE_EDITING && node.type === 'file' && node.locked_by && onUnlock && (() => {
             const storedUser = localStorage.getItem('markd_user');
             const currentUserId = storedUser ? JSON.parse(storedUser).id : null;
             const isOwner = node.locked_by?.user_id === currentUserId;
             const isAdmin = user?.role === 'admin';
-            
+
             if (isAdmin) {
               return (
                 <button
@@ -394,51 +395,51 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             }
             return null;
           })()}
-        <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
-        <button
-          onClick={() => {
-            setConfirmModal({
-              isOpen: true,
-              title: 'Supprimer le document',
-              message: `Voulez-vous vraiment supprimer "${node.name}" ?`,
-              onConfirm: () => {
-                if (onDelete) onDelete(node.id);
-                setConfirmModal(null);
-                onClose();
-              }
-            });
-          }}
-          className="w-full px-3 py-2 text-left text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
-        >
-          <Trash2 size={14} />
-          Supprimer
-        </button>
-      </>
-    )}
-    
-    {confirmModal && (
-      <ConfirmModal
-        isOpen={confirmModal.isOpen}
-        title={confirmModal.title}
-        message={confirmModal.message}
-        onConfirm={confirmModal.onConfirm}
-        onCancel={() => setConfirmModal(null)}
-        variant="warning"
-      />
-    )}
-    
-    {inputModal && (
-      <InputModal
-        isOpen={inputModal.isOpen}
-        title={inputModal.title}
-        label={inputModal.label}
-        defaultValue={inputModal.defaultValue}
-        onConfirm={inputModal.onConfirm}
-        onCancel={() => setInputModal(null)}
-      />
-    )}
-  </div>
-);
+          <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
+          <button
+            onClick={() => {
+              setConfirmModal({
+                isOpen: true,
+                title: 'Supprimer le document',
+                message: `Voulez-vous vraiment supprimer "${node.name}" ?`,
+                onConfirm: () => {
+                  if (onDelete) onDelete(node.id);
+                  setConfirmModal(null);
+                  onClose();
+                }
+              });
+            }}
+            className="w-full px-3 py-2 text-left text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
+          >
+            <Trash2 size={14} />
+            Supprimer
+          </button>
+        </>
+      )}
+
+      {confirmModal && (
+        <ConfirmModal
+          isOpen={confirmModal.isOpen}
+          title={confirmModal.title}
+          message={confirmModal.message}
+          onConfirm={confirmModal.onConfirm}
+          onCancel={() => setConfirmModal(null)}
+          variant="warning"
+        />
+      )}
+
+      {inputModal && (
+        <InputModal
+          isOpen={inputModal.isOpen}
+          title={inputModal.title}
+          label={inputModal.label}
+          defaultValue={inputModal.defaultValue}
+          onConfirm={inputModal.onConfirm}
+          onCancel={() => setInputModal(null)}
+        />
+      )}
+    </div>
+  );
 };
 
 interface TreeNodeProps {
@@ -485,7 +486,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const isExpanded = expanded[node.id];
   const isSelected = selected.some(s => s.id === node.id);
-  
+
   // Debug: log MCP config check for folders
   if (node.type === 'folder' && mcpConfigs) {
     const hasConfig = !!mcpConfigs[node.id];
@@ -522,9 +523,8 @@ const TreeNode: React.FC<TreeNodeProps> = ({
       }}
     >
       <div
-        className={`flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 ${
-          isSelected ? 'bg-blue-50 dark:bg-blue-900/30 border-l-2 border-blue-500' : ''
-        } ${isDragging ? 'opacity-50 cursor-grabbing' : ''} ${isOver && node.type === 'folder' ? 'bg-green-50 dark:bg-green-900/30 ring-2 ring-green-300 dark:ring-green-600' : ''}`}
+        className={`flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 ${isSelected ? 'bg-blue-50 dark:bg-blue-900/30 border-l-2 border-blue-500' : ''
+          } ${isDragging ? 'opacity-50 cursor-grabbing' : ''} ${isOver && node.type === 'folder' ? 'bg-green-50 dark:bg-green-900/30 ring-2 ring-green-300 dark:ring-green-600' : ''}`}
         style={{ paddingLeft: `${level * 16 + 8}px` }}
         onContextMenu={handleContextMenu}
       >
@@ -537,11 +537,11 @@ const TreeNode: React.FC<TreeNodeProps> = ({
             <GripVertical size={14} />
           </div>
         )}
-        
+
         {node.type === 'folder' && (
           <button
-            onClick={(e) => { 
-              e.stopPropagation(); 
+            onClick={(e) => {
+              e.stopPropagation();
               onToggleExpand(node.id);
             }}
             className="p-0 text-gray-600 dark:text-gray-400"
@@ -579,15 +579,14 @@ const TreeNode: React.FC<TreeNodeProps> = ({
                   e.stopPropagation();
                   if (onOpenMcpModal) onOpenMcpModal(node.id);
                 }}
-                className={`flex-shrink-0 w-3 h-3 rounded-full border-2 border-white dark:border-gray-800 shadow-sm ${
-                  mcpConfigs[node.id].is_active
+                className={`flex-shrink-0 w-3 h-3 rounded-full border-2 border-white dark:border-gray-800 shadow-sm ${mcpConfigs[node.id].is_active
                     ? 'bg-green-500 hover:bg-green-600'
                     : 'bg-gray-400 hover:bg-gray-500'
-                }`}
+                  }`}
                 title={`MCP ${mcpConfigs[node.id].is_active ? 'actif' : 'inactif'} - Cliquer pour configurer`}
               />
             )}
-            {node.locked_by && (
+            {!USE_COLLABORATIVE_EDITING && node.locked_by && (
               <span className="flex items-center gap-0.5 text-red-600 text-[10px] whitespace-nowrap flex-shrink-0 font-medium">
                 <Lock size={10} className="flex-shrink-0" />
                 <span>by {node.locked_by.user_name}</span>
@@ -694,7 +693,7 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
     onConfirm: () => void;
   } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
-  
+
   // Flatten tree for Ctrl+A selection
   const flattenTree = useCallback((nodes: Document[], result: Document[] = []): Document[] => {
     for (const node of nodes) {
@@ -707,7 +706,7 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
     }
     return result;
   }, []);
-  
+
   const { setNodeRef: setRootDropRef, isOver: isRootOver } = useDroppable({
     id: 'root-drop-zone',
   });
@@ -755,7 +754,7 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
         }
         return;
       }
-      
+
       // Check if F2 is pressed and at least one element is selected
       if (event.key === 'F2' && selected.length > 0 && onRename) {
         const firstSelected = selected[0];
@@ -785,7 +784,7 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
           const itemName = firstSelected.name;
           const itemType = firstSelected.type === 'folder' ? 'dossier' : 'document';
           const count = selected.length;
-          const message = count > 1 
+          const message = count > 1
             ? `Êtes-vous sûr de vouloir supprimer ${count} éléments ?`
             : `Êtes-vous sûr de vouloir supprimer "${itemName}" ?${firstSelected.type === 'folder' ? ' Cette action supprimera également tous les éléments contenus dans ce dossier.' : ''}`;
           setConfirmModal({
@@ -815,7 +814,7 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
       <div className="border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-900 flex-shrink-0">
         <div className="p-4 flex items-center justify-between">
           <h2 className="font-bold text-lg text-gray-900 dark:text-white">Documents</h2>
-          
+
           {/* Permission Badge */}
           {userPermission && (
             <div className="flex items-center gap-1.5 text-xs px-2 py-1 rounded">
@@ -838,14 +837,14 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
             </div>
           )}
         </div>
-        
+
         {/* Workspace Selector */}
         {workspaceSelector && (
           <div className="px-4 pb-4">
             {workspaceSelector}
           </div>
         )}
-        
+
         {/* Search Bar */}
         {onSearchChange && (
           <div className="px-4 pb-4">
@@ -918,11 +917,10 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
             />
           ))}
         </div>
-        <div 
+        <div
           ref={setRootDropRef}
-          className={`flex-1 min-h-[100px] cursor-context-menu transition-colors flex items-center justify-center relative ${
-            isRootOver ? 'bg-blue-50 dark:bg-blue-900/30 ring-2 ring-blue-300 dark:ring-blue-600 ring-inset' : 'hover:bg-gray-50 dark:hover:bg-gray-900'
-          }`}
+          className={`flex-1 min-h-[100px] cursor-context-menu transition-colors flex items-center justify-center relative ${isRootOver ? 'bg-blue-50 dark:bg-blue-900/30 ring-2 ring-blue-300 dark:ring-blue-600 ring-inset' : 'hover:bg-gray-50 dark:hover:bg-gray-900'
+            }`}
           onContextMenu={handleContextMenu}
         >
           <div className={`text-sm text-center px-4 ${isRootOver ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-400 dark:text-gray-500'}`}>
@@ -945,17 +943,16 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
                 e.stopPropagation();
                 if (onOpenMcpModal) onOpenMcpModal('root');
               }}
-              className={`absolute top-2 right-2 flex-shrink-0 w-3 h-3 rounded-full border-2 border-white dark:border-gray-800 shadow-sm ${
-                mcpConfigs['root'].is_active
+              className={`absolute top-2 right-2 flex-shrink-0 w-3 h-3 rounded-full border-2 border-white dark:border-gray-800 shadow-sm ${mcpConfigs['root'].is_active
                   ? 'bg-green-500 hover:bg-green-600'
                   : 'bg-gray-400 hover:bg-gray-500'
-              }`}
+                }`}
               title={`MCP ${mcpConfigs['root'].is_active ? 'actif' : 'inactif'} - Cliquer pour configurer`}
             />
           )}
         </div>
       </div>
-      
+
       {/* Tag filter - sticky at the bottom */}
       {onTagFilterChange && (
         <TagFilter
@@ -964,7 +961,7 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
           onTagFilterChange={onTagFilterChange}
         />
       )}
-      
+
       {contextMenu && (
         <div
           className="fixed bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg py-1 z-50 min-w-[160px]"
@@ -1029,7 +1026,7 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
           )}
         </div>
       )}
-      
+
       {inputModal && (
         <InputModal
           isOpen={inputModal.isOpen}
@@ -1040,7 +1037,7 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
           onCancel={() => setInputModal(null)}
         />
       )}
-      
+
       {confirmModal && (
         <ConfirmModal
           isOpen={confirmModal.isOpen}

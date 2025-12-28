@@ -1,200 +1,135 @@
-import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { Bot, User } from 'lucide-react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import { getCaretCoordinates, lineColumnToPosition } from '../utils/textareaCaretPosition';
 
-/**
- * Interface for a remote user's cursor
- */
 export interface RemoteUser {
-  user_id: string;
+  client_id: number;
   username: string;
   color: string;
   is_agent: boolean;
   agent_name?: string;
   cursor_line?: number;
   cursor_column?: number;
-  cursor_position?: number;
-  is_typing?: boolean;
+  is_local?: boolean;
 }
 
 interface CollaborativeCursorsProps {
   users: RemoteUser[];
-  currentUserId?: string;
-  textareaRef: React.RefObject<HTMLTextAreaElement>;
+  localClientId?: number;
+  textareaElement: HTMLTextAreaElement | null;
   content: string;
 }
 
-/**
- * Get the pixel position of a cursor in a textarea
- */
-function getCursorPixelPosition(
-  textarea: HTMLTextAreaElement,
-  line: number,
-  column: number
-): { top: number; left: number } | null {
-  if (!textarea) return null;
+export default function CollaborativeCursors({ users, localClientId, textareaElement, content }: CollaborativeCursorsProps) {
+  const [positions, setPositions] = useState<Map<number, { top: number; left: number; height: number }>>(new Map());
 
-  // Get textarea styles
-  const style = window.getComputedStyle(textarea);
-  const lineHeight = parseFloat(style.lineHeight) || 22;
-  const paddingTop = parseFloat(style.paddingTop) || 8;
-  const paddingLeft = parseFloat(style.paddingLeft) || 12;
-  const fontSize = parseFloat(style.fontSize) || 14;
-  
-  // Approximate character width (monospace)
-  const charWidth = fontSize * 0.6;
-  
-  // Calculate position
-  const top = paddingTop + (line - 1) * lineHeight - textarea.scrollTop;
-  const left = paddingLeft + column * charWidth;
-  
-  return { top, left };
-}
+  // Filter users with valid cursor data - dedupe by client_id
+  const allUsers = useMemo(() => {
+    const seen = new Set<number>();
+    return users.filter(u => {
+      if (u.cursor_line === undefined || u.cursor_line <= 0) return false;
+      if (seen.has(u.client_id)) return false;
+      seen.add(u.client_id);
+      return true;
+    });
+  }, [users]);
 
-/**
- * Single remote cursor component
- */
-const RemoteCursorLabel: React.FC<{
-  user: RemoteUser;
-  position: { top: number; left: number };
-}> = ({ user, position }) => {
-  const [blink, setBlink] = useState(true);
-  
-  // Blink animation
-  useEffect(() => {
-    const interval = setInterval(() => setBlink(b => !b), 530);
-    return () => clearInterval(interval);
-  }, []);
+  const update = useCallback(() => {
+    if (!textareaElement) return;
 
-  const displayName = user.is_agent ? user.agent_name || 'AI' : user.username;
-  const typeLabel = user.is_agent ? 'MCP' : 'WEB';
+    const next = new Map<number, { top: number; left: number; height: number }>();
 
-  return (
-    <div
-      className="absolute pointer-events-none z-50 transition-all duration-75"
-      style={{
-        top: `${position.top}px`,
-        left: `${position.left}px`,
-      }}
-    >
-      {/* Cursor line */}
-      <div
-        className={`w-0.5 transition-opacity duration-100 ${blink ? 'opacity-100' : 'opacity-40'}`}
-        style={{
-          backgroundColor: user.color,
-          height: '20px',
-        }}
-      />
-      
-      {/* User label */}
-      <div
-        className="absolute -top-6 left-0 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold text-white whitespace-nowrap shadow-lg"
-        style={{ backgroundColor: user.color }}
-      >
-        <span className={`text-[8px] font-bold px-1 rounded ${user.is_agent ? 'bg-purple-800' : 'bg-blue-800'}`}>
-          {typeLabel}
-        </span>
-        {user.is_agent ? <Bot size={10} /> : <User size={10} />}
-        <span>{displayName}</span>
-        {user.is_typing && (
-          <span className="ml-1 flex gap-0.5">
-            <span className="w-1 h-1 bg-white rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-            <span className="w-1 h-1 bg-white rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-            <span className="w-1 h-1 bg-white rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-          </span>
-        )}
-      </div>
-    </div>
-  );
-};
+    allUsers.forEach(u => {
+      try {
+        // Convert line/column to absolute position
+        const position = lineColumnToPosition(content, u.cursor_line!, u.cursor_column || 0);
 
-/**
- * CollaborativeCursors - Renders all remote user cursors as an overlay
- */
-const CollaborativeCursors: React.FC<CollaborativeCursorsProps> = ({
-  users,
-  currentUserId,
-  textareaRef,
-  content,
-}) => {
-  const [cursorPositions, setCursorPositions] = useState<Map<string, { top: number; left: number }>>(new Map());
-  const containerRef = useRef<HTMLDivElement>(null);
+        // Get pixel coordinates using the proven library
+        const coords = getCaretCoordinates(textareaElement, position);
 
-  // Filter remote users with valid cursor positions
-  const remoteUsers = users.filter(
-    u => u.user_id !== currentUserId && u.cursor_line !== undefined && u.cursor_line > 0
-  );
+        // Adjust for textarea scroll
+        const top = coords.top - textareaElement.scrollTop;
+        const left = coords.left - textareaElement.scrollLeft;
 
-  // Update cursor positions when users or textarea changes
-  const updatePositions = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
+        console.log(`[Cursor Debug] ${u.username}: line=${u.cursor_line}, col=${u.cursor_column}, pos=${position}, top=${top}, left=${left}, height=${coords.height}`);
 
-    const newPositions = new Map<string, { top: number; left: number }>();
-    
-    for (const user of remoteUsers) {
-      if (user.cursor_line !== undefined) {
-        const pos = getCursorPixelPosition(
-          textarea,
-          user.cursor_line,
-          user.cursor_column || 0
-        );
-        if (pos) {
-          newPositions.set(user.user_id, pos);
+        // Only show if within visible bounds
+        if (top >= -20 && top <= textareaElement.clientHeight + 20) {
+          next.set(u.client_id, { top, left, height: coords.height || 20 });
         }
+      } catch (e) {
+        console.error('[Cursor] Error calculating position for', u.username, e);
       }
-    }
-    
-    setCursorPositions(newPositions);
-  }, [remoteUsers, textareaRef]);
+    });
 
-  // Update on user changes
+    setPositions(next);
+  }, [textareaElement, content, allUsers]);
+
+  // Fast update loop
   useEffect(() => {
-    updatePositions();
-  }, [users, content, updatePositions]);
-
-  // Update on scroll
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-
-    const handleScroll = () => updatePositions();
-    textarea.addEventListener('scroll', handleScroll);
-    
-    return () => textarea.removeEventListener('scroll', handleScroll);
-  }, [textareaRef, updatePositions]);
-
-  // Update periodically to catch any changes
-  useEffect(() => {
-    const interval = setInterval(updatePositions, 500);
+    update();
+    const interval = setInterval(update, 100);
     return () => clearInterval(interval);
-  }, [updatePositions]);
+  }, [update]);
 
-  if (remoteUsers.length === 0) {
-    return null;
-  }
+  // Scroll/resize listeners
+  useEffect(() => {
+    if (!textareaElement) return;
+    const sync = () => update();
+    textareaElement.addEventListener('scroll', sync, { passive: true });
+    window.addEventListener('resize', sync);
+    return () => {
+      textareaElement.removeEventListener('scroll', sync);
+      window.removeEventListener('resize', sync);
+    };
+  }, [textareaElement, update]);
+
+  if (!textareaElement) return null;
 
   return (
-    <div
-      ref={containerRef}
-      className="absolute inset-0 pointer-events-none overflow-hidden"
-      style={{ zIndex: 100 }}
-    >
-      {remoteUsers.map(user => {
-        const pos = cursorPositions.get(user.user_id);
-        if (!pos) return null;
-        
+    <div className="absolute inset-0 pointer-events-none overflow-hidden" style={{ zIndex: 50 }}>
+      {Array.from(positions.entries()).map(([cid, pos]) => {
+        const user = allUsers.find(u => u.client_id === cid);
+        if (!user) return null;
+
+        const isLocal = !!user.is_local;
+        const cursorHeight = Math.max(pos.height, 18);
+
         return (
-          <RemoteCursorLabel
-            key={user.user_id}
-            user={user}
-            position={pos}
-          />
+          <div
+            key={cid}
+            className="absolute"
+            style={{
+              top: `${pos.top}px`,
+              left: `${pos.left}px`,
+              transition: 'top 0.1s ease-out, left 0.1s ease-out'
+            }}
+          >
+            {/* Cursor line */}
+            <div
+              className="w-[2px] rounded-sm"
+              style={{
+                height: `${cursorHeight}px`,
+                backgroundColor: user.color,
+                boxShadow: `0 0 4px ${user.color}`,
+                opacity: isLocal ? 0.5 : 1
+              }}
+            />
+            {/* Name label */}
+            <div
+              className="absolute px-1.5 py-0.5 rounded text-[10px] font-semibold text-white whitespace-nowrap shadow-md flex items-center gap-1"
+              style={{
+                backgroundColor: user.color,
+                top: `-22px`,
+                left: '0px',
+                transform: 'translateX(-2px)'
+              }}
+            >
+              <span className="text-[9px]">{isLocal ? '✏️' : user.is_agent ? '🤖' : '👤'}</span>
+              <span>{user.username}{isLocal ? ' (Vous)' : ''}</span>
+            </div>
+          </div>
         );
       })}
     </div>
   );
-};
-
-export default CollaborativeCursors;
-
-
+}

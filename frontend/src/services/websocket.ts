@@ -298,8 +298,21 @@ class WebSocketService {
     this.socket?.emit('vault_item_updated', { password_id: passwordId, name });
   }
 
-  joinDocument(documentId: string) {
-    this.socket?.emit('join_document', { document_id: documentId });
+  joinDocument(documentId: string, userInfo?: { id?: string | number; username?: string; email?: string; is_agent?: boolean; agent_name?: string }) {
+    // Get user info from localStorage if not provided
+    if (!userInfo) {
+      const userId = localStorage.getItem('userId');
+      const username = localStorage.getItem('username') || 'Unknown';
+      userInfo = {
+        id: userId ? parseInt(userId) : undefined,
+        username: username,
+      };
+    }
+    
+    this.socket?.emit('join_document', { 
+      document_id: documentId,
+      user: userInfo
+    });
   }
 
   leaveDocument(documentId: string) {

@@ -21,7 +21,16 @@ export default defineConfig({
         target: 'http://localhost:8200',
         changeOrigin: true,
         ws: true,
+      },
+      '/yjs': {
+        target: 'ws://localhost:1234',
+        changeOrigin: true,
+        ws: true,
+        rewrite: (path) => path.replace(/^\/yjs/, ''),
       }
     }
+  },
+  define: {
+    'import.meta.env.VITE_YJS_WS_URL': JSON.stringify(process.env.VITE_YJS_WS_URL || 'ws://localhost:1234'),
   }
 })
