@@ -86,18 +86,28 @@ document_presence: Dict[str, Dict[str, UserPresence]] = {}
 # Active streaming sessions: session_id -> StreamingSession
 streaming_sessions: Dict[str, StreamingSession] = {}
 
-# User colors palette (for automatic color assignment)
+# Maximally distinct color palette (SashaTrubetskoy / Kelly colors optimized)
 USER_COLORS = [
-    '#3B82F6',  # Blue
-    '#10B981',  # Green
-    '#F59E0B',  # Amber
-    '#EF4444',  # Red
-    '#8B5CF6',  # Purple
-    '#EC4899',  # Pink
-    '#06B6D4',  # Cyan
-    '#F97316',  # Orange
-    '#14B8A6',  # Teal
-    '#6366F1',  # Indigo
+    '#e6194b', # Red
+    '#3cb44b', # Green 
+    '#ffe119', # Yellow
+    '#4363d8', # Blue
+    '#f58231', # Orange
+    '#911eb4', # Purple
+    '#42d4f4', # Cyan
+    '#f032e6', # Magenta
+    '#bfef45', # Lime
+    '#fabebe', # Pink
+    '#469990', # Teal
+    '#dcbeff', # Lavender
+    '#9a6324', # Brown
+    '#fffac8', # Beige
+    '#800000', # Maroon
+    '#aaffc3', # Mint
+    '#808000', # Olive
+    '#ffd8b1', # Apricot
+    '#000075', # Navy
+    '#808080'  # Gray
 ]
 
 # Agent colors (distinct from user colors)
@@ -109,22 +119,30 @@ AGENT_COLORS = {
     'default': '#9333EA',   # Default agent purple
 }
 
-# Track assigned colors per document
+# Track assigned colors per document: document_id -> next_color_index
 document_color_index: Dict[str, int] = {}
 
 
 def get_user_color(document_id: str, user_id: str, is_agent: bool = False, agent_name: Optional[str] = None) -> str:
-    """Get a consistent color for a user in a document"""
+    """Get a consistent color for a user in a document - avoids collisions"""
     if is_agent and agent_name:
         return AGENT_COLORS.get(agent_name.lower(), AGENT_COLORS['default'])
     
-    # For regular users, assign colors based on order of joining
+    # 1. Check if user already has a color explicitly assigned in this session?
+    # Actually, we want persistence during a session.
+    # Check if user is already present in this doc (via another tab?)
+    if document_id in document_presence:
+        for p in document_presence[document_id].values():
+            if p.user_id == user_id:
+                return p.color
+
+    # 2. Assign next distinct color
     if document_id not in document_color_index:
         document_color_index[document_id] = 0
     
-    # Use user_id hash to get consistent color
-    color_index = hash(user_id) % len(USER_COLORS)
-    return USER_COLORS[color_index]
+    idx = document_color_index[document_id] % len(USER_COLORS)
+    document_color_index[document_id] += 1
+    return USER_COLORS[idx]
 
 
 # ===== Presence Management =====
@@ -133,9 +151,6 @@ async def join_document(sid: str, document_id: str, user_info: Dict) -> List[Dic
     """
     User joins a document for collaborative editing
     Returns list of current users in the document (deduplicated by user_id)
-    
-    Note: MCP agents use REST API and don't have real Socket.IO connections,
-    so we skip room operations for them (sid starts with 'mcp_')
     """
     global document_presence
     
@@ -149,19 +164,14 @@ async def join_document(sid: str, document_id: str, user_info: Dict) -> List[Dic
     is_mcp_agent = sid.startswith('mcp_')
     
     # Remove any existing sessions for this user_id in this document (deduplication)
+    # This aggressively cleans up "ghost" sessions from the same user if they refresh
     sids_to_remove = []
     for existing_sid, existing_presence in document_presence[document_id].items():
         if existing_presence.user_id == user_id and existing_sid != sid:
             sids_to_remove.append(existing_sid)
     
     for old_sid in sids_to_remove:
-        del document_presence[document_id][old_sid]
-        # Only try to leave room for real Socket.IO connections
-        if sio and not old_sid.startswith('mcp_'):
-            try:
-                await sio.leave_room(old_sid, f"doc_{document_id}")
-            except:
-                pass  # Old session might already be disconnected
+        await leave_document(old_sid, document_id)
     
     color = get_user_color(document_id, user_id, is_agent, agent_name)
     
@@ -170,7 +180,8 @@ async def join_document(sid: str, document_id: str, user_info: Dict) -> List[Dic
         username=username,
         color=color,
         is_agent=is_agent,
-        agent_name=agent_name
+        agent_name=agent_name,
+        last_activity=datetime.utcnow()
     )
     
     document_presence[document_id][sid] = presence
@@ -201,6 +212,8 @@ async def leave_document(sid: str, document_id: str) -> None:
         # Clean up empty documents
         if not document_presence[document_id]:
             del document_presence[document_id]
+            # Reset color index only if empty to keep palette consistent
+            # But maybe keep it for a while? No, reset is fine if truly empty.
             if document_id in document_color_index:
                 del document_color_index[document_id]
         
@@ -260,6 +273,10 @@ async def update_cursor_position(sid: str, document_id: str, position: Dict) -> 
                 'selection_end': presence.selection_end
             }, room=f"doc_{document_id}", skip_sid=sid)
 
+async def handle_heartbeat(sid: str, document_id: str) -> None:
+    """Update last_activity timestamp for a user"""
+    if document_id in document_presence and sid in document_presence[document_id]:
+        document_presence[document_id][sid].last_activity = datetime.utcnow()
 
 def get_deduplicated_users(document_id: str) -> List[Dict]:
     """
@@ -284,7 +301,7 @@ async def get_document_presence(document_id: str) -> List[Dict]:
     return get_deduplicated_users(document_id)
 
 
-async def cleanup_stale_presence(max_age_seconds: int = 60) -> int:
+async def cleanup_stale_presence(max_age_seconds: int = 15) -> int:
     """
     Clean up stale presence entries (users who haven't updated in max_age_seconds)
     Returns number of cleaned entries
@@ -294,6 +311,7 @@ async def cleanup_stale_presence(max_age_seconds: int = 60) -> int:
     now = datetime.utcnow()
     cleaned = 0
     
+    # Snapshot keys to avoid runtime error during iteration
     for doc_id in list(document_presence.keys()):
         sids_to_remove = []
         for sid, presence in document_presence[doc_id].items():
@@ -302,23 +320,10 @@ async def cleanup_stale_presence(max_age_seconds: int = 60) -> int:
                 sids_to_remove.append(sid)
         
         for sid in sids_to_remove:
-            user = document_presence[doc_id][sid]
-            del document_presence[doc_id][sid]
-            cleaned += 1
-            
-            # Notify others
-            if sio:
-                await sio.emit('presence:leave', {
-                    'document_id': doc_id,
-                    'user_id': user.user_id,
-                    'username': user.username
-                }, room=f"doc_{doc_id}")
-        
-        # Clean up empty documents
-        if not document_presence[doc_id]:
-            del document_presence[doc_id]
-            if doc_id in document_color_index:
-                del document_color_index[doc_id]
+            # Check if user still exists (might have been removed in inner loop)
+            if sid in document_presence[doc_id]:
+                await leave_document(sid, doc_id)
+                cleaned += 1
     
     return cleaned
 

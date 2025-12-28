@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { getCaretCoordinates, lineColumnToPosition } from '../utils/textareaCaretPosition';
 
+
 export interface RemoteUser {
-  client_id: number;
+  client_id: string;
   username: string;
   color: string;
   is_agent: boolean;
@@ -14,17 +15,17 @@ export interface RemoteUser {
 
 interface CollaborativeCursorsProps {
   users: RemoteUser[];
-  localClientId?: number;
+  localClientId?: string;
   textareaElement: HTMLTextAreaElement | null;
   content: string;
 }
 
 export default function CollaborativeCursors({ users, localClientId, textareaElement, content }: CollaborativeCursorsProps) {
-  const [positions, setPositions] = useState<Map<number, { top: number; left: number; height: number }>>(new Map());
+  const [positions, setPositions] = useState<Map<string, { top: number; left: number; height: number }>>(new Map());
 
   // Filter users with valid cursor data - dedupe by client_id
   const allUsers = useMemo(() => {
-    const seen = new Set<number>();
+    const seen = new Set<string>();
     return users.filter(u => {
       if (u.cursor_line === undefined || u.cursor_line <= 0) return false;
       if (seen.has(u.client_id)) return false;
@@ -36,7 +37,7 @@ export default function CollaborativeCursors({ users, localClientId, textareaEle
   const update = useCallback(() => {
     if (!textareaElement) return;
 
-    const next = new Map<number, { top: number; left: number; height: number }>();
+    const next = new Map<string, { top: number; left: number; height: number }>();
 
     allUsers.forEach(u => {
       try {
@@ -50,7 +51,7 @@ export default function CollaborativeCursors({ users, localClientId, textareaEle
         const top = coords.top - textareaElement.scrollTop;
         const left = coords.left - textareaElement.scrollLeft;
 
-        console.log(`[Cursor Debug] ${u.username}: line=${u.cursor_line}, col=${u.cursor_column}, pos=${position}, top=${top}, left=${left}, height=${coords.height}`);
+        // console.log(`[Cursor Debug] ${u.username}: line=${u.cursor_line}, col=${u.cursor_column}, pos=${position}, top=${top}, left=${left}, height=${coords.height}`);
 
         // Only show if within visible bounds
         if (top >= -20 && top <= textareaElement.clientHeight + 20) {

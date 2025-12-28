@@ -500,6 +500,14 @@ async def leave_document(sid, data):
         }, room=f"doc_{document_id}")
 
 @sio.event
+async def presence_heartbeat(sid, data):
+    """Handle heartbeat from client to update last activity"""
+    document_id = data.get('document_id')
+    if not document_id:
+        return
+    await collaborative.handle_heartbeat(sid, document_id)
+
+@sio.event
 async def cursor_update(sid, data):
     """Broadcast cursor position update to other users in the same document"""
     document_id = data.get('document_id')
@@ -753,12 +761,30 @@ def ensure_default_setup():
     except Exception as e:
         print(f"⚠ Warning: Could not ensure default setup: {e}")
         import traceback
+        import traceback
         traceback.print_exc()
+
+async def start_presence_cleanup_task():
+    """Background task to clean up stale presence"""
+    print("Starting presence cleanup task...")
+    while True:
+        try:
+            await asyncio.sleep(5)  # Run every 5 seconds
+            # Use 10s max age (heartbeat is every 5s)
+            cleaned = await collaborative.cleanup_stale_presence(max_age_seconds=10)
+            if cleaned > 0:
+                print(f"Cleaned {cleaned} stale presence entries")
+        except Exception as e:
+            print(f"Error in presence cleanup: {e}")
+            await asyncio.sleep(5)
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize default workspace and permissions on startup"""
     ensure_default_setup()
+    
+    # Start background task for cleaning stale presence
+    asyncio.create_task(start_presence_cleanup_task())
 
 # ===== REST API Endpoints =====
 
