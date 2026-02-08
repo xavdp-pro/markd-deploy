@@ -75,34 +75,40 @@ const UserMultiSelect: React.FC<UserMultiSelectProps> = ({
           {selectedUsers.length === 0 ? (
             <span className="text-sm text-gray-400">No assignees</span>
           ) : (
-            selectedUsers.map(user => (
-              <div
-                key={user.id}
-                className="flex items-center gap-1 px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-100 rounded text-sm"
-              >
-                <span>{user.username}</span>
-                {responsibleUserId === user.id && (
-                  <div title="Responsible">
-                    <Crown size={14} className="text-yellow-500" />
-                  </div>
-                )}
-                {responsibleUserId !== user.id && (
-                  <button
-                    onClick={() => handleSetResponsible(user.id)}
-                    className="text-gray-500 hover:text-yellow-500"
-                    title="Set as responsible"
-                  >
-                    <Crown size={14} />
-                  </button>
-                )}
-                <button
-                  onClick={() => handleRemoveUser(user.id)}
-                  className="ml-1 text-blue-600 dark:text-blue-300 hover:text-blue-800 dark:hover:text-blue-100"
+            selectedUsers.map(user => {
+              const isResponsible = responsibleUserId === user.id;
+              return (
+                <div
+                  key={user.id}
+                  className="flex items-center gap-1 px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-100 rounded text-sm"
                 >
-                  <X size={14} />
-                </button>
-              </div>
-            ))
+                  <span>{user.username}</span>
+                  {isResponsible ? (
+                    <button
+                      onClick={() => onSelectionChange(selectedUserIds, undefined)}
+                      className="text-amber-500 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-200 transition-colors"
+                      title="Remove as responsible"
+                    >
+                      <Crown size={14} fill="currentColor" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleSetResponsible(user.id)}
+                      className="text-gray-400 hover:text-amber-500 dark:text-gray-500 dark:hover:text-amber-400 opacity-40 hover:opacity-100 transition-all"
+                      title="Set as responsible"
+                    >
+                      <Crown size={14} />
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleRemoveUser(user.id)}
+                    className="ml-0.5 text-blue-600 dark:text-blue-300 hover:text-blue-800 dark:hover:text-blue-100 transition-colors"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              );
+            })
           )}
         </div>
       </div>

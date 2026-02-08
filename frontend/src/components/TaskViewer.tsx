@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { FileEdit, Link, ChevronRight } from 'lucide-react';
+import React, { useEffect, useState, useRef } from 'react';
+import { FileEdit, Link, ChevronRight, LayoutGrid } from 'lucide-react';
 import toast from 'react-hot-toast';
 import MDEditor from '@uiw/react-md-editor';
 import { Task, TaskComment, TaskTag, TaskAssignee, TaskFile, TaskChecklistItem, WorkflowStep } from '../types';
@@ -40,11 +40,14 @@ interface TaskViewerProps {
   onDeleteFile?: (fileId: string) => Promise<void>;
   checklistItems?: TaskChecklistItem[];
   checklistLoading?: boolean;
-  onAddChecklistItem?: (text: string) => Promise<void>;
+  onAddChecklistItem?: (text: string, assignedTo?: number | null, parentId?: string | null) => Promise<void>;
   onToggleChecklistItem?: (itemId: string, completed: boolean) => Promise<void>;
   onDeleteChecklistItem?: (itemId: string) => Promise<void>;
   onUpdateChecklistItem?: (itemId: string, text: string) => Promise<void>;
+  onUpdateChecklistAssignee?: (itemId: string, userId: number | null) => Promise<void>;
+  onUpdateChecklistParent?: (itemId: string, parentId: string | null) => Promise<void>;
   workflowSteps?: WorkflowStep[];
+  onKanbanView?: () => void;
 }
 
 const TaskViewer: React.FC<TaskViewerProps> = ({
@@ -81,8 +84,32 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
   onToggleChecklistItem,
   onDeleteChecklistItem,
   onUpdateChecklistItem,
+  onUpdateChecklistAssignee,
+  onUpdateChecklistParent,
   workflowSteps,
+  onKanbanView,
 }) => {
+  const kanbanBtnRef = useRef<HTMLButtonElement>(null);
+
+  // Random ripple effect on the Kanban button
+  useEffect(() => {
+    if (!onKanbanView) return;
+    let timeout: ReturnType<typeof setTimeout>;
+    const triggerRipple = () => {
+      const btn = kanbanBtnRef.current;
+      if (btn) {
+        btn.classList.remove('ripple-active');
+        void btn.offsetWidth; // force reflow
+        btn.classList.add('ripple-active');
+        setTimeout(() => btn.classList.remove('ripple-active'), 1200);
+      }
+      // Next ripple in 5-15s (random)
+      timeout = setTimeout(triggerRipple, 5000 + Math.random() * 10000);
+    };
+    // First ripple after 2-5s
+    timeout = setTimeout(triggerRipple, 2000 + Math.random() * 3000);
+    return () => clearTimeout(timeout);
+  }, [onKanbanView]);
   const [activeTab, setActiveTab] = useState<'details' | 'checklist' | 'comments' | 'files'>(() => {
     try {
       const saved = sessionStorage.getItem('markd_task_active_tab');
@@ -161,6 +188,16 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
         </div>
         
         <div className="flex items-center gap-3">
+          {onKanbanView && (
+            <button
+              ref={kanbanBtnRef}
+              onClick={onKanbanView}
+              className="relative rounded-lg p-2 text-indigo-500 transition-colors hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300 kanban-glow"
+              title="Kanban View"
+            >
+              <LayoutGrid size={20} />
+            </button>
+          )}
           {presenceUsers && presenceUsers.length > 0 && (
             <PresenceAvatars users={presenceUsers} />
           )}
@@ -290,6 +327,9 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
                   onToggleItem={onToggleChecklistItem}
                   onDeleteItem={onDeleteChecklistItem}
                   onUpdateItem={onUpdateChecklistItem}
+                  onUpdateAssignee={onUpdateChecklistAssignee}
+                  onUpdateParent={onUpdateChecklistParent}
+                  workspaceId={workspaceId}
                 />
               </div>
             )}
@@ -304,6 +344,7 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
                   onUpdate={onUpdateComment}
                   onDelete={onDeleteComment}
                   currentUserId={currentUserId}
+                  workspaceId={workspaceId}
                 />
               </div>
             )}

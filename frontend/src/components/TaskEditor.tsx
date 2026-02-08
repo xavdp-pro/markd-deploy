@@ -361,6 +361,29 @@ const TaskEditor: React.FC<TaskEditorProps> = ({
 
       {/* Main content area */}
       <div className="flex-1 flex overflow-hidden">
+        {/* Metadata Panel (collapsible) - Left side */}
+        {showMetadata && (
+          <div className="w-72 flex-shrink-0 border-r dark:border-gray-800 overflow-y-auto bg-gray-50 dark:bg-gray-900/50">
+            <TaskMetadataPanel
+              task={task}
+              canEdit={true}
+              onStatusChange={onStatusChange}
+              onPriorityChange={onPriorityChange}
+              onDueDateChange={onDueDateChange}
+              tags={tags}
+              availableTags={availableTags}
+              onAddTag={onAddTag}
+              onRemoveTag={onRemoveTag}
+              assignees={assignees}
+              responsibleId={responsibleId ?? undefined}
+              onAssigneesChange={onAssigneesChange}
+              workspaceId={workspaceId}
+              className="h-full"
+              workflowSteps={workflowSteps}
+            />
+          </div>
+        )}
+
         {/* Editor / Preview panels */}
         <div
           className="flex-1 flex overflow-hidden relative"
@@ -452,29 +475,6 @@ const TaskEditor: React.FC<TaskEditorProps> = ({
             </div>
           )}
         </div>
-
-        {/* Metadata Panel (collapsible) */}
-        {showMetadata && (
-          <div className="w-72 flex-shrink-0 border-l dark:border-gray-800 overflow-y-auto bg-gray-50 dark:bg-gray-900/50">
-            <TaskMetadataPanel
-              task={task}
-              canEdit={true}
-              onStatusChange={onStatusChange}
-              onPriorityChange={onPriorityChange}
-              onDueDateChange={onDueDateChange}
-              tags={tags}
-              availableTags={availableTags}
-              onAddTag={onAddTag}
-              onRemoveTag={onRemoveTag}
-              assignees={assignees}
-              responsibleId={responsibleId ?? undefined}
-              onAssigneesChange={onAssigneesChange}
-              workspaceId={workspaceId}
-              className="h-full"
-              workflowSteps={workflowSteps}
-            />
-          </div>
-        )}
       </div>
     </div>
   );

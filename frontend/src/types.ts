@@ -234,6 +234,9 @@ export interface TaskChecklistItem {
   text: string;
   completed: boolean;
   order: number;
+  assigned_to: number | null;
+  assigned_username: string | null;
+  parent_id: string | null;
   created_at: string;
   updated_at?: string;
 }

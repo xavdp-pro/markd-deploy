@@ -36,8 +36,15 @@ from encryption_service import encryption
 # Configuration
 # ============================================================
 WORKSPACE_ID = 'demo'
-ADMIN_USER_ID = 1
 ADMIN_USER_NAME = 'admin'
+
+# Dynamically get admin user ID
+admin_row = db.execute_query("SELECT id FROM users WHERE username = %s", (ADMIN_USER_NAME,))
+if not admin_row:
+    print("ERROR: admin user not found in database. Run install.sql first.")
+    sys.exit(1)
+ADMIN_USER_ID = admin_row[0]['id']
+print(f"Admin user ID: {ADMIN_USER_ID}")
 
 def uid():
     return str(uuid.uuid4())
@@ -85,10 +92,10 @@ doc_folder_ops = uid()
 doc_folder_onboarding = uid()
 
 doc_folders = [
-    (doc_folder_infra, 'Infrastructure', 'folder', None),
-    (doc_folder_dev, 'Development', 'folder', None),
-    (doc_folder_ops, 'Operations', 'folder', None),
-    (doc_folder_onboarding, 'Onboarding', 'folder', None),
+    (doc_folder_infra, 'Infrastructure', 'folder', 'root'),
+    (doc_folder_dev, 'Development', 'folder', 'root'),
+    (doc_folder_ops, 'Operations', 'folder', 'root'),
+    (doc_folder_onboarding, 'Onboarding', 'folder', 'root'),
 ]
 
 # Documents
@@ -739,10 +746,10 @@ task_folder_bugs = uid()
 task_folder_security = uid()
 
 task_folders = [
-    (task_folder_infra, 'Infrastructure', None),
-    (task_folder_dev, 'Development', None),
-    (task_folder_bugs, 'Bugs', None),
-    (task_folder_security, 'Security', None),
+    (task_folder_infra, 'Infrastructure', 'root'),
+    (task_folder_dev, 'Development', 'root'),
+    (task_folder_bugs, 'Bugs', 'root'),
+    (task_folder_security, 'Security', 'root'),
 ]
 
 # Tasks: (id, name, parent_id, content, status, priority, due_date)

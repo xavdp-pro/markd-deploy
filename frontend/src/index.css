@@ -327,10 +327,168 @@ textarea {
   animation: cursor-glow 1.5s ease-in-out infinite;
 }
 
+/* Kanban button ripple effect — JS-triggered random bursts */
+.kanban-glow {
+  position: relative;
+  overflow: visible;
+  border-radius: 0.5rem;
+}
+
+.kanban-glow::before,
+.kanban-glow::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 0.625rem;
+  border: 2px solid rgba(99, 102, 241, 0);
+  pointer-events: none;
+  transition: none;
+}
+
+.kanban-glow.ripple-active::before {
+  animation: kanban-ripple 0.8s ease-out forwards;
+}
+
+.kanban-glow.ripple-active::after {
+  animation: kanban-ripple 0.8s ease-out 0.3s forwards;
+}
+
+@keyframes kanban-ripple {
+  0% { inset: -2px; border-color: rgba(99, 102, 241, 0.6); }
+  100% { inset: -14px; border-color: rgba(99, 102, 241, 0); }
+}
+
+.kanban-glow:hover {
+  background-color: rgba(99, 102, 241, 0.1);
+}
+
+/* Compact MDEditor for comment input */
+.comment-md-editor .w-md-editor {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+.comment-md-editor .w-md-editor-toolbar {
+  border-bottom: 1px solid #e5e7eb !important;
+  background: #f9fafb !important;
+  padding: 2px 4px !important;
+  min-height: 32px !important;
+}
+
+.dark .comment-md-editor .w-md-editor-toolbar {
+  border-bottom-color: #374151 !important;
+  background: #1f2937 !important;
+}
+
+.comment-md-editor .w-md-editor-toolbar li > button {
+  height: 24px !important;
+  width: 24px !important;
+}
+
+.comment-md-editor .w-md-editor-content {
+  min-height: 60px !important;
+}
+
+.comment-md-editor .w-md-editor-text-pre,
+.comment-md-editor .w-md-editor-text-input,
+.comment-md-editor .w-md-editor-input textarea {
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+}
+
+.comment-md-editor .w-md-editor-preview {
+  font-size: 13px !important;
+  padding: 8px !important;
+}
+
+.comment-md-editor .wmde-markdown {
+  font-size: 13px !important;
+}
+
 /* Selection highlight for remote users */
 .remote-selection {
   position: absolute;
   pointer-events: none;
   opacity: 0.3;
   z-index: 20;
+}
+
+/* TipTap WYSIWYG editor styles */
+.tiptap {
+  outline: none;
+}
+.tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: #adb5bd;
+  pointer-events: none;
+  height: 0;
+}
+.tiptap ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+.tiptap ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.tiptap ul[data-type="taskList"] li label {
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+}
+.tiptap ul[data-type="taskList"] li div {
+  flex: 1;
+}
+.tiptap blockquote {
+  border-left: 3px solid #d1d5db;
+  padding-left: 1rem;
+  color: #6b7280;
+  margin: 0.5rem 0;
+}
+.tiptap pre {
+  background: #f3f4f6;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+  overflow-x: auto;
+}
+.dark .tiptap pre {
+  background: #1f2937;
+}
+.tiptap code {
+  background: #e5e7eb;
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.85em;
+}
+.dark .tiptap code {
+  background: #374151;
+}
+.tiptap img {
+  max-width: 100%;
+  border-radius: 0.5rem;
+  margin: 0.5rem 0;
+}
+.tiptap a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+.dark .tiptap a {
+  color: #60a5fa;
+}
+.tiptap .mention {
+  background: #dbeafe;
+  color: #1d4ed8;
+  border-radius: 0.375rem;
+  padding: 0.1rem 0.35rem;
+  font-weight: 500;
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+.dark .tiptap .mention {
+  background: #1e3a5f;
+  color: #93c5fd;
 }

@@ -303,17 +303,17 @@ class ApiService {
     return this.request(`/tasks/${id}/checklist`);
   }
 
-  async addTaskChecklistItem(id: string, text: string): Promise<{ success: boolean; item: TaskChecklistItem }> {
+  async addTaskChecklistItem(id: string, text: string, assignedTo?: number | null, parentId?: string | null): Promise<{ success: boolean; item: TaskChecklistItem }> {
     return this.request(`/tasks/${id}/checklist`, {
       method: 'POST',
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, assigned_to: assignedTo ?? null, parent_id: parentId ?? null }),
     });
   }
 
   async updateTaskChecklistItem(
     taskId: string,
     itemId: string,
-    updates: { text?: string; completed?: boolean }
+    updates: { text?: string; completed?: boolean; assigned_to?: number | null; clear_assignee?: boolean; parent_id?: string | null; clear_parent?: boolean }
   ): Promise<{ success: boolean; item: TaskChecklistItem }> {
     return this.request(`/tasks/${taskId}/checklist/${itemId}`, {
       method: 'PATCH',

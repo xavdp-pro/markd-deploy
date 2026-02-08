@@ -719,9 +719,9 @@ function TasksApp() {
     if (selected.length === 0) return;
     try { await api.deleteTaskFile(selected[0].id, fileId); setFiles(p => p.filter(f => f.id !== fileId)); toast.success('File deleted'); } catch (e) { toast.error('Error deleting file'); }
   };
-  const handleAddChecklistItem = async (text: string) => {
+  const handleAddChecklistItem = async (text: string, assignedTo?: number | null, parentId?: string | null) => {
     if (selected.length === 0) return;
-    try { const r = await api.addTaskChecklistItem(selected[0].id, text); setChecklistItems(p => [...p, r.item]); toast.success('Item added'); } catch (e) { toast.error('Error adding item'); }
+    try { const r = await api.addTaskChecklistItem(selected[0].id, text, assignedTo, parentId); setChecklistItems(p => [...p, r.item]); toast.success('Item added'); } catch (e) { toast.error('Error adding item'); }
   };
   const handleToggleChecklistItem = async (itemId: string, completed: boolean) => {
     if (selected.length === 0) return;
@@ -734,6 +734,22 @@ function TasksApp() {
   const handleUpdateChecklistItem = async (itemId: string, text: string) => {
     if (selected.length === 0) return;
     try { await api.updateTaskChecklistItem(selected[0].id, itemId, { text }); setChecklistItems(p => p.map(i => i.id === itemId ? { ...i, text } : i)); toast.success('Item updated'); } catch (e) { toast.error('Error updating item'); }
+  };
+  const handleUpdateChecklistAssignee = async (itemId: string, userId: number | null) => {
+    if (selected.length === 0) return;
+    try {
+      const updates = userId === null ? { clear_assignee: true } : { assigned_to: userId };
+      const r = await api.updateTaskChecklistItem(selected[0].id, itemId, updates);
+      setChecklistItems(p => p.map(i => i.id === itemId ? r.item : i));
+    } catch (e) { toast.error('Error updating assignee'); }
+  };
+  const handleUpdateChecklistParent = async (itemId: string, parentId: string | null) => {
+    if (selected.length === 0) return;
+    try {
+      const updates = parentId === null ? { clear_parent: true } : { parent_id: parentId };
+      const r = await api.updateTaskChecklistItem(selected[0].id, itemId, updates);
+      setChecklistItems(p => p.map(i => i.id === itemId ? r.item : i));
+    } catch (e) { toast.error('Error updating parent'); }
   };
 
   useEffect(() => {
@@ -821,11 +837,6 @@ function TasksApp() {
         ) : (
           <>
             <div className="flex flex-col" style={{ width: treeWidth }}>
-              <div className="flex items-center gap-2 p-4 border-b border-gray-200 dark:border-gray-800">
-                <button onClick={() => setIsKanbanView(true)} className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-blue-200 bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-3 text-sm font-medium text-blue-700 transition-all hover:from-blue-100 hover:to-indigo-100 hover:shadow-md dark:border-blue-800 dark:from-blue-900/20 dark:to-indigo-900/20 dark:text-blue-400 dark:hover:from-blue-900/30 dark:hover:to-indigo-900/30" title="Open Kanban view">
-                  <LayoutGrid size={18} /> Kanban View
-                </button>
-              </div>
               <TaskTree tree={filteredTree} expanded={expanded} selected={selected} onToggleExpand={handleToggleExpand} onExpandAll={handleExpandAll} onCollapseAll={handleCollapseAll} onSelect={handleSelectTask} onSelectAll={handleSelectAll} onCreate={canWrite ? handleCreateTask : undefined} onCreateFolder={canWrite ? handleCreateFolder : undefined} onDelete={canWrite ? handleDelete : undefined} onRename={canWrite ? handleRename : undefined} onCopy={handleCopy} userPermission={userPermission} searchQuery={searchQuery} onSearchChange={setSearchQuery} onClearSearch={handleClearSearch} statusFilter={statusFilter} onStatusFilterChange={setStatusFilter} priorityFilter={priorityFilter} onPriorityFilterChange={setPriorityFilter} allTags={availableTags} selectedTags={selectedTags} onTagFilterChange={setSelectedTags} width={treeWidth} readOnly={userPermission === 'read'} onCollapseSidebar={toggleSidebar} />
             </div>
             <div className="w-1 cursor-col-resize bg-gray-300 transition-colors hover:bg-blue-500 dark:bg-gray-700" onMouseDown={handleMouseDown} />
@@ -838,13 +849,14 @@ function TasksApp() {
             </div>
           ) : (
             <div className="flex flex-1 flex-col">
-              <TaskViewer task={selected[0]} onEdit={handleEdit} canEdit={selected[0].type === 'task' && canWrite} onStatusChange={handleStatusChange} onPriorityChange={handlePriorityChange} onDueDateChange={handleDueDateChange} tags={taskTags} availableTags={availableTags} onAddTag={canWrite ? handleAddTag : undefined} onRemoveTag={canWrite ? handleRemoveTag : undefined} assignees={assignees} responsibleId={responsibleId} onAssigneesChange={canWrite ? handleAssignmentsChange : undefined} workspaceId={currentWorkspace} comments={comments} commentsLoading={commentsLoading} onAddComment={canWrite ? handleAddComment : undefined} canCollaborate={canWrite} files={files} filesLoading={filesLoading} onUploadFile={canWrite ? handleUploadFile : undefined} onDeleteFile={canWrite ? handleDeleteFile : undefined} checklistItems={checklistItems} checklistLoading={checklistLoading} onAddChecklistItem={canWrite ? handleAddChecklistItem : undefined} onToggleChecklistItem={canWrite ? handleToggleChecklistItem : undefined} onDeleteChecklistItem={canWrite ? handleDeleteChecklistItem : undefined} onUpdateChecklistItem={canWrite ? handleUpdateChecklistItem : undefined}
+              <TaskViewer task={selected[0]} onEdit={handleEdit} canEdit={selected[0].type === 'task' && canWrite} onStatusChange={handleStatusChange} onPriorityChange={handlePriorityChange} onDueDateChange={handleDueDateChange} tags={taskTags} availableTags={availableTags} onAddTag={canWrite ? handleAddTag : undefined} onRemoveTag={canWrite ? handleRemoveTag : undefined} assignees={assignees} responsibleId={responsibleId} onAssigneesChange={canWrite ? handleAssignmentsChange : undefined} workspaceId={currentWorkspace} comments={comments} commentsLoading={commentsLoading} onAddComment={canWrite ? handleAddComment : undefined} canCollaborate={canWrite} files={files} filesLoading={filesLoading} onUploadFile={canWrite ? handleUploadFile : undefined} onDeleteFile={canWrite ? handleDeleteFile : undefined} checklistItems={checklistItems} checklistLoading={checklistLoading} onAddChecklistItem={canWrite ? handleAddChecklistItem : undefined} onToggleChecklistItem={canWrite ? handleToggleChecklistItem : undefined} onDeleteChecklistItem={canWrite ? handleDeleteChecklistItem : undefined} onUpdateChecklistItem={canWrite ? handleUpdateChecklistItem : undefined} onUpdateChecklistAssignee={canWrite ? handleUpdateChecklistAssignee : undefined} onUpdateChecklistParent={canWrite ? handleUpdateChecklistParent : undefined}
                 presenceUsers={presence[selected[0].id]}
                 isEditing={false}
                 currentUserId={user?.id ? Number(user.id) : null}
                 onUpdateComment={canWrite ? handleUpdateComment : undefined}
                 onDeleteComment={canWrite ? handleDeleteComment : undefined}
                 workflowSteps={workflowSteps}
+                onKanbanView={() => setIsKanbanView(true)}
               />
             </div>
           )

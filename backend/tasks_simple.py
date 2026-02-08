@@ -111,10 +111,16 @@ class AssigneesUpdate(BaseModel):
 
 class ChecklistItemCreate(BaseModel):
     text: str
+    assigned_to: Optional[int] = None
+    parent_id: Optional[str] = None
 
 class ChecklistItemUpdate(BaseModel):
     text: Optional[str] = None
     completed: Optional[bool] = None
+    assigned_to: Optional[int] = Field(default=None)
+    clear_assignee: Optional[bool] = False
+    parent_id: Optional[str] = Field(default=None)
+    clear_parent: Optional[bool] = False
 
 # Helper function
 def build_task_tree(parent_id: Optional[str] = 'root', workspace_id: str = 'demo', depth: int = 0) -> List[Dict]:
@@ -630,17 +636,29 @@ def normalize_checklist_item(item: Dict[str, Any]) -> Dict[str, Any]:
     normalized['completed'] = bool(normalized.get('completed', False))
     # Ensure order is an integer
     normalized['order'] = int(normalized.get('order', 0))
+    # Ensure assigned_to is int or None
+    if normalized.get('assigned_to') is not None:
+        try:
+            normalized['assigned_to'] = int(normalized['assigned_to'])
+        except (TypeError, ValueError):
+            normalized['assigned_to'] = None
+    else:
+        normalized['assigned_to'] = None
+    # Ensure parent_id is str or None
+    normalized['parent_id'] = normalized.get('parent_id') or None
     normalized['created_at'] = serialize_timestamp(normalized.get('created_at'))
     normalized['updated_at'] = serialize_timestamp(normalized.get('updated_at'))
     return normalized
 
 def fetch_task_checklist(task_id: str) -> List[Dict[str, Any]]:
-    """Fetch checklist items for a task"""
+    """Fetch checklist items for a task with assignee info"""
     query = """
-        SELECT id, task_id, text, completed, `order`, created_at, updated_at
-        FROM task_checklist
-        WHERE task_id = %s
-        ORDER BY `order` ASC, created_at ASC
+        SELECT c.id, c.task_id, c.text, c.completed, c.`order`, c.assigned_to, c.parent_id,
+               c.created_at, c.updated_at, u.username AS assigned_username
+        FROM task_checklist c
+        LEFT JOIN users u ON c.assigned_to = u.id
+        WHERE c.task_id = %s
+        ORDER BY c.`order` ASC, c.created_at ASC
     """
     rows = db.execute_query(query, (task_id,))
     return [normalize_checklist_item(dict(row)) for row in rows]
@@ -1721,16 +1739,18 @@ async def add_task_checklist_item(task_id: str, item: ChecklistItemCreate, user:
     
     item_id = str(uuid.uuid4())
     query = """
-        INSERT INTO task_checklist (id, task_id, text, completed, `order`)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO task_checklist (id, task_id, text, completed, `order`, assigned_to, parent_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
     """
-    db.execute_update(query, (item_id, task_id, text, False, new_order))
+    db.execute_update(query, (item_id, task_id, text, False, new_order, item.assigned_to, item.parent_id))
     
     # Fetch created item
     fetch_query = """
-        SELECT id, task_id, text, completed, `order`, created_at, updated_at
-        FROM task_checklist
-        WHERE id = %s
+        SELECT c.id, c.task_id, c.text, c.completed, c.`order`, c.assigned_to, c.parent_id,
+               c.created_at, c.updated_at, u.username AS assigned_username
+        FROM task_checklist c
+        LEFT JOIN users u ON c.assigned_to = u.id
+        WHERE c.id = %s
     """
     rows = db.execute_query(fetch_query, (item_id,))
     if not rows:
@@ -1775,6 +1795,18 @@ async def update_task_checklist_item(
         updates_list.append("completed = %s")
         params.append(bool(updates.completed))
     
+    if updates.clear_assignee:
+        updates_list.append("assigned_to = NULL")
+    elif updates.assigned_to is not None:
+        updates_list.append("assigned_to = %s")
+        params.append(updates.assigned_to)
+    
+    if updates.clear_parent:
+        updates_list.append("parent_id = NULL")
+    elif updates.parent_id is not None:
+        updates_list.append("parent_id = %s")
+        params.append(updates.parent_id)
+    
     if not updates_list:
         return {"success": True, "message": "No changes"}
     
@@ -1784,9 +1816,11 @@ async def update_task_checklist_item(
     
     # Fetch updated item
     fetch_query = """
-        SELECT id, task_id, text, completed, `order`, created_at, updated_at
-        FROM task_checklist
-        WHERE id = %s
+        SELECT c.id, c.task_id, c.text, c.completed, c.`order`, c.assigned_to, c.parent_id,
+               c.created_at, c.updated_at, u.username AS assigned_username
+        FROM task_checklist c
+        LEFT JOIN users u ON c.assigned_to = u.id
+        WHERE c.id = %s
     """
     rows = db.execute_query(fetch_query, (item_id,))
     if not rows:

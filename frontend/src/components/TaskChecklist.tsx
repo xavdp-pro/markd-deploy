@@ -1,48 +1,136 @@
-import React, { useState } from 'react';
-import { Check, Plus, Trash2, GripVertical, Loader2, ListChecks } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Check, Plus, Trash2, GripVertical, Loader2, ListChecks, User as UserIcon, X, ChevronRight, CornerDownRight } from 'lucide-react';
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core';
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { TaskChecklistItem } from '../types';
+import { TaskChecklistItem, User } from '../types';
 
 interface TaskChecklistProps {
   items: TaskChecklistItem[];
   loading?: boolean;
   canEdit?: boolean;
-  onAddItem?: (text: string) => Promise<void>;
+  onAddItem?: (text: string, assignedTo?: number | null, parentId?: string | null) => Promise<void>;
   onToggleItem?: (itemId: string, completed: boolean) => Promise<void>;
   onDeleteItem?: (itemId: string) => Promise<void>;
   onUpdateItem?: (itemId: string, text: string) => Promise<void>;
   onReorderItems?: (items: TaskChecklistItem[]) => Promise<void>;
+  onUpdateAssignee?: (itemId: string, userId: number | null) => Promise<void>;
+  onUpdateParent?: (itemId: string, parentId: string | null) => Promise<void>;
+  workspaceId?: string;
 }
+
+// Inline assignee picker (compact dropdown)
+const AssigneePicker: React.FC<{
+  currentUserId: number | null;
+  currentUsername: string | null;
+  users: User[];
+  onSelect: (userId: number | null) => void;
+  disabled?: boolean;
+}> = ({ currentUserId, currentUsername, users, onSelect, disabled }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => { if (!disabled) setOpen(!open); }}
+        disabled={disabled}
+        className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors ${
+          currentUserId
+            ? 'bg-blue-50 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/50'
+            : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:text-gray-500 dark:hover:text-gray-300 dark:hover:bg-gray-800'
+        } ${disabled ? 'cursor-default opacity-60' : 'cursor-pointer'}`}
+        title={currentUserId ? `Assigned to ${currentUsername}` : 'Assign to...'}
+      >
+        <UserIcon size={12} />
+        {currentUsername ? <span className="max-w-[80px] truncate">{currentUsername}</span> : null}
+      </button>
+      {open && (
+        <div className="absolute left-0 z-50 mt-1 w-44 rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+          {/* Unassign option */}
+          {currentUserId && (
+            <button
+              type="button"
+              onClick={() => { onSelect(null); setOpen(false); }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20"
+            >
+              <X size={12} /> Unassign
+            </button>
+          )}
+          {users.map(u => (
+            <button
+              key={u.id}
+              type="button"
+              onClick={() => { onSelect(u.id); setOpen(false); }}
+              className={`flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
+                u.id === currentUserId
+                  ? 'bg-blue-50 font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+                  : 'text-gray-700 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-gray-700'
+              }`}
+            >
+              <UserIcon size={12} />
+              <span className="truncate">{u.username}</span>
+              {u.id === currentUserId && <Check size={12} className="ml-auto text-blue-500" />}
+            </button>
+          ))}
+          {users.length === 0 && (
+            <div className="px-3 py-2 text-xs text-gray-400">No users available</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 // Sortable Item Component
 interface SortableItemProps {
   item: TaskChecklistItem;
+  isChild: boolean;
   canEdit: boolean;
   editingId: string | null;
   editingText: string;
   submitting: boolean;
+  users: User[];
+  rootItems: TaskChecklistItem[];
   onToggle: (itemId: string, completed: boolean) => void;
   onDelete: (itemId: string) => void;
   onStartEdit: (item: TaskChecklistItem) => void;
   onSaveEdit: (itemId: string) => void;
   onCancelEdit: () => void;
   setEditingText: (text: string) => void;
+  onAssigneeChange?: (itemId: string, userId: number | null) => void;
+  onMakeChild?: (itemId: string, parentId: string) => void;
+  onMakeRoot?: (itemId: string) => void;
 }
 
 const SortableItem: React.FC<SortableItemProps> = ({
   item,
+  isChild,
   canEdit,
   editingId,
   editingText,
   submitting,
+  users,
+  rootItems,
   onToggle,
   onDelete,
   onStartEdit,
   onSaveEdit,
   onCancelEdit,
   setEditingText,
+  onAssigneeChange,
+  onMakeChild,
+  onMakeRoot,
 }) => {
   const {
     attributes,
@@ -63,12 +151,19 @@ const SortableItem: React.FC<SortableItemProps> = ({
     <div
       ref={setNodeRef}
       style={style}
-      className={`group flex items-start gap-3 rounded-lg border p-3 transition-all ${
+      className={`group flex items-start gap-2 rounded-lg border p-3 transition-all ${
+        isChild ? 'ml-8' : ''
+      } ${
         item.completed
           ? 'border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800/50'
           : 'border-gray-200 bg-white hover:border-blue-200 hover:shadow-sm dark:border-gray-700 dark:bg-gray-800 dark:hover:border-blue-800'
       }`}
     >
+      {/* Child indicator */}
+      {isChild && (
+        <CornerDownRight size={14} className="mt-1 flex-shrink-0 text-gray-300 dark:text-gray-600" />
+      )}
+
       {/* Drag Handle */}
       {canEdit && (
         <button
@@ -96,7 +191,7 @@ const SortableItem: React.FC<SortableItemProps> = ({
         {item.completed ? <Check size={14} strokeWidth={3} /> : null}
       </button>
 
-      {/* Text */}
+      {/* Text + Assignee */}
       <div className="min-w-0 flex-1">
         {editingId === item.id ? (
           <div className="flex gap-2">
@@ -126,22 +221,67 @@ const SortableItem: React.FC<SortableItemProps> = ({
               disabled={submitting}
               className="rounded border border-gray-300 px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
             >
-              Annuler
+              Cancel
             </button>
           </div>
         ) : (
-          <p
-            onClick={() => canEdit && onStartEdit(item)}
-            className={`text-sm ${
-              item.completed
-                ? 'text-gray-400 line-through dark:text-gray-500'
-                : 'text-gray-900 dark:text-gray-100'
-            } ${canEdit ? 'cursor-text' : ''}`}
-          >
-            {item.text}
-          </p>
+          <div className="flex items-center gap-2">
+            <p
+              onClick={() => canEdit && onStartEdit(item)}
+              className={`text-sm ${
+                item.completed
+                  ? 'text-gray-400 line-through dark:text-gray-500'
+                  : 'text-gray-900 dark:text-gray-100'
+              } ${canEdit ? 'cursor-text' : ''}`}
+            >
+              {item.text}
+            </p>
+            {/* Assignee badge */}
+            {onAssigneeChange && canEdit ? (
+              <AssigneePicker
+                currentUserId={item.assigned_to}
+                currentUsername={item.assigned_username}
+                users={users}
+                onSelect={(userId) => onAssigneeChange(item.id, userId)}
+              />
+            ) : item.assigned_username ? (
+              <span className="flex items-center gap-1 rounded bg-blue-50 px-1.5 py-0.5 text-[11px] text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                <UserIcon size={10} /> {item.assigned_username}
+              </span>
+            ) : null}
+          </div>
         )}
       </div>
+
+      {/* Indent / Unindent buttons */}
+      {canEdit && editingId !== item.id && !isChild && rootItems.length > 0 && (
+        <button
+          type="button"
+          onClick={() => {
+            // Find previous root item to make this a child of
+            const rootIdx = rootItems.findIndex(r => r.id === item.id);
+            if (rootIdx > 0 && onMakeChild) {
+              onMakeChild(item.id, rootItems[rootIdx - 1].id);
+            }
+          }}
+          disabled={submitting || rootItems.findIndex(r => r.id === item.id) === 0}
+          className="rounded-md p-1 text-gray-400 opacity-0 transition-all hover:bg-gray-100 hover:text-gray-600 group-hover:opacity-100 disabled:opacity-0 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+          title="Make sub-item"
+        >
+          <ChevronRight size={14} />
+        </button>
+      )}
+      {canEdit && editingId !== item.id && isChild && onMakeRoot && (
+        <button
+          type="button"
+          onClick={() => onMakeRoot(item.id)}
+          disabled={submitting}
+          className="rounded-md p-1 text-gray-400 opacity-0 transition-all hover:bg-gray-100 hover:text-gray-600 group-hover:opacity-100 disabled:opacity-50 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+          title="Move to root level"
+        >
+          <CornerDownRight size={14} className="rotate-180" />
+        </button>
+      )}
 
       {/* Delete Button */}
       {canEdit && editingId !== item.id && (
@@ -150,7 +290,7 @@ const SortableItem: React.FC<SortableItemProps> = ({
           onClick={() => onDelete(item.id)}
           disabled={submitting}
           className="rounded-md p-1 text-gray-400 opacity-0 transition-all hover:bg-red-50 hover:text-red-600 group-hover:opacity-100 disabled:opacity-50 dark:hover:bg-red-900/20 dark:hover:text-red-400"
-          title="Supprimer"
+          title="Delete"
         >
           <Trash2 size={14} />
         </button>
@@ -168,12 +308,16 @@ const TaskChecklist: React.FC<TaskChecklistProps> = ({
   onDeleteItem,
   onUpdateItem,
   onReorderItems,
+  onUpdateAssignee,
+  onUpdateParent,
+  workspaceId = 'demo',
 }) => {
   const [newItemText, setNewItemText] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [localItems, setLocalItems] = useState<TaskChecklistItem[]>(items);
+  const [users, setUsers] = useState<User[]>([]);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -182,14 +326,51 @@ const TaskChecklist: React.FC<TaskChecklistProps> = ({
     })
   );
 
+  // Load workspace users for assignee picker
+  useEffect(() => {
+    const loadUsers = async () => {
+      try {
+        const response = await fetch(`/api/workspaces/${workspaceId}/users`, { credentials: 'include' });
+        if (response.ok) {
+          const data = await response.json();
+          setUsers(data.users || []);
+        }
+      } catch (err) {
+        console.error('Error loading users:', err);
+      }
+    };
+    loadUsers();
+  }, [workspaceId]);
+
   // Update local items when props change
-  React.useEffect(() => {
+  useEffect(() => {
     setLocalItems(items);
   }, [items]);
 
+  // Build tree: root items + their children
+  const rootItems = localItems.filter(i => !i.parent_id).sort((a, b) => a.order - b.order);
+  const childrenOf = (parentId: string) =>
+    localItems.filter(i => i.parent_id === parentId).sort((a, b) => a.order - b.order);
+
+  // Flat ordered list for rendering: parent then its children
+  const orderedItems: Array<{ item: TaskChecklistItem; isChild: boolean }> = [];
+  for (const root of rootItems) {
+    orderedItems.push({ item: root, isChild: false });
+    for (const child of childrenOf(root.id)) {
+      orderedItems.push({ item: child, isChild: true });
+    }
+  }
+  // Also include orphaned children (parent deleted) as root
+  const allChildIds = new Set(localItems.filter(i => i.parent_id).map(i => i.id));
+  const parentIds = new Set(rootItems.map(i => i.id));
+  for (const item of localItems) {
+    if (item.parent_id && !parentIds.has(item.parent_id)) {
+      orderedItems.push({ item, isChild: false });
+    }
+  }
+
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
-
     if (!over || active.id === over.id) return;
 
     const oldIndex = localItems.findIndex((item) => item.id === active.id);
@@ -200,15 +381,12 @@ const TaskChecklist: React.FC<TaskChecklistProps> = ({
         ...item,
         order: index,
       }));
-      
       setLocalItems(newItems);
-      
       if (onReorderItems) {
         try {
           await onReorderItems(newItems);
         } catch (err) {
           console.error('Failed to reorder items:', err);
-          // Revert on error
           setLocalItems(items);
         }
       }
@@ -218,7 +396,6 @@ const TaskChecklist: React.FC<TaskChecklistProps> = ({
   const handleAddItem = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newItemText.trim() || !onAddItem) return;
-
     try {
       setSubmitting(true);
       await onAddItem(newItemText.trim());
@@ -261,7 +438,6 @@ const TaskChecklist: React.FC<TaskChecklistProps> = ({
       setEditingId(null);
       return;
     }
-
     try {
       setSubmitting(true);
       await onUpdateItem(itemId, editingText.trim());
@@ -278,6 +454,33 @@ const TaskChecklist: React.FC<TaskChecklistProps> = ({
     setEditingText('');
   };
 
+  const handleAssigneeChange = async (itemId: string, userId: number | null) => {
+    if (!onUpdateAssignee) return;
+    try {
+      await onUpdateAssignee(itemId, userId);
+    } catch (err) {
+      console.error('Failed to update assignee:', err);
+    }
+  };
+
+  const handleMakeChild = async (itemId: string, parentId: string) => {
+    if (!onUpdateParent) return;
+    try {
+      await onUpdateParent(itemId, parentId);
+    } catch (err) {
+      console.error('Failed to set parent:', err);
+    }
+  };
+
+  const handleMakeRoot = async (itemId: string) => {
+    if (!onUpdateParent) return;
+    try {
+      await onUpdateParent(itemId, null);
+    } catch (err) {
+      console.error('Failed to unset parent:', err);
+    }
+  };
+
   const completedCount = items.filter(item => item.completed).length;
   const totalCount = items.length;
   const progressPercentage = totalCount > 0 ? (completedCount / totalCount) * 100 : 0;
@@ -288,7 +491,7 @@ const TaskChecklist: React.FC<TaskChecklistProps> = ({
         {loading ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-gray-500 dark:text-gray-400">
             <Loader2 size={24} className="animate-spin text-blue-500" />
-            <p>Chargement de la checklist...</p>
+            <p>Loading checklist...</p>
           </div>
         ) : (
           <>
@@ -313,7 +516,7 @@ const TaskChecklist: React.FC<TaskChecklistProps> = ({
             )}
 
             {/* Checklist Items */}
-            {localItems.length === 0 ? (
+            {orderedItems.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
                 <div className="rounded-full bg-gray-100 p-3 dark:bg-gray-800">
                   <ListChecks size={24} className="text-gray-400" />
@@ -330,28 +533,32 @@ const TaskChecklist: React.FC<TaskChecklistProps> = ({
                 onDragEnd={handleDragEnd}
               >
                 <SortableContext
-                  items={localItems.map(item => item.id)}
+                  items={orderedItems.map(o => o.item.id)}
                   strategy={verticalListSortingStrategy}
                 >
                   <div className="space-y-2">
-                    {localItems
-                      .sort((a, b) => a.order - b.order)
-                      .map((item) => (
-                        <SortableItem
-                          key={item.id}
-                          item={item}
-                          canEdit={canEdit}
-                          editingId={editingId}
-                          editingText={editingText}
-                          submitting={submitting}
-                          onToggle={handleToggle}
-                          onDelete={handleDelete}
-                          onStartEdit={handleStartEdit}
-                          onSaveEdit={handleSaveEdit}
-                          onCancelEdit={handleCancelEdit}
-                          setEditingText={setEditingText}
-                        />
-                      ))}
+                    {orderedItems.map(({ item, isChild }) => (
+                      <SortableItem
+                        key={item.id}
+                        item={item}
+                        isChild={isChild}
+                        canEdit={canEdit}
+                        editingId={editingId}
+                        editingText={editingText}
+                        submitting={submitting}
+                        users={users}
+                        rootItems={rootItems}
+                        onToggle={handleToggle}
+                        onDelete={handleDelete}
+                        onStartEdit={handleStartEdit}
+                        onSaveEdit={handleSaveEdit}
+                        onCancelEdit={handleCancelEdit}
+                        setEditingText={setEditingText}
+                        onAssigneeChange={onUpdateAssignee ? handleAssigneeChange : undefined}
+                        onMakeChild={onUpdateParent ? handleMakeChild : undefined}
+                        onMakeRoot={onUpdateParent ? handleMakeRoot : undefined}
+                      />
+                    ))}
                   </div>
                 </SortableContext>
               </DndContext>
@@ -368,7 +575,7 @@ const TaskChecklist: React.FC<TaskChecklistProps> = ({
               type="text"
               value={newItemText}
               onChange={(e) => setNewItemText(e.target.value)}
-              placeholder="Ajouter une sous-tâche..."
+              placeholder="Add a subtask..."
               className="flex-1 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-900 placeholder-gray-400 outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:placeholder-gray-500 dark:focus:border-blue-500"
               disabled={submitting}
             />
@@ -378,7 +585,7 @@ const TaskChecklist: React.FC<TaskChecklistProps> = ({
               className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {submitting ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
-              Ajouter
+              Add
             </button>
           </form>
         </div>

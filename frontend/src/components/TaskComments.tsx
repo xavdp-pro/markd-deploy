@@ -1,9 +1,10 @@
-import React, { useMemo, useState, useRef, useEffect } from 'react';
+import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { TaskComment } from '../types';
-import { Loader2, Send, X, Edit2, Save, Image as ImageIcon, Trash2, Paperclip, Bold, Italic, Code, List, Link2 } from 'lucide-react';
+import { Loader2, Send, X, Edit2, Save, Trash2, GripHorizontal, Image as ImageIcon, Search } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import toast from 'react-hot-toast';
+import WysiwygEditor from './WysiwygEditor';
 
 // Image component with thumbnail and modal (kept for existing image links in comments)
 const ImageWithFallback: React.FC<{ src: string; alt: string }> = ({ src, alt }) => {
@@ -91,6 +92,7 @@ interface TaskCommentsProps {
   onUpdate?: (commentId: string, content: string) => Promise<void>;
   onDelete?: (commentId: string) => Promise<void>;
   currentUserId?: number | null;
+  workspaceId?: string;
 }
 
 const formatDateTime = (iso: string) => {
@@ -126,32 +128,61 @@ const TaskComments: React.FC<TaskCommentsProps> = ({
   onAdd,
   onUpdate,
   onDelete,
-  currentUserId
+  currentUserId,
+  workspaceId,
 }) => {
   const [content, setContent] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [editorHeight, setEditorHeight] = useState(() => {
+    try { const h = parseInt(localStorage.getItem('markd_comment_editor_height') || ''); return h > 60 ? h : 100; } catch { return 100; }
+  });
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartY = useRef(0);
+  const resizeStartH = useRef(0);
   const listEndRef = useRef<HTMLDivElement>(null);
 
-  // Auto-scroll to bottom when new comments arrive
+  // Drag-to-resize handler (upward = increase height)
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    resizeStartY.current = e.clientY;
+    resizeStartH.current = editorHeight;
+  }, [editorHeight]);
+
   useEffect(() => {
-    if (listEndRef.current) {
-      listEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (!isResizing) return;
+    const handleMove = (e: MouseEvent) => {
+      const delta = resizeStartY.current - e.clientY;
+      const newH = Math.max(60, Math.min(500, resizeStartH.current + delta));
+      setEditorHeight(newH);
+    };
+    const handleUp = () => {
+      setIsResizing(false);
+      localStorage.setItem('markd_comment_editor_height', String(editorHeight));
+    };
+    document.addEventListener('mousemove', handleMove);
+    document.addEventListener('mouseup', handleUp);
+    return () => { document.removeEventListener('mousemove', handleMove); document.removeEventListener('mouseup', handleUp); };
+  }, [isResizing, editorHeight]);
+
+  // Auto-scroll to bottom when new comments arrive
+  const prevLengthRef = useRef(comments.length);
+  useEffect(() => {
+    if (comments.length > prevLengthRef.current) {
+      setTimeout(() => listEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
     }
+    prevLengthRef.current = comments.length;
   }, [comments.length]);
 
-  // Shared upload logic for file input and clipboard paste
-  const uploadFile = async (file: File) => {
-    setUploading(true);
+  // Upload handler for WysiwygEditor toolbar buttons
+  const handleWysiwygUpload = useCallback(async (file: File): Promise<{ url: string; name: string } | null> => {
     const formData = new FormData();
     formData.append('file', file);
-
     try {
       const response = await fetch('/api/upload-image', {
         method: 'POST',
@@ -160,51 +191,14 @@ const TaskComments: React.FC<TaskCommentsProps> = ({
       });
       if (!response.ok) throw new Error(`Upload failed: ${response.status}`);
       const data = await response.json();
-      const url = data.url;
-
-      // Insert markdown for image or file link
-      const markdown = file.type.startsWith('image/')
-        ? `![${file.name}](${url})`
-        : `[📎 ${file.name}](${url})`;
-
-      setContent(prev => prev ? `${prev}\n${markdown}` : markdown);
       toast.success('File uploaded');
+      return { url: data.url, name: file.name };
     } catch (err) {
       console.error('Upload error:', err);
       toast.error('Upload failed');
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      return null;
     }
-  };
-
-  // Handle file input change
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    await uploadFile(file);
-  };
-
-  // Handle paste from clipboard (images)
-  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    for (const item of Array.from(items)) {
-      if (item.type.startsWith('image/')) {
-        e.preventDefault();
-        const file = item.getAsFile();
-        if (file) {
-          // Generate a meaningful filename from the type
-          const ext = item.type.split('/')[1] || 'png';
-          const namedFile = new File([file], `pasted-image.${ext}`, { type: item.type });
-          await uploadFile(namedFile);
-        }
-        return;
-      }
-    }
-    // If no image found in clipboard, let the default paste behavior happen (text)
-  };
+  }, []);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -215,6 +209,7 @@ const TaskComments: React.FC<TaskCommentsProps> = ({
       setError(null);
       await onAdd(content.trim());
       setContent('');
+      setTimeout(() => listEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add comment');
     } finally {
@@ -233,6 +228,7 @@ const TaskComments: React.FC<TaskCommentsProps> = ({
       await onUpdate(editingId, editingContent.trim());
       setEditingId(null);
       setEditingContent('');
+      setTimeout(() => listEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to update comment');
     }
@@ -272,23 +268,48 @@ const TaskComments: React.FC<TaskCommentsProps> = ({
     return userColors.get((userName || 'user').toLowerCase()) || avatarPalette[0];
   };
 
+  // Filter comments by search query
+  const filteredComments = useMemo(() => {
+    if (!searchQuery.trim()) return comments;
+    const q = searchQuery.toLowerCase();
+    return comments.filter(c =>
+      c.content.toLowerCase().includes(q) ||
+      (c.user_name || '').toLowerCase().includes(q)
+    );
+  }, [comments, searchQuery]);
+
   return (
     <div className="flex h-full flex-col">
-      {/* Hidden file input */}
-      <input
-        type="file"
-        ref={fileInputRef}
-        className="hidden"
-        onChange={handleFileUpload}
-      />
-
+      {/* Search bar */}
+      {comments.length > 0 && (
+        <div className="px-3 pt-2 pb-1">
+          <div className="relative">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search comments..."
+              className="w-full pl-8 pr-8 py-1.5 text-xs rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto p-4 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100 dark:scrollbar-thumb-gray-600 dark:scrollbar-track-gray-800 hover:scrollbar-thumb-gray-400 dark:hover:scrollbar-thumb-gray-500">
         {loading ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-gray-500 dark:text-gray-400">
             <Loader2 size={24} className="animate-spin text-blue-500" />
             <p>Loading comments...</p>
           </div>
-        ) : comments.length === 0 ? (
+        ) : filteredComments.length === 0 && !searchQuery ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
             <div className="rounded-full bg-gray-100 p-3 dark:bg-gray-800">
               <span className="text-2xl">💬</span>
@@ -296,9 +317,17 @@ const TaskComments: React.FC<TaskCommentsProps> = ({
             <h3 className="text-sm font-medium text-gray-900 dark:text-white">No comments yet</h3>
             <p className="text-xs text-gray-500 dark:text-gray-400">Ask questions, discuss with the team...</p>
           </div>
+        ) : filteredComments.length === 0 && searchQuery ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+            <div className="rounded-full bg-gray-100 p-3 dark:bg-gray-800">
+              <Search size={20} className="text-gray-400" />
+            </div>
+            <h3 className="text-sm font-medium text-gray-900 dark:text-white">No results</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400">No comments match "{searchQuery}"</p>
+          </div>
         ) : (
           <div className="flex flex-col gap-3">
-            {comments.map((comment) => {
+            {filteredComments.map((comment) => {
               const initials = (comment.user_name || 'User').substring(0, 2).toUpperCase();
               const isEditing = editingId === comment.id;
               const canEdit = currentUserId !== null && comment.user_id === currentUserId;
@@ -349,42 +378,23 @@ const TaskComments: React.FC<TaskCommentsProps> = ({
                   </div>
 
                   {/* Comment body */}
-                  {isEditing ? (
-                    <div className="ml-9">
-                      <textarea
-                        value={editingContent}
-                        onChange={(e) => setEditingContent(e.target.value)}
-                        className="w-full resize-none rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
-                        rows={3}
-                      />
-                      <div className="mt-2 flex justify-end gap-2">
-                        <button onClick={handleCancelEdit} className="rounded px-2 py-1 text-xs text-gray-600 hover:bg-gray-200 dark:text-gray-400 dark:hover:bg-gray-700">
-                          Cancel
-                        </button>
-                        <button onClick={handleSaveEdit} disabled={!editingContent.trim()} className="rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700 disabled:opacity-50">
-                          <Save size={14} className="inline" />
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="ml-9 text-sm text-gray-700 dark:text-gray-200">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-headings:my-1 prose-ul:my-1 prose-ol:my-1 prose-img:rounded-lg prose-img:max-w-full prose-img:my-2 prose-a:text-blue-600 dark:prose-a:text-blue-400"
-                        components={{
-                          p: ({ children }) => <div className="my-1">{children}</div>,
-                          img: ({ node, ...props }) => (
-                            <ImageWithFallback src={props.src || ''} alt={props.alt || ''} />
-                          ),
-                          a: ({ node, ...props }) => (
-                            <a {...props} className="text-blue-600 dark:text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer" />
-                          ),
-                        }}
-                      >
-                        {comment.content}
-                      </ReactMarkdown>
-                    </div>
-                  )}
+                  <div className="ml-9 text-sm text-gray-700 dark:text-gray-200">
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      className="prose prose-sm dark:prose-invert max-w-none prose-p:my-1 prose-headings:my-1 prose-ul:my-1 prose-ol:my-1 prose-img:rounded-lg prose-img:max-w-full prose-img:my-2 prose-a:text-blue-600 dark:prose-a:text-blue-400"
+                      components={{
+                        p: ({ children }) => <div className="my-1">{children}</div>,
+                        img: ({ node, ...props }) => (
+                          <ImageWithFallback src={props.src || ''} alt={props.alt || ''} />
+                        ),
+                        a: ({ node, ...props }) => (
+                          <a {...props} className="text-blue-600 dark:text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer" />
+                        ),
+                      }}
+                    >
+                      {comment.content}
+                    </ReactMarkdown>
+                  </div>
                 </div>
               );
             })}
@@ -394,148 +404,51 @@ const TaskComments: React.FC<TaskCommentsProps> = ({
       </div>
 
       {canAdd && onAdd && (
-        <div className="border-t border-gray-100 bg-white pb-2 pt-3 px-3 dark:border-gray-800 dark:bg-gray-900">
-          <form onSubmit={handleSubmit}>
-            <textarea
-              ref={textareaRef}
-              value={content}
-              onChange={(event) => setContent(event.target.value)}
-              onPaste={handlePaste}
-              placeholder="Write a comment..."
-              rows={2}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSubmit(e);
-                }
-              }}
-              className="w-full resize-none rounded-t-xl border border-gray-200 bg-gray-50 py-3 px-4 text-sm text-gray-900 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:focus:bg-gray-900 dark:focus:ring-blue-900 border-b-0"
-              style={{ maxHeight: '120px' }}
-            />
-            {/* Bottom toolbar: markdown formatting left, actions right */}
-            <div className="flex items-center justify-between rounded-b-xl border border-t-0 border-gray-200 bg-gray-50 px-2 py-1 dark:border-gray-700 dark:bg-gray-800">
-              {/* Markdown formatting buttons */}
-              <div className="flex items-center gap-0.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const ta = textareaRef.current;
-                    if (!ta) return;
-                    const start = ta.selectionStart;
-                    const end = ta.selectionEnd;
-                    const sel = content.substring(start, end);
-                    const replacement = sel ? `**${sel}**` : '**text**';
-                    setContent(content.substring(0, start) + replacement + content.substring(end));
-                    setTimeout(() => { ta.focus(); ta.setSelectionRange(start + 2, start + 2 + (sel || 'text').length); }, 0);
-                  }}
-                  className="rounded p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-200 dark:hover:text-gray-200 dark:hover:bg-gray-700 transition-colors"
-                  title="Bold (Ctrl+B)"
-                >
-                  <Bold size={14} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const ta = textareaRef.current;
-                    if (!ta) return;
-                    const start = ta.selectionStart;
-                    const end = ta.selectionEnd;
-                    const sel = content.substring(start, end);
-                    const replacement = sel ? `*${sel}*` : '*text*';
-                    setContent(content.substring(0, start) + replacement + content.substring(end));
-                    setTimeout(() => { ta.focus(); ta.setSelectionRange(start + 1, start + 1 + (sel || 'text').length); }, 0);
-                  }}
-                  className="rounded p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-200 dark:hover:text-gray-200 dark:hover:bg-gray-700 transition-colors"
-                  title="Italic (Ctrl+I)"
-                >
-                  <Italic size={14} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const ta = textareaRef.current;
-                    if (!ta) return;
-                    const start = ta.selectionStart;
-                    const end = ta.selectionEnd;
-                    const sel = content.substring(start, end);
-                    const replacement = sel ? `\`${sel}\`` : '`code`';
-                    setContent(content.substring(0, start) + replacement + content.substring(end));
-                    setTimeout(() => { ta.focus(); ta.setSelectionRange(start + 1, start + 1 + (sel || 'code').length); }, 0);
-                  }}
-                  className="rounded p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-200 dark:hover:text-gray-200 dark:hover:bg-gray-700 transition-colors"
-                  title="Inline code"
-                >
-                  <Code size={14} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const ta = textareaRef.current;
-                    if (!ta) return;
-                    const start = ta.selectionStart;
-                    const prefix = start > 0 && content[start - 1] !== '\n' ? '\n' : '';
-                    const insertion = `${prefix}- `;
-                    setContent(content.substring(0, start) + insertion + content.substring(start));
-                    const pos = start + insertion.length;
-                    setTimeout(() => { ta.focus(); ta.setSelectionRange(pos, pos); }, 0);
-                  }}
-                  className="rounded p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-200 dark:hover:text-gray-200 dark:hover:bg-gray-700 transition-colors"
-                  title="List"
-                >
-                  <List size={14} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    const ta = textareaRef.current;
-                    if (!ta) return;
-                    const start = ta.selectionStart;
-                    const end = ta.selectionEnd;
-                    const sel = content.substring(start, end);
-                    const replacement = sel ? `[${sel}](url)` : '[text](url)';
-                    setContent(content.substring(0, start) + replacement + content.substring(end));
-                    const urlStart = start + (sel || 'text').length + 3;
-                    setTimeout(() => { ta.focus(); ta.setSelectionRange(urlStart, urlStart + 3); }, 0);
-                  }}
-                  className="rounded p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-200 dark:hover:text-gray-200 dark:hover:bg-gray-700 transition-colors"
-                  title="Link"
-                >
-                  <Link2 size={14} />
-                </button>
-              </div>
-
-              {/* Upload & send buttons */}
-              <div className="flex items-center gap-0.5">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
-                  className="rounded p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:text-purple-400 dark:hover:bg-purple-900/20 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
-                  title="Upload image"
-                >
-                  {uploading ? <Loader2 size={14} className="animate-spin" /> : <ImageIcon size={14} />}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
-                  className="rounded p-1.5 text-gray-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:text-purple-400 dark:hover:bg-purple-900/20 disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
-                  title="Attach file"
-                >
-                  <Paperclip size={14} />
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting || !content.trim()}
-                  className="rounded p-1.5 text-blue-600 hover:bg-blue-50 disabled:cursor-not-allowed disabled:text-gray-400 disabled:hover:bg-transparent dark:text-blue-400 dark:hover:bg-blue-900/30 dark:disabled:text-gray-600 transition-colors"
-                  title="Send (Enter)"
-                >
-                  {submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-                </button>
-              </div>
+        <div className="bg-white dark:bg-gray-900" style={{ cursor: isResizing ? 'row-resize' : 'default' }}>
+          {/* Drag handle to resize editor upward */}
+          <div
+            onMouseDown={handleResizeStart}
+            className="flex items-center justify-center h-3 cursor-row-resize border-t border-gray-100 dark:border-gray-800 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors group"
+            title="Drag to resize"
+          >
+            <GripHorizontal size={14} className="text-gray-300 dark:text-gray-600 group-hover:text-gray-400 dark:group-hover:text-gray-500 transition-colors" />
+          </div>
+          <div className="pb-2 px-3">
+          {/* Edit banner (WhatsApp style) */}
+          {editingId && (
+            <div className="flex items-center gap-2 mb-1.5 px-1 py-1 rounded-lg bg-blue-50 dark:bg-blue-900/20 border-l-2 border-blue-500">
+              <Edit2 size={12} className="text-blue-500 ml-1" />
+              <span className="text-xs text-blue-600 dark:text-blue-400 flex-1 truncate">Editing comment</span>
+              <button onClick={handleCancelEdit} className="rounded p-0.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors" title="Cancel (Escape)">
+                <X size={14} />
+              </button>
             </div>
-          </form>
+          )}
+          <WysiwygEditor
+            value={editingId ? editingContent : content}
+            onChange={(val) => editingId ? setEditingContent(val) : setContent(val)}
+            placeholder={editingId ? 'Edit your comment...' : 'Write a comment...'}
+            height={editorHeight}
+            onSubmit={() => { if (editingId) { handleSaveEdit(); } else { handleSubmit({ preventDefault: () => {} } as any); } }}
+            onCancel={editingId ? handleCancelEdit : undefined}
+            autoFocus={!!editingId}
+            onUploadFile={handleWysiwygUpload}
+            workspaceId={workspaceId}
+          />
+          {/* Action bar below editor */}
+          <div className="flex items-center justify-between px-2 py-1">
+            <span className="text-[10px] text-gray-400 dark:text-gray-500">{editingId ? 'Ctrl+Enter to save' : 'Ctrl+Enter to send'}</span>
+            <button
+              type="button"
+              onClick={() => { if (editingId) { handleSaveEdit(); } else { handleSubmit({ preventDefault: () => {} } as any); } }}
+              disabled={editingId ? !editingContent.trim() : (submitting || !content.trim())}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {submitting ? <Loader2 size={13} className="animate-spin" /> : editingId ? <><Save size={13} /> Save</> : <><Send size={13} /> Send</>}
+            </button>
+          </div>
           {error && <p className="mt-2 text-xs text-red-500">{error}</p>}
+          </div>
         </div>
       )}
     </div>
