@@ -46,8 +46,92 @@ if not admin_row:
 ADMIN_USER_ID = admin_row[0]['id']
 print(f"Admin user ID: {ADMIN_USER_ID}")
 
+# Ensure the demo workspace exists
+existing_ws = db.execute_query("SELECT id FROM workspaces WHERE id = %s", (WORKSPACE_ID,))
+if not existing_ws:
+    db.execute_update(
+        "INSERT INTO workspaces (id, name, description, created_by) VALUES (%s, %s, %s, %s)",
+        (WORKSPACE_ID, 'Demo Workspace', 'Enterprise demo workspace with sample data', ADMIN_USER_ID)
+    )
+    print(f"Created workspace: {WORKSPACE_ID}")
+    # Grant ALL group admin access to demo workspace
+    all_grp = db.execute_query("SELECT id FROM user_groups_table WHERE name = 'ALL' LIMIT 1")
+    if all_grp:
+        db.execute_update(
+            "INSERT INTO group_workspace_permissions (group_id, workspace_id, permission_level) VALUES (%s, %s, 'admin') ON DUPLICATE KEY UPDATE permission_level='admin'",
+            (all_grp[0]['id'], WORKSPACE_ID)
+        )
+else:
+    print(f"Workspace '{WORKSPACE_ID}' already exists")
+
+import bcrypt
+
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
 def uid():
     return str(uuid.uuid4())
+
+# ============================================================
+# DEMO USERS — Realistic team (admin + members)
+# ============================================================
+print("Creating demo users...")
+
+DEMO_USERS = [
+    # (username, email, password, role)
+    ('alice',  'alice@demo.markd.io',  'Demo1234!@', 'admin'),
+    ('bob',    'bob@demo.markd.io',    'Demo1234!@', 'user'),
+    ('carol',  'carol@demo.markd.io',  'Demo1234!@', 'user'),
+    ('david',  'david@demo.markd.io',  'Demo1234!@', 'user'),
+]
+
+demo_user_ids = {}
+for uname, email, pwd, role in DEMO_USERS:
+    existing = db.execute_query("SELECT id FROM users WHERE username = %s", (uname,))
+    if existing:
+        demo_user_ids[uname] = existing[0]['id']
+    else:
+        pw_hash = hash_password(pwd)
+        db.execute_update(
+            "INSERT INTO users (username, email, password_hash, role) VALUES (%s, %s, %s, %s)",
+            (uname, email, pw_hash, role)
+        )
+        new_row = db.execute_query("SELECT id FROM users WHERE username = %s", (uname,))
+        demo_user_ids[uname] = new_row[0]['id']
+
+# Ensure demo users have access to the demo workspace
+# Find or create the workspace access group
+all_group = db.execute_query("SELECT id FROM user_groups_table WHERE name = 'ALL' LIMIT 1")
+if all_group:
+    all_group_id = all_group[0]['id']
+    for uname, uid_val in demo_user_ids.items():
+        existing = db.execute_query(
+            "SELECT 1 FROM user_groups WHERE user_id = %s AND group_id = %s",
+            (uid_val, all_group_id)
+        )
+        if not existing:
+            db.execute_update(
+                "INSERT INTO user_groups (user_id, group_id) VALUES (%s, %s)",
+                (uid_val, all_group_id)
+            )
+
+print(f"  {len(DEMO_USERS)} demo users ready: {', '.join(demo_user_ids.keys())}")
+
+# Enable demo mode in system_settings
+try:
+    existing_demo = db.execute_query("SELECT 1 FROM system_settings WHERE setting_key = 'demo_mode'")
+    if not existing_demo:
+        db.execute_update("INSERT INTO system_settings (setting_key, setting_value) VALUES ('demo_mode', 'true')")
+    else:
+        db.execute_update("UPDATE system_settings SET setting_value = 'true' WHERE setting_key = 'demo_mode'")
+    print("  Demo mode enabled in system_settings")
+except Exception as e:
+    print(f"  Warning: Could not set demo_mode setting: {e}")
+
+ALICE_ID = demo_user_ids.get('alice', ADMIN_USER_ID)
+BOB_ID = demo_user_ids.get('bob', ADMIN_USER_ID)
+CAROL_ID = demo_user_ids.get('carol', ADMIN_USER_ID)
+DAVID_ID = demo_user_ids.get('david', ADMIN_USER_ID)
 
 now = datetime.now()
 yesterday = now - timedelta(days=1)
@@ -1117,11 +1201,16 @@ for task_id, items in checklists.items():
 # Add comments to some tasks
 print("  Adding comments...")
 comments = [
-    (task_k8s, ADMIN_USER_ID, ADMIN_USER_NAME, 'Started evaluating GKE vs EKS. GKE seems better for our use case given the team\'s experience with GCP.'),
+    (task_k8s, ALICE_ID, 'alice', 'Started evaluating GKE vs EKS. GKE seems better for our use case given the team\'s experience with GCP.'),
+    (task_k8s, BOB_ID, 'bob', 'I agree with Alice. GKE pricing is also more competitive for our expected workload.'),
     (task_k8s, ADMIN_USER_ID, ADMIN_USER_NAME, 'Meeting scheduled with DevOps team next Monday to finalize the migration plan.'),
-    (task_backup, ADMIN_USER_ID, ADMIN_USER_NAME, 'Backup script is working. Need to add S3 upload and monitoring.'),
-    (task_bug_file, ADMIN_USER_ID, ADMIN_USER_NAME, 'Root cause identified: Pydantic model_fields_set needed for null detection. Fix deployed.'),
-    (task_collab, ADMIN_USER_ID, ADMIN_USER_NAME, 'Collaborative editing is now live in both Documents and Tasks modules. Next: conflict resolution.'),
+    (task_backup, BOB_ID, 'bob', 'Backup script is working. Need to add S3 upload and monitoring.'),
+    (task_backup, CAROL_ID, 'carol', 'I can help with the S3 integration — I have experience with boto3.'),
+    (task_bug_file, DAVID_ID, 'david', 'Root cause identified: Pydantic model_fields_set needed for null detection. Fix deployed.'),
+    (task_collab, ALICE_ID, 'alice', 'Collaborative editing is now live in both Documents and Tasks modules. Next: conflict resolution.'),
+    (task_collab, CAROL_ID, 'carol', 'Great work! I noticed a minor lag on large documents — should we look into debouncing?'),
+    (task_audit, ADMIN_USER_ID, ADMIN_USER_NAME, 'Quarterly review is due next week. @alice please prepare the user access report.'),
+    (task_monitoring, DAVID_ID, 'david', 'I\'ve set up a test Grafana instance on staging. Let me know when you want a walkthrough.'),
 ]
 
 for task_id, user_id, user_name, content in comments:
@@ -1181,5 +1270,11 @@ print(f"  - Documents reference Password Vault entries")
 print(f"  - Tasks reference Documents and Password Vault")
 print(f"  - Security tasks link to credential rotation")
 print(f"  - Deployment docs link to API keys and server credentials")
-print(f"\nLogin with: admin / admin")
+print(f"  Demo users: {len(DEMO_USERS)} team members")
+print(f"\nDemo accounts (password: Demo1234!@):")
+print(f"  admin  / admin         (admin)")
+print(f"  alice  / Demo1234!@    (admin)")
+print(f"  bob    / Demo1234!@    (user)")
+print(f"  carol  / Demo1234!@    (user)")
+print(f"  david  / Demo1234!@    (user)")
 print(f"Workspace: Demo Workspace")

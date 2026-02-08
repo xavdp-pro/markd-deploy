@@ -1,9 +1,8 @@
 -- MarkD Database Installation Script
 -- This script creates all necessary tables and initial data
 
--- Create database if not exists
-CREATE DATABASE IF NOT EXISTS markd CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE markd;
+-- NOTE: Run with: mysql YOUR_DB_NAME < install.sql
+-- Do not hardcode database name here
 
 -- ============================================
 -- Core Tables
@@ -15,6 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(50) NOT NULL UNIQUE,
     email VARCHAR(100) NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,
+    role ENUM('admin','user') NOT NULL DEFAULT 'user',
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -124,8 +124,8 @@ CREATE TABLE IF NOT EXISTS password_vault (
 
 -- Create default admin user (password: admin - CHANGE THIS!)
 -- Password hash for 'admin' - MUST BE CHANGED ON FIRST LOGIN
-INSERT INTO users (username, email, password_hash) VALUES 
-('admin', 'admin@markd.local', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5oacX9Z2QWQHO')
+INSERT INTO users (username, email, password_hash, role) VALUES 
+('admin', 'admin@markd.local', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewY5oacX9Z2QWQHO', 'admin')
 ON DUPLICATE KEY UPDATE username=username;
 
 -- Create default groups

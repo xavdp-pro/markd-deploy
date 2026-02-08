@@ -1,7 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { FileText, Eye, EyeOff } from 'lucide-react';
+import { FileText, Eye, EyeOff, Shield, User as UserIcon } from 'lucide-react';
+
+interface DemoUser {
+  id: string;
+  username: string;
+  email: string;
+  role: 'admin' | 'user';
+}
 
 const LoginPage: React.FC = () => {
   const [username, setUsername] = useState('');
@@ -9,8 +16,45 @@ const LoginPage: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [demoUsers, setDemoUsers] = useState<DemoUser[]>([]);
+  const [demoMode, setDemoMode] = useState(false);
   const { login } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const fetchDemoUsers = async () => {
+      try {
+        const response = await fetch('/api/auth/demo-users');
+        const data = await response.json();
+        if (data.demo_mode && data.users?.length) {
+          setDemoMode(true);
+          setDemoUsers(data.users);
+        }
+      } catch (error) {
+        // Demo mode not available, ignore
+      }
+    };
+    fetchDemoUsers();
+  }, []);
+
+  const handleDemoLogin = async (demoUsername: string) => {
+    setError('');
+    setIsLoading(true);
+    try {
+      await login(demoUsername, 'Demo1234!@');
+      navigate('/');
+    } catch (err) {
+      // Fallback: try with 'admin' password for the admin user
+      try {
+        await login(demoUsername, 'admin');
+        navigate('/');
+      } catch {
+        setError('Demo login failed for ' + demoUsername);
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -120,6 +164,43 @@ const LoginPage: React.FC = () => {
               </button>
             </div>
           </form>
+
+          {/* Demo Mode Quick Login */}
+          {demoMode && demoUsers.length > 0 && (
+            <div className="mt-6 pt-6 border-t border-gray-200">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="h-px flex-1 bg-gray-200"></div>
+                <span className="text-xs font-medium text-amber-600 uppercase tracking-wider">Demo Mode</span>
+                <div className="h-px flex-1 bg-gray-200"></div>
+              </div>
+              <p className="text-xs text-gray-500 text-center mb-3">Click a user to sign in instantly</p>
+              <div className="grid grid-cols-2 gap-2">
+                {demoUsers.map((u) => (
+                  <button
+                    key={u.id}
+                    type="button"
+                    disabled={isLoading}
+                    onClick={() => handleDemoLogin(u.username)}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-left text-sm transition-all hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed ${
+                      u.role === 'admin'
+                        ? 'border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-800'
+                        : 'border-gray-200 bg-gray-50 hover:bg-gray-100 text-gray-700'
+                    }`}
+                  >
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
+                      u.role === 'admin' ? 'bg-blue-600 text-white' : 'bg-gray-400 text-white'
+                    }`}>
+                      {u.role === 'admin' ? <Shield className="w-4 h-4" /> : <UserIcon className="w-4 h-4" />}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-medium truncate">{u.username}</div>
+                      <div className="text-[10px] text-gray-400 truncate">{u.role}</div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

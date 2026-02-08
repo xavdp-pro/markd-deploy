@@ -1,7 +1,7 @@
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 
-const PORT = 1234;
+const PORT = 1235;
 const rooms = new Map();
 const roomStates = new Map();
 

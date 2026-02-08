@@ -61,3 +61,55 @@ async def update_module_settings(settings: ModuleSettings, user: Dict = Depends(
             db.execute_update("INSERT INTO system_settings (setting_key, setting_value) VALUES (%s, %s)", (db_key, db_value))
             
     return {"success": True, "message": "Settings updated"}
+
+# ============================================================
+# Demo Mode
+# ============================================================
+
+@router.get("/api/admin/settings/demo-mode")
+async def get_demo_mode(user: Dict = Depends(get_current_user)):
+    """Get demo mode status (admin only)"""
+    try:
+        row = db.execute_query("SELECT setting_value FROM system_settings WHERE setting_key = 'demo_mode'")
+        enabled = row[0]['setting_value'].lower() in ('true', '1', 'yes', 'on') if row else False
+        return {"demo_mode": enabled}
+    except Exception:
+        return {"demo_mode": False}
+
+@router.post("/api/admin/settings/demo-mode")
+async def set_demo_mode(user: Dict = Depends(get_current_user)):
+    """Toggle demo mode (admin only)"""
+    if user.get('role') != 'admin':
+        raise HTTPException(status_code=403, detail="Only admins can update system settings")
+
+    # Get current value and toggle
+    row = db.execute_query("SELECT setting_value FROM system_settings WHERE setting_key = 'demo_mode'")
+    current = row[0]['setting_value'].lower() in ('true', '1', 'yes', 'on') if row else False
+    new_value = "false" if current else "true"
+
+    if row:
+        db.execute_update("UPDATE system_settings SET setting_value = %s WHERE setting_key = 'demo_mode'", (new_value,))
+    else:
+        db.execute_update("INSERT INTO system_settings (setting_key, setting_value) VALUES ('demo_mode', %s)", (new_value,))
+
+    return {"success": True, "demo_mode": new_value == "true"}
+
+@router.get("/api/auth/demo-users")
+async def get_demo_users():
+    """Public endpoint: returns demo user list if demo mode is enabled"""
+    try:
+        row = db.execute_query("SELECT setting_value FROM system_settings WHERE setting_key = 'demo_mode'")
+        enabled = row[0]['setting_value'].lower() in ('true', '1', 'yes', 'on') if row else False
+        if not enabled:
+            return {"demo_mode": False, "users": []}
+
+        users = db.execute_query("SELECT id, username, email, role FROM users ORDER BY role DESC, username ASC")
+        return {
+            "demo_mode": True,
+            "users": [
+                {"id": u['id'], "username": u['username'], "email": u['email'], "role": u['role']}
+                for u in users
+            ]
+        }
+    except Exception:
+        return {"demo_mode": False, "users": []}

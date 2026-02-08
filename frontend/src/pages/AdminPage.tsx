@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { UserPlus, Trash2, Edit2, Shield, User as UserIcon, LayoutGrid, Eye, EyeOff } from 'lucide-react';
+import { UserPlus, Trash2, Edit2, Shield, User as UserIcon, LayoutGrid, Eye, EyeOff, Play } from 'lucide-react';
 import Header from '../components/layout/Header';
 import { useAuth } from '../contexts/AuthContext';
 import { useSettings } from '../contexts/SettingsContext';
@@ -22,6 +22,8 @@ const AdminPage: React.FC = () => {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -54,7 +56,36 @@ const AdminPage: React.FC = () => {
       return;
     }
     fetchUsers();
+    fetchDemoMode();
   }, [currentUser, navigate]);
+
+  const fetchDemoMode = async () => {
+    try {
+      const response = await fetch('/api/admin/settings/demo-mode', { credentials: 'include' });
+      const data = await response.json();
+      setDemoMode(data.demo_mode || false);
+    } catch (error) {
+      console.error('Error fetching demo mode:', error);
+    }
+  };
+
+  const handleToggleDemoMode = async () => {
+    setDemoLoading(true);
+    try {
+      const response = await fetch('/api/admin/settings/demo-mode', {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await response.json();
+      if (data.success) {
+        setDemoMode(data.demo_mode);
+      }
+    } catch (error) {
+      console.error('Error toggling demo mode:', error);
+    } finally {
+      setDemoLoading(false);
+    }
+  };
 
   const fetchUsers = async () => {
     try {
@@ -163,6 +194,39 @@ const AdminPage: React.FC = () => {
       
       <div className="flex-1 overflow-auto p-8">
         <div className="max-w-6xl mx-auto">
+          {/* Demo Mode Section */}
+          <div className="mb-12">
+            <div className="flex items-center gap-3 mb-6">
+              <Play className="w-8 h-8 text-amber-500" />
+              <div>
+                <h2 className="text-2xl font-bold text-gray-800 dark:text-white">Demo Mode</h2>
+                <p className="text-gray-600 dark:text-gray-400 mt-1">Enable quick-login buttons on the login page for demonstrations</p>
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 border border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Demo Mode</h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                    When enabled, the login page displays quick-access buttons for each user account.
+                    <span className="text-amber-600 dark:text-amber-400 font-medium"> Disable this in production.</span>
+                  </p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="sr-only peer"
+                    checked={demoMode}
+                    onChange={handleToggleDemoMode}
+                    disabled={demoLoading}
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-amber-300 dark:peer-focus:ring-amber-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-amber-500"></div>
+                </label>
+              </div>
+            </div>
+          </div>
+
           {/* Module Configuration Section */}
           <div className="mb-12">
             <div className="flex items-center gap-3 mb-6">
