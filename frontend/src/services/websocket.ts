@@ -164,11 +164,12 @@ class WebSocketService {
       this.listenersRegistered = false;
       this.socket = io({
         path: '/socket.io',
-        transports: ['websocket', 'polling'],
+        transports: ['polling', 'websocket'],
+        upgrade: true,
         reconnection: true,
         reconnectionDelay: 2000,
         reconnectionDelayMax: 10000,
-        reconnectionAttempts: 3, // Reduced to 3 attempts
+        reconnectionAttempts: 5,
         timeout: 20000,
         autoConnect: true,
       });
@@ -354,6 +355,10 @@ class WebSocketService {
   onSchemaContentUpdated(callback: SchemaContentUpdatedCallback) {
     this.schemaContentUpdatedCallbacks.add(callback);
     return () => { this.schemaContentUpdatedCallbacks.delete(callback); };
+  }
+  // Expose the underlying socket for shared use (e.g., collaborative editing hook)
+  getSocket(): Socket | null {
+    return this.socket;
   }
 }
 

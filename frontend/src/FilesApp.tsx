@@ -9,7 +9,7 @@ import FileTree from './components/FileTree';
 import FileViewer from './components/FileViewer';
 import FileUploadModal from './components/FileUploadModal';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent } from '@dnd-kit/core';
-import { File, Folder, X, Trash2 } from 'lucide-react';
+import { File, Folder, X, Trash2, PanelLeftOpen } from 'lucide-react';
 import { getHashSelection, setHashSelection, onHashChange } from './utils/urlHash';
 
 function FilesApp() {
@@ -25,6 +25,16 @@ function FilesApp() {
     const saved = localStorage.getItem('markd_files_tree_width');
     return saved ? parseInt(saved, 10) : 320;
   });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    return localStorage.getItem('markd_files_sidebar_collapsed') === 'true';
+  });
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem('markd_files_sidebar_collapsed', String(next));
+      return next;
+    });
+  }, []);
   const [isResizing, setIsResizing] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -92,8 +102,10 @@ function FilesApp() {
           .map(child => filterNode(child))
           .filter((child): child is FileItem => child !== null);
         
-        // Keep folder if it matches OR has matching children
-        if (nameMatches && filteredChildren.length > 0) {
+        // Keep folder if:
+        // - no active search/filter: always show (even if empty)
+        // - active search/filter: only if name matches AND has matching children
+        if (nameMatches && (!lowerQuery && !hasTagFilter || filteredChildren.length > 0)) {
           return {
             ...node,
             children: filteredChildren
@@ -146,14 +158,12 @@ function FilesApp() {
     if (storedUser) {
       try {
         const user = JSON.parse(storedUser);
-        console.log('User ID from localStorage:', user.id);
         return String(user.id);
       } catch (e) {
         console.error('Error parsing stored user:', e);
       }
     }
     const fallbackId = `user-${Math.random().toString(36).substr(2, 9)}`;
-    console.log('Using fallback user ID:', fallbackId);
     return fallbackId;
   }, []);
   
@@ -167,7 +177,7 @@ function FilesApp() {
     }
   }, [currentWorkspace, loadAllTags]);
 
-  // Load initial data
+  // Load initial data (only when workspace changes)
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -191,17 +201,14 @@ function FilesApp() {
           
           // Restore selected files (try URL hash first, then sessionStorage, then fallback)
           let selectedIds: string[] = getHashSelection('file');
-          console.log('FilesApp: Restoring from hash:', selectedIds);
           
           // Fallback to sessionStorage if no hash
           if (selectedIds.length === 0) {
             const savedSelectedIdsJson = sessionStorage.getItem('markd_files_selected_ids');
-            console.log('FilesApp: Restoring from sessionStorage, savedSelectedIdsJson:', savedSelectedIdsJson);
             
             if (savedSelectedIdsJson) {
               try {
                 selectedIds = JSON.parse(savedSelectedIdsJson);
-                console.log('FilesApp: Parsed selectedIds:', selectedIds);
                 // Update hash with sessionStorage value
                 setHashSelection('file', selectedIds);
               } catch (e) {
@@ -213,12 +220,10 @@ function FilesApp() {
           // Fallback to single selection if no multi-selection saved
           if (selectedIds.length === 0 && sessionState.selectedId) {
             selectedIds = [sessionState.selectedId];
-            console.log('FilesApp: Using fallback selectedId:', selectedIds);
             setHashSelection('file', selectedIds);
           }
           
           if (selectedIds.length > 0) {
-            console.log('FilesApp: Restoring', selectedIds.length, 'items');
             // Find all items in tree
             const foundItems: FileItem[] = [];
             const pathsToExpand: string[][] = [];
@@ -289,11 +294,29 @@ function FilesApp() {
     };
     
     loadData();
-    
-    // Listen to hash changes (when navigating back to this module)
-    const cleanup = onHashChange((selections) => {
-      const hashIds = selections.file;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentWorkspace]);
+
+  // Hash change listener (separate from data loading to avoid infinite loop)
+  useEffect(() => {
+    const handleHashRestore = (hashIds: string[]) => {
+      // Prevent processing if already restoring to avoid infinite loop
+      if (isRestoringRef.current || processingHashRef.current) {
+        return;
+      }
+      
       if (hashIds.length > 0 && tree.length > 0) {
+        // Check if selection is already correct to avoid loop
+        const currentIds = selected.map(s => s.id).sort().join(',');
+        const hashIdsString = hashIds.sort().join(',');
+        if (currentIds === hashIdsString) {
+          return; // Already selected, no need to restore
+        }
+        
+        // Set flags to prevent saving during restoration
+        isRestoringRef.current = true;
+        processingHashRef.current = true;
+        
         // Restore selection from hash
         const findItemWithPath = (nodes: FileItem[], targetId: string, path: string[] = []): FileItem | null => {
           for (const node of nodes) {
@@ -318,11 +341,37 @@ function FilesApp() {
         if (foundItems.length > 0) {
           setSelected(foundItems);
         }
+        
+        // Reset flags after a short delay
+        setTimeout(() => {
+          isRestoringRef.current = false;
+          processingHashRef.current = false;
+        }, 200);
       }
+    };
+    
+    const cleanup = onHashChange((selections) => {
+      handleHashRestore(selections.file);
     });
     
-    return cleanup;
-  }, [currentWorkspace, tree]);
+    // Also check on visibility change (when returning to module)
+    const handleVisibilityChange = () => {
+      if (!document.hidden && tree.length > 0) {
+        const hashIds = getHashSelection('file');
+        if (hashIds.length > 0) {
+          handleHashRestore(hashIds);
+        }
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      cleanup();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tree, selected]);
 
   // Flatten tree to get all nodes in order (for Shift+Click range selection)
   const flattenTree = useCallback((nodes: FileItem[], result: FileItem[] = []): FileItem[] => {
@@ -489,11 +538,9 @@ function FilesApp() {
       prevSelectedIdsRef.current = idsString;
       
       if (selected.length > 0) {
-        console.log('FilesApp: Saving selected IDs:', ids);
         setHashSelection('file', ids);
         sessionStorage.setItem('markd_files_selected_ids', JSON.stringify(ids));
       } else {
-        console.log('FilesApp: Clearing selected IDs');
         setHashSelection('file', []);
         sessionStorage.removeItem('markd_files_selected_ids');
       }
@@ -577,10 +624,15 @@ function FilesApp() {
       // Store the created file ID for auto-selection after tree update
       if (result.success && result.file) {
         setPendingSelection(result.file.id);
+        toast.success(`File "${name}" created`);
+        // Reload tree immediately (don't rely solely on Socket.IO broadcast)
+        const treeResult = await api.getFilesTree(currentWorkspace);
+        setTree(treeResult.tree);
+        prevTreeRef.current = treeResult.tree;
       }
     } catch (err) {
       console.error('Error creating file:', err);
-      setError(err instanceof Error ? err.message : 'Failed to create file');
+      toast.error(err instanceof Error ? err.message : 'Failed to create file');
     }
   }, [currentWorkspace]);
 
@@ -596,10 +648,15 @@ function FilesApp() {
       // Store the created folder ID for auto-selection after tree update
       if (result.success && result.file) {
         setPendingSelection(result.file.id);
+        toast.success(`Folder "${name}" created`);
+        // Reload tree immediately (don't rely solely on Socket.IO broadcast)
+        const treeResult = await api.getFilesTree(currentWorkspace);
+        setTree(treeResult.tree);
+        prevTreeRef.current = treeResult.tree;
       }
     } catch (err) {
       console.error('Error creating folder:', err);
-      setError(err instanceof Error ? err.message : 'Failed to create folder');
+      toast.error(err instanceof Error ? err.message : 'Failed to create folder');
     }
   }, [currentWorkspace]);
 
@@ -717,10 +774,10 @@ function FilesApp() {
         setSelected(prev => prev.length > 0 ? [{ ...prev[0], locked_by: null }] : []);
       }
       
-      toast.success('Fichier déverrouillé avec succès');
+      toast.success('File unlocked successfully');
     } catch (err) {
       console.error('Error force unlocking:', err);
-      toast.error('Échec du déverrouillage du fichier');
+      toast.error('Failed to unlock file');
     }
   }, [selected]);
 
@@ -792,7 +849,7 @@ function FilesApp() {
                       onClick={onView}
                       className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400 dark:border-blue-400 dark:text-blue-300 dark:hover:bg-blue-900/30"
                     >
-                      Voir
+                      View
                     </button>
                   </div>
                 </div>
@@ -819,7 +876,7 @@ function FilesApp() {
 
         toast.custom(
           <ToastUpdated
-            title={`Fichier mis à jour : ${fileName || data.file_id}`}
+            title={`File updated: ${fileName || data.file_id}`}
             onView={() => expandToAndSelect(fileId, treeData)}
           />,
           { duration: 25000 }
@@ -960,7 +1017,7 @@ function FilesApp() {
                       onClick={onView}
                       className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400 dark:border-blue-400 dark:text-blue-300 dark:hover:bg-blue-900/30"
                     >
-                      Voir
+                      View
                     </button>
                   </div>
                 </div>
@@ -985,19 +1042,14 @@ function FilesApp() {
           );
         };
 
-        // Update tree state
-        setTree(result.tree);
-        prevTreeRef.current = result.tree;
-
         // Show up to 5 toasts to prevent flooding. Skip if this client just performed a local change.
+        const showLimited = <T extends { id: string; name: string; type: string }>(arr: T[]) => arr.slice(0, 5);
         const justDidLocalChange = Date.now() - lastLocalChangeAtRef.current < 2000;
         if (!justDidLocalChange) {
-        const showLimited = <T,>(arr: T[]) => arr.slice(0, 5);
-
           for (const ch of showLimited(created)) {
             toast.custom(
               <ToastChange
-                title={`Nouveau ${ch.type === 'folder' ? 'dossier' : 'fichier'} : ${ch.name}`}
+                title={`New ${ch.type === 'folder' ? 'folder' : 'file'}: ${ch.name}`}
                 onView={() => expandToAndSelect(ch.id, result.tree)}
               />,
               { duration: 25000 }
@@ -1006,8 +1058,8 @@ function FilesApp() {
           for (const ch of showLimited(movedOrRenamed)) {
             toast.custom(
               <ToastChange
-                title={`${ch.type === 'folder' ? 'Dossier' : 'Fichier'} mis à jour : ${ch.name}`}
-                subtitle="Renommé ou déplacé"
+                title={`${ch.type === 'folder' ? 'Folder' : 'File'} updated: ${ch.name}`}
+                subtitle="Renamed or moved"
                 onView={() => expandToAndSelect(ch.id, result.tree)}
               />,
               { duration: 25000 }
@@ -1016,15 +1068,15 @@ function FilesApp() {
           for (const ch of showLimited(contentUpdated)) {
             toast.custom(
               <ToastChange
-                title={`Fichier mis à jour : ${ch.name}`}
-                subtitle="Contenu modifié"
+                title={`File updated: ${ch.name}`}
+                subtitle="Content modified"
                 onView={() => expandToAndSelect(ch.id, result.tree)}
               />,
               { duration: 25000 }
             );
           }
           
-          // Toast for deletions (without "Voir" button)
+          // Toast for deletions (without "View" button)
           for (const del of showLimited(deleted)) {
             const ToastDelete: React.FC<{ title: string; path: string }> = ({ title, path }) => {
               const [start, setStart] = React.useState(false);
@@ -1064,7 +1116,7 @@ function FilesApp() {
             };
             toast.custom(
               <ToastDelete
-                title={`${del.type === 'folder' ? 'Dossier' : 'Fichier'} supprimé : ${del.name}`}
+                title={`${del.type === 'folder' ? 'Folder' : 'File'} deleted: ${del.name}`}
                 path={del.path}
               />,
               { duration: 25000 }
@@ -1096,7 +1148,7 @@ function FilesApp() {
           };
           const name = findName(prevTree);
           if (name) {
-            toast(`${lockInfo.user_name} verrouille "${name}"`, { icon: '🔒', duration: 3000 });
+            toast(`${lockInfo.user_name} locked "${name}"`, { icon: '🔒', duration: 3000 });
           }
         }
 
@@ -1185,10 +1237,10 @@ function FilesApp() {
       }
 
       if (successCount > 0) {
-        const targetName = targetId === 'root' ? 'la racine' : `"${targetNode?.name}"`;
+        const targetName = targetId === 'root' ? 'root' : `"${targetNode?.name}"`;
         const message = itemsToMove.length === 1 
-          ? `"${itemsToMove[0].name}" déplacé vers ${targetName}`
-          : `${successCount} fichiers déplacés vers ${targetName}`;
+          ? `"${itemsToMove[0].name}" moved to ${targetName}`
+          : `${successCount} files moved to ${targetName}`;
         
         toast.success(message);
         
@@ -1198,12 +1250,12 @@ function FilesApp() {
       }
       
       if (errors.length > 0) {
-        toast.error(`Erreur lors du déplacement de : ${errors.slice(0, 3).join(', ')}${errors.length > 3 ? '...' : ''}`);
+        toast.error(`Failed to move: ${errors.slice(0, 3).join(', ')}${errors.length > 3 ? '...' : ''}`);
       }
 
     } catch (err) {
       console.error('Error moving file:', err);
-      toast.error('Erreur lors du déplacement');
+      toast.error('Failed to move');
     }
   }, [tree, selected, currentWorkspace]);
 
@@ -1237,6 +1289,19 @@ function FilesApp() {
           cursor: isResizing ? 'col-resize' : (activeId ? 'grabbing' : 'default') 
         }}
       >
+        {/* Collapsed sidebar strip */}
+        {sidebarCollapsed ? (
+          <div className="flex flex-col items-center gap-2 border-r border-gray-200 bg-white py-3 px-1.5 dark:border-gray-700 dark:bg-gray-800">
+            <button
+              onClick={toggleSidebar}
+              className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              title="Show sidebar"
+            >
+              <PanelLeftOpen size={18} />
+            </button>
+          </div>
+        ) : (
+          <>
         <div className="flex flex-col" style={{ width: treeWidth }}>
           <FileTree
             tree={filteredTree}
@@ -1264,6 +1329,7 @@ function FilesApp() {
             allTags={allTags}
             selectedTags={selectedTags}
             onTagFilterChange={setSelectedTags}
+            onCollapseSidebar={toggleSidebar}
           />
         </div>
         
@@ -1275,6 +1341,8 @@ function FilesApp() {
         >
           <div className="absolute inset-y-0 -left-1 -right-1 group-hover:bg-blue-200 dark:group-hover:bg-blue-800 group-hover:opacity-20" />
         </div>
+          </>
+        )}
 
         {selected.length > 0 && selected[0].type === 'file' ? (
           <div className="flex-1 flex flex-col">
@@ -1286,7 +1354,7 @@ function FilesApp() {
         ) : (
           <div className="flex-1 flex items-center justify-center text-gray-400 dark:text-gray-500">
             <div className="text-center">
-              <p className="text-lg">Sélectionnez un fichier pour le visualiser</p>
+              <p className="text-lg">Select a file to view</p>
             </div>
           </div>
         )}

@@ -1,6 +1,6 @@
 """
-Activity Logger - Système de logs d'activité pour MarkD
-Enregistre toutes les actions utilisateurs dans les tables d'activité
+Activity Logger - Activity logging system for MarkD
+Records all user actions in activity tables
 """
 import uuid
 from datetime import datetime
@@ -18,23 +18,23 @@ def log_activity(
     details: Optional[Dict[str, Any]] = None
 ):
     """
-    Enregistre une activité utilisateur dans la table appropriée
+    Record a user activity in the appropriate table
     
     Args:
-        user_id: ID de l'utilisateur
-        workspace_id: ID du workspace
-        item_id: ID de l'élément (document, task, password)
-        action: Type d'action ('create', 'update', 'delete', 'move', 'rename', etc.)
-        item_type: Type d'élément ('document', 'task', 'password')
-        item_name: Nom de l'élément
-        item_path: Chemin de l'élément (optionnel)
-        details: Détails supplémentaires (optionnel)
+        user_id: User ID
+        workspace_id: Workspace ID
+        item_id: Item ID (document, task, password)
+        action: Action type ('create', 'update', 'delete', 'move', 'rename', etc.)
+        item_type: Item type ('document', 'task', 'password')
+        item_name: Item name
+        item_path: Item path (optional)
+        details: Additional details (optional)
     """
     try:
-        # Générer un UUID pour l'ID
+        # Generate a UUID for the ID
         activity_id = str(uuid.uuid4())
         
-        # Déterminer la table selon le type
+        # Determine table based on type
         table_map = {
             'document': 'document_activity_log',
             'task': 'task_activity_log', 
@@ -48,13 +48,13 @@ def log_activity(
         table = table_map[item_type]
         id_column = f"{item_type}_id"
         
-        # Construire la requête SQL
+        # Build SQL query
         query = f"""
             INSERT INTO {table} (id, user_id, workspace_id, {id_column}, action, item_name, item_path, created_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
         """
         
-        # Exécuter la requête
+        # Execute query
         db.execute_update(query, (
             activity_id,
             user_id,
@@ -83,13 +83,13 @@ def get_activity_logs(
     end_date: Optional[str] = None
 ):
     """
-    Récupère les logs d'activité avec filtres
+    Retrieve activity logs with filters
     
     Returns:
-        List[Dict]: Liste des activités
+        List[Dict]: List of activities
     """
     try:
-        # Tables à interroger
+        # Tables to query
         tables = []
         if not item_type or item_type == 'document':
             tables.append(('document_activity_log', 'document_id', 'document'))
@@ -98,7 +98,7 @@ def get_activity_logs(
         if not item_type or item_type == 'password':
             tables.append(('password_activity_log', 'password_id', 'password'))
         
-        # Construire les requêtes UNION
+        # Build UNION queries
         union_queries = []
         params = []
         
@@ -118,7 +118,7 @@ def get_activity_logs(
                 WHERE 1=1
             """]
             
-            # Ajouter les filtres
+            # Add filters
             if user_id:
                 query_parts.append("AND user_id = %s")
                 params.append(user_id)
@@ -141,7 +141,7 @@ def get_activity_logs(
             
             union_queries.append(" ".join(query_parts))
         
-        # Combiner avec UNION et trier
+        # Combine with UNION and sort
         final_query = f"""
             ({') UNION ALL ('.join(union_queries)})
             ORDER BY created_at DESC
@@ -150,13 +150,13 @@ def get_activity_logs(
         
         params.extend([limit, offset])
         
-        # Exécuter la requête
+        # Execute query
         results = db.execute_query(final_query, tuple(params))
         
-        # Enrichir avec les informations utilisateur
+        # Enrich with user information
         enriched_results = []
         for row in results:
-            # Récupérer les infos utilisateur
+            # Get user info
             user_query = "SELECT username, email FROM users WHERE id = %s"
             user_info = db.execute_query(user_query, (row['user_id'],))
             
@@ -181,10 +181,10 @@ def get_activity_stats(
     days: int = 30
 ):
     """
-    Récupère des statistiques d'activité
+    Retrieve activity statistics
     
     Returns:
-        Dict: Statistiques d'activité
+        Dict: Activity statistics
     """
     try:
         stats = {
@@ -194,7 +194,7 @@ def get_activity_stats(
             'top_users': []
         }
         
-        # Requête pour compter les activités par type
+        # Query to count activities by type
         tables = [
             ('document_activity_log', 'document'),
             ('task_activity_log', 'task'),
@@ -218,7 +218,7 @@ def get_activity_stats(
             stats['activities_by_type'][type_name] = count
             stats['total_activities'] += count
         
-        # Top utilisateurs
+        # Top users
         union_parts = []
         params = []
         
@@ -248,7 +248,7 @@ def get_activity_stats(
             
             top_users_result = db.execute_query(top_users_query, tuple(params))
             
-            # Enrichir avec les noms d'utilisateurs
+            # Enrich with usernames
             for row in top_users_result:
                 user_query = "SELECT username FROM users WHERE id = %s"
                 user_info = db.execute_query(user_query, (row['user_id'],))

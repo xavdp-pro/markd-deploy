@@ -10,6 +10,8 @@ class ModuleSettings(BaseModel):
     documents: bool = True
     tasks: bool = True
     passwords: bool = True
+    files: bool = True
+    schemas: bool = True
 
 @router.get("/api/admin/settings/modules")
 async def get_module_settings(user: Dict = Depends(get_current_user)):
@@ -19,13 +21,15 @@ async def get_module_settings(user: Dict = Depends(get_current_user)):
         settings = db.execute_query("SELECT setting_key, setting_value FROM system_settings WHERE setting_key LIKE 'module_%'")
     except Exception:
         # Table might not exist yet if main.py hasn't run or failed
-        return {"documents": True, "tasks": True, "passwords": True}
+        return {"documents": True, "tasks": True, "passwords": True, "files": True, "schemas": True}
     
     # Default values
     result = {
         "documents": True,
         "tasks": True,
-        "passwords": True
+        "passwords": True,
+        "files": True,
+        "schemas": True
     }
     
     for row in settings:

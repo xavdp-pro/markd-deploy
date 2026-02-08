@@ -91,30 +91,30 @@ const ProfilePage: React.FC = () => {
       });
 
       if (response.ok) {
-        toast.success('Profil mis à jour avec succès');
+        toast.success('Profile updated successfully');
       } else {
-        toast.error('Échec de la mise à jour du profil');
+        toast.error('Failed to update profile');
       }
     } catch (error) {
-      toast.error('Une erreur est survenue');
+      toast.error('An error occurred');
     }
   };
 
   const validatePassword = (password: string): string | null => {
     if (password.length < 10) {
-      return 'Le mot de passe doit contenir au moins 10 caractères';
+      return 'Password must contain at least 10 characters';
     }
     if (!/[A-Z]/.test(password)) {
-      return 'Le mot de passe doit contenir au moins 1 majuscule (A-Z)';
+      return 'Password must contain at least 1 uppercase letter (A-Z)';
     }
     if (!/[a-z]/.test(password)) {
-      return 'Le mot de passe doit contenir au moins 1 minuscule (a-z)';
+      return 'Password must contain at least 1 lowercase letter (a-z)';
     }
     if (!/[0-9]/.test(password)) {
-      return 'Le mot de passe doit contenir au moins 1 chiffre (0-9)';
+      return 'Password must contain at least 1 digit (0-9)';
     }
     if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
-      return 'Le mot de passe doit contenir au moins 1 symbole (!@#$%^&*...)';
+      return 'Password must contain at least 1 symbol (!@#$%^&*...)';
     }
     return null;
   };
@@ -123,7 +123,7 @@ const ProfilePage: React.FC = () => {
     e.preventDefault();
 
     if (formData.newPassword !== formData.confirmPassword) {
-      toast.error('Les mots de passe ne correspondent pas');
+      toast.error('Passwords do not match');
       return;
     }
 
@@ -144,13 +144,13 @@ const ProfilePage: React.FC = () => {
       });
 
       if (response.ok) {
-        toast.success('Mot de passe modifié avec succès');
+        toast.success('Password changed successfully');
         setFormData({ ...formData, currentPassword: '', newPassword: '', confirmPassword: '' });
       } else {
-        toast.error('Échec de la modification du mot de passe');
+        toast.error('Failed to change password');
       }
     } catch (error) {
-      toast.error('Une erreur est survenue');
+      toast.error('An error occurred');
     }
   };
 
@@ -162,7 +162,7 @@ const ProfilePage: React.FC = () => {
       
       <div className="flex-1 overflow-auto p-8">
         <div className="max-w-4xl mx-auto">
-          <h2 className="text-3xl font-bold text-gray-800 dark:text-white mb-6">Mon Profil</h2>
+          <h2 className="text-3xl font-bold text-gray-800 dark:text-white mb-6">My Profile</h2>
 
           {/* Tabs */}
           <div className="mb-6 border-b border-gray-200 dark:border-gray-700">
@@ -177,7 +177,7 @@ const ProfilePage: React.FC = () => {
               >
                 <div className="flex items-center gap-2">
                   <User className="w-4 h-4" />
-                  Informations personnelles
+                  Personal Information
                 </div>
               </button>
               <button
@@ -190,7 +190,7 @@ const ProfilePage: React.FC = () => {
               >
                 <div className="flex items-center gap-2">
                   <Shield className="w-4 h-4" />
-                  Mes droits et accès
+                  My Rights & Access
                 </div>
               </button>
             </nav>
@@ -203,7 +203,7 @@ const ProfilePage: React.FC = () => {
               <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
             <h3 className="text-xl font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
               <User className="w-5 h-5 text-gray-800 dark:text-white" />
-                  Informations personnelles
+                  Personal Information
             </h3>
             <form onSubmit={handleUpdateProfile} className="space-y-4">
               <div>
@@ -303,12 +303,12 @@ const ProfilePage: React.FC = () => {
               <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
                 <h3 className="text-xl font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
                   <Users className="w-5 h-5 text-gray-800 dark:text-white" />
-                  Mes groupes
+                  My Groups
                 </h3>
                 {loading ? (
-                  <div className="text-center py-4 text-gray-600 dark:text-gray-400">Chargement...</div>
+                  <div className="text-center py-4 text-gray-600 dark:text-gray-400">Loading...</div>
                 ) : groups.length === 0 ? (
-                  <div className="text-center py-4 text-gray-600 dark:text-gray-400">Vous n'êtes membre d'aucun groupe</div>
+                  <div className="text-center py-4 text-gray-600 dark:text-gray-400">You are not a member of any group</div>
                 ) : (
                   <div className="space-y-2">
                     {groups.map((group) => (
@@ -330,12 +330,12 @@ const ProfilePage: React.FC = () => {
               <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
                 <h3 className="text-xl font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
                   <FolderTree className="w-5 h-5 text-gray-800 dark:text-white" />
-                  Accès aux workspaces
+                  Workspace Access
                 </h3>
                 {loading ? (
-                  <div className="text-center py-4 text-gray-600 dark:text-gray-400">Chargement...</div>
+                  <div className="text-center py-4 text-gray-600 dark:text-gray-400">Loading...</div>
                 ) : workspaces.length === 0 ? (
-                  <div className="text-center py-4 text-gray-600 dark:text-gray-400">Vous n'avez accès à aucun workspace</div>
+                  <div className="text-center py-4 text-gray-600 dark:text-gray-400">You do not have access to any workspace</div>
                 ) : (
                   <div className="space-y-3">
                     {workspaces.map((ws) => (

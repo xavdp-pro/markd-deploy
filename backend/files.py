@@ -335,6 +335,19 @@ async def create_file(data: FileCreate, current_user: Dict = Depends(get_current
     file_id = str(uuid.uuid4())
     original_name = data.name.strip()
     
+    # Check for duplicate name in same parent and workspace
+    if data.parent_id:
+        dup_query = "SELECT id FROM files WHERE name = %s AND parent_id = %s AND workspace_id = %s AND type = %s"
+        dup_params = (original_name, data.parent_id, data.workspace_id, data.type)
+    else:
+        dup_query = "SELECT id FROM files WHERE name = %s AND parent_id IS NULL AND workspace_id = %s AND type = %s"
+        dup_params = (original_name, data.workspace_id, data.type)
+    
+    existing = db.execute_query(dup_query, dup_params)
+    if existing:
+        type_label = 'folder' if data.type == 'folder' else 'file'
+        raise HTTPException(status_code=409, detail=f"A {type_label} named \"{original_name}\" already exists here")
+    
     query = """
         INSERT INTO files 
         (id, workspace_id, parent_id, type, name, original_name, created_by)
@@ -446,9 +459,9 @@ async def update_file(file_id: str, data: FileUpdate, current_user: Dict = Depen
         params.append(data.name.strip())
         action = 'rename'
     
-    if data.parent_id is not None:
-        # Validate parent
-        if data.parent_id:
+    if 'parent_id' in data.model_fields_set:
+        # parent_id was explicitly provided (even if null = move to root)
+        if data.parent_id is not None:
             parent_query = "SELECT id, type, workspace_id FROM files WHERE id = %s"
             parent_result = db.execute_query(parent_query, (data.parent_id,))
             if not parent_result:

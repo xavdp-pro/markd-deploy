@@ -9,7 +9,6 @@ import {
   Folder,
   FolderOpen,
   GripVertical,
-  Lock,
   Plus,
   Search,
   Shield,
@@ -17,6 +16,7 @@ import {
   X,
   Maximize2,
   Minimize2,
+  PanelLeftClose,
 } from 'lucide-react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { Task, TaskTag } from '../types';
@@ -39,7 +39,6 @@ interface TaskTreeProps {
   onDelete?: (id: string) => void;
   onRename?: (id: string, newName: string) => void;
   onCopy: (id: string) => void;
-  onUnlock?: (id: string) => void;
   userPermission?: string;
   workspaceSelector?: React.ReactNode;
   searchQuery?: string;
@@ -54,6 +53,7 @@ interface TaskTreeProps {
   onTagFilterChange?: (tagIds: string[]) => void;
   width?: number;
   readOnly?: boolean;
+  onCollapseSidebar?: () => void;
 }
 
 interface ContextMenuData {
@@ -75,7 +75,6 @@ interface ContextMenuProps {
   onDelete?: (id: string) => void;
   onRename?: (id: string, newName: string) => void;
   onCopy: (id: string) => void;
-  onUnlock?: (id: string) => void;
   setConfirmModal: (modal: {
     title: string;
     message: string;
@@ -92,7 +91,6 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
   onDelete,
   onRename,
   onCopy,
-  onUnlock,
   setConfirmModal,
 }) => {
   const { user } = useAuth();
@@ -137,10 +135,6 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
       return null;
     }
   })();
-
-  const canForceUnlock =
-    data.node.locked_by &&
-    (user?.role === 'admin' || data.node.locked_by.user_id === currentUserId);
 
   return (
     <>
@@ -257,27 +251,6 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
               </button>
             )}
 
-            {canForceUnlock && onUnlock && (
-              <button
-                type="button"
-                onClick={() => {
-                  setConfirmModal({
-                    title: 'Unlock task',
-                    message: `Force unlock of "${data.node.name}"?`,
-                    variant: 'warning',
-                    onConfirm: () => {
-                      onUnlock(data.node.id);
-                      setConfirmModal(null);
-                      onClose();
-                    },
-                  });
-                }}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-orange-600 hover:bg-orange-50 dark:text-orange-400 dark:hover:bg-orange-900/30"
-              >
-                <Lock size={14} />
-                Unlock
-              </button>
-            )}
           </>
         )}
       </div>
@@ -309,7 +282,6 @@ interface TaskTreeNodeProps {
   onDelete?: (id: string) => void;
   onRename?: (id: string, newName: string) => void;
   onCopy: (id: string) => void;
-  onUnlock?: (id: string) => void;
   readOnly?: boolean;
   setConfirmModal: (modal: {
     title: string;
@@ -331,7 +303,6 @@ const TaskTreeNode: React.FC<TaskTreeNodeProps> = ({
   onDelete,
   onRename,
   onCopy,
-  onUnlock,
   readOnly,
   setConfirmModal,
 }) => {
@@ -376,12 +347,6 @@ const TaskTreeNode: React.FC<TaskTreeNodeProps> = ({
       </span>
     ) : null;
 
-  const lockIndicator = node.locked_by ? (
-    <span className="flex items-center gap-1 text-[11px] font-medium text-orange-600 dark:text-orange-400">
-      <Lock size={12} />
-      {node.locked_by.user_name}
-    </span>
-  ) : null;
 
   return (
     <div
@@ -451,7 +416,6 @@ const TaskTreeNode: React.FC<TaskTreeNodeProps> = ({
 
           <div className="ml-auto flex items-center gap-2 pl-2">
             {statusBadge}
-            {lockIndicator}
           </div>
         </div>
       </div>
@@ -471,7 +435,6 @@ const TaskTreeNode: React.FC<TaskTreeNodeProps> = ({
             onDelete={onDelete}
             onRename={onRename}
             onCopy={onCopy}
-            onUnlock={onUnlock}
             readOnly={readOnly}
             setConfirmModal={setConfirmModal}
           />
@@ -486,7 +449,6 @@ const TaskTreeNode: React.FC<TaskTreeNodeProps> = ({
           onDelete={onDelete}
           onRename={onRename}
           onCopy={onCopy}
-          onUnlock={onUnlock}
           setConfirmModal={setConfirmModal}
         />
       )}
@@ -508,21 +470,21 @@ const TaskTree: React.FC<TaskTreeProps> = ({
   onDelete,
   onRename,
   onCopy,
-  onUnlock,
   userPermission,
   workspaceSelector,
   searchQuery = '',
   onSearchChange,
   onClearSearch,
-  statusFilter = 'all',
-  onStatusFilterChange,
-  priorityFilter = 'all',
-  onPriorityFilterChange,
+  statusFilter: _statusFilter = 'all',
+  onStatusFilterChange: _onStatusFilterChange,
+  priorityFilter: _priorityFilter = 'all',
+  onPriorityFilterChange: _onPriorityFilterChange,
   allTags = [],
   selectedTags = [],
   onTagFilterChange,
   width = 320,
   readOnly,
+  onCollapseSidebar,
 }) => {
   const { user } = useAuth();
   const currentUserId = useMemo(() => {
@@ -538,15 +500,6 @@ const TaskTree: React.FC<TaskTreeProps> = ({
       return null;
     }
   }, [user]);
-
-  const canForceUnlockSelected =
-    Boolean(
-      selected.length > 0 &&
-        selected[0].type === 'task' &&
-        selected[0].locked_by &&
-        onUnlock &&
-        String(selected[0].locked_by.user_id) !== (currentUserId ?? '')
-    );
 
   const [rootContextMenu, setRootContextMenu] = useState<RootContextMenuData | null>(null);
   const [rootInputModal, setRootInputModal] = useState<{
@@ -650,13 +603,13 @@ const TaskTree: React.FC<TaskTreeProps> = ({
           event.preventDefault();
           event.stopPropagation();
           const itemName = firstSelected.name;
-          const itemType = firstSelected.type === 'folder' ? 'dossier' : 'tâche';
+          const itemType = firstSelected.type === 'folder' ? 'folder' : 'task';
           const count = selected.length;
           const message = count > 1 
-            ? `Êtes-vous sûr de vouloir supprimer ${count} éléments ?`
-            : `Êtes-vous sûr de vouloir supprimer "${itemName}" ?${firstSelected.type === 'folder' ? ' Cette action supprimera également tous les éléments contenus dans ce dossier.' : ''}`;
+            ? `Are you sure you want to delete ${count} items?`
+            : `Are you sure you want to delete "${itemName}"?${firstSelected.type === 'folder' ? ' This will also delete all items inside this folder.' : ''}`;
           setConfirmModal({
-            title: count > 1 ? `Supprimer ${count} éléments` : `Supprimer le ${itemType}`,
+            title: count > 1 ? `Delete ${count} items` : `Delete ${itemType}`,
             message,
             variant: 'danger',
             onConfirm: () => {
@@ -685,6 +638,7 @@ const TaskTree: React.FC<TaskTreeProps> = ({
       <div className="border-b border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900 flex-shrink-0">
         <div className="flex items-center justify-between px-4 py-3">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Tasks</h2>
+          <div className="flex items-center gap-2">
           {userPermission && (
             <span className="flex items-center gap-1.5 rounded px-2 py-1 text-xs font-medium">
               {userPermission === 'admin' ? (
@@ -705,6 +659,16 @@ const TaskTree: React.FC<TaskTreeProps> = ({
               )}
             </span>
           )}
+          {onCollapseSidebar && (
+            <button
+              onClick={onCollapseSidebar}
+              className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+              title="Hide sidebar"
+            >
+              <PanelLeftClose size={16} />
+            </button>
+          )}
+          </div>
         </div>
 
         {workspaceSelector && <div className="px-4 pb-3">{workspaceSelector}</div>}
@@ -731,16 +695,6 @@ const TaskTree: React.FC<TaskTreeProps> = ({
               )}
             </div>
 
-            {canForceUnlockSelected && selected.length > 0 && onUnlock && (
-              <button
-                type="button"
-                onClick={() => onUnlock(selected[0].id)}
-                className="flex items-center justify-center gap-2 rounded border border-orange-600 px-3 py-2 text-sm font-medium text-orange-600 hover:bg-orange-50 focus:outline-none focus:ring-2 focus:ring-orange-400 dark:border-orange-400 dark:text-orange-300 dark:hover:bg-orange-900/40"
-              >
-                <Lock size={14} />
-                Force unlock "{selected[0].name}"
-              </button>
-            )}
           </div>
         )}
       </div>
@@ -753,7 +707,7 @@ const TaskTree: React.FC<TaskTreeProps> = ({
               type="button"
               onClick={onExpandAll}
               className="p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm"
-              title="Développer tout l'arbre"
+              title="Expand all"
             >
               <Maximize2 size={14} />
             </button>
@@ -761,7 +715,7 @@ const TaskTree: React.FC<TaskTreeProps> = ({
               type="button"
               onClick={onCollapseAll}
               className="p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm"
-              title="Réduire tout l'arbre"
+              title="Collapse all"
             >
               <Minimize2 size={14} />
             </button>
@@ -787,7 +741,6 @@ const TaskTree: React.FC<TaskTreeProps> = ({
                 onDelete={onDelete}
                 onRename={onRename}
                 onCopy={onCopy}
-                onUnlock={onUnlock}
                 readOnly={!canWrite}
                 setConfirmModal={setConfirmModal}
               />
@@ -815,53 +768,6 @@ const TaskTree: React.FC<TaskTreeProps> = ({
           )}
         </div>
       </div>
-
-      {/* Status and Priority filters - sticky at the bottom, above tag filter */}
-      {(onStatusFilterChange || onPriorityFilterChange) && (
-        <div className="flex-shrink-0 border-t border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-900 p-4">
-          <div className="flex flex-row gap-2">
-            {onStatusFilterChange && (
-              <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 flex-1">
-                Status
-                <select
-                  value={statusFilter}
-                  onChange={(event) =>
-                    onStatusFilterChange(
-                      event.target.value as 'all' | 'todo' | 'doing' | 'done'
-                    )
-                  }
-                  className="rounded border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
-                >
-                  <option value="all">All statuses</option>
-                  <option value="todo">To Do</option>
-                  <option value="doing">In Progress</option>
-                  <option value="done">Done</option>
-                </select>
-              </label>
-            )}
-
-            {onPriorityFilterChange && (
-              <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 flex-1">
-                Priority
-                <select
-                  value={priorityFilter}
-                  onChange={(event) =>
-                    onPriorityFilterChange(
-                      event.target.value as 'all' | 'low' | 'medium' | 'high'
-                    )
-                  }
-                  className="rounded border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-100"
-                >
-                  <option value="all">All priorities</option>
-                  <option value="low">Low</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                </select>
-              </label>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Tag filter - sticky at the bottom */}
       {onTagFilterChange && (

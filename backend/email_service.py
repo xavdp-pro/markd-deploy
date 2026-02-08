@@ -70,7 +70,7 @@ def send_password_reset_email(to_email: str, username: str, code: str) -> bool:
     # Send email
     return send_email(
         to_email,
-        'Réinitialisation de votre mot de passe MarkD',
+        'MarkD - Password Reset',
         html_content
     )
 
@@ -88,7 +88,7 @@ def send_task_assignment_email(to_email: str, username: str, task_title: str, ta
     html_content = html_content.replace('{{task_url}}', task_url)
     html_content = html_content.replace('{{assigned_by}}', assigned_by)
     
-    subject = f"MarkD - Nouvelle tâche assignée: {task_title}"
+    subject = f"MarkD - New task assigned: {task_title}"
     
     return send_email(to_email, subject, html_content)
 
@@ -106,6 +106,6 @@ def send_task_due_date_reminder(to_email: str, username: str, task_title: str, t
     html_content = html_content.replace('{{task_url}}', task_url)
     html_content = html_content.replace('{{due_date}}', due_date)
     
-    subject = f"MarkD - Rappel échéance: {task_title}"
+    subject = f"MarkD - Due date reminder: {task_title}"
     
     return send_email(to_email, subject, html_content)

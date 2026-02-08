@@ -6,6 +6,8 @@ from typing import Optional, List, Dict, Any
 import socketio
 import uvicorn
 import os
+import asyncio
+import collaborative
 from dotenv import load_dotenv
 import uuid
 from datetime import datetime, timedelta
@@ -71,6 +73,10 @@ app.include_router(settings_router)
 # Include admin routes (activity logs)
 from admin_routes import router as admin_router
 app.include_router(admin_router)
+
+# Include MCP streaming/document endpoints for AI agents
+from mcp_streaming import router as mcp_streaming_router
+app.include_router(mcp_streaming_router)
 
 
 # Socket.IO server
@@ -420,15 +426,8 @@ async def disconnect(sid):
     if sid in connected_users:
         del connected_users[sid]
     
-    # Remove from all documents
-    for doc_id, users in document_presence.items():
-        if sid in users:
-            del users[sid]
-            # Broadcast updated list
-            await sio.emit('presence_updated', {
-                'document_id': doc_id,
-                'users': list(users.values())
-            }, room=f"doc_{doc_id}")
+    # Use collaborative.py to leave all documents
+    await collaborative.leave_all_documents(sid)
 
 def generate_user_color(user_id: str) -> str:
     """Generate a consistent color for a user based on their ID"""
@@ -443,12 +442,12 @@ def generate_user_color(user_id: str) -> str:
 
 @sio.event
 async def join_document(sid, data):
-    """Join a document room for presence"""
+    """Join a document room for presence - uses collaborative.py"""
     document_id = data.get('document_id')
     user_info = data.get('user')
     
     if not document_id:
-        return
+        return []
     
     # If user_info not provided, try to get from connected_users
     if not user_info and sid in connected_users:
@@ -457,54 +456,76 @@ async def join_document(sid, data):
     # If still no user_info, create minimal one
     if not user_info:
         user_info = {
+            'user_id': str(sid),
             'id': str(sid),
             'username': 'Unknown',
-            'color': generate_user_color(str(sid))
         }
     else:
-        # Ensure color is set
-        if 'color' not in user_info:
-            user_id = str(user_info.get('id', sid))
-            user_info['color'] = generate_user_color(user_id)
-        
-    sio.enter_room(sid, f"doc_{document_id}")
+        # Ensure user_id is set
+        if 'user_id' not in user_info:
+            user_info['user_id'] = user_info.get('id', str(sid))
     
-    if document_id not in document_presence:
-        document_presence[document_id] = {}
-        
-    # Store user presence with sid as key to handle multiple tabs/devices
-    document_presence[document_id][sid] = user_info
+    # Store in connected_users for reference
     connected_users[sid] = user_info
     
-    # Broadcast to room
+    room_name = f"doc_{document_id}"
+    
+    # Explicitly enter the room here (in addition to collaborative.py)
+    await sio.enter_room(sid, room_name)
+    
+    # Use collaborative.py for presence management
+    users = await collaborative.join_document(sid, document_id, user_info)
+    
+    # Send initial list to the joining user via event
     await sio.emit('presence_updated', {
         'document_id': document_id,
-        'users': list(document_presence[document_id].values())
-    }, room=f"doc_{document_id}")
+        'users': users
+    }, room=sid)
+    
+    # Also emit to room for others
+    await sio.emit('presence_updated', {
+        'document_id': document_id,
+        'users': users
+    }, room=room_name)
+    
+    # Return users list as Socket.IO ack (this is what the frontend callback receives)
+    return users
 
 @sio.event
 async def leave_document(sid, data):
-    """Leave a document room"""
+    """Leave a document room - uses collaborative.py"""
     document_id = data.get('document_id')
     if not document_id:
         return
-        
-    sio.leave_room(sid, f"doc_{document_id}")
     
-    if document_id in document_presence and sid in document_presence[document_id]:
-        del document_presence[document_id][sid]
-        
-        await sio.emit('presence_updated', {
-            'document_id': document_id,
-            'users': list(document_presence[document_id].values())
-        }, room=f"doc_{document_id}")
+    user_info = connected_users.get(sid, {})
+    print(f"[LEAVE] sid={sid} user={user_info.get('username', '?')} leaving doc={document_id}")
+    
+    # Use collaborative.py for presence management (this also does sio.leave_room + broadcasts)
+    await collaborative.leave_document(sid, document_id)
+    
+    # Get updated users list
+    users = await collaborative.get_document_presence(document_id)
+    print(f"[LEAVE] Remaining users in doc={document_id}: {[u.get('username') for u in users]}")
+    
+    # Also explicitly leave the Socket.IO room (in case collaborative.py didn't)
+    room_name = f"doc_{document_id}"
+    await sio.leave_room(sid, room_name)
+    
+    # Broadcast updated presence to remaining users
+    await sio.emit('presence_updated', {
+        'document_id': document_id,
+        'users': users
+    }, room=room_name)
 
 @sio.event
 async def presence_heartbeat(sid, data):
-    """Handle heartbeat from client to update last activity"""
+    """Handle heartbeat from client to update last activity - uses collaborative.py"""
     document_id = data.get('document_id')
     if not document_id:
         return
+    
+    # Use collaborative.py for heartbeat
     await collaborative.handle_heartbeat(sid, document_id)
 
 @sio.event
@@ -519,19 +540,35 @@ async def cursor_update(sid, data):
     if not user_info:
         return
     
+    cursor_line = data.get('cursor_line')
+    cursor_column = data.get('cursor_column')
+    room_name = f"doc_{document_id}"
+    
+    # Also update in collaborative.py for consistency
+    if cursor_line is not None:
+        await collaborative.update_cursor_position(
+            sid, 
+            document_id, 
+            {
+                'line': cursor_line,
+                'column': cursor_column or 0,
+                'position': data.get('cursor_position', 0)
+            }
+        )
+    
     # Broadcast cursor update to other users in the room (excluding sender)
     await sio.emit('cursor_update', {
         'document_id': document_id,
         'user_id': user_info.get('id'),
         'username': user_info.get('username'),
-        'cursor_line': data.get('cursor_line'),
-        'cursor_column': data.get('cursor_column'),
+        'cursor_line': cursor_line,
+        'cursor_column': cursor_column,
         'cursor_position': data.get('cursor_position'),
         'is_typing': data.get('is_typing', False),
         'is_agent': user_info.get('is_agent', False),
         'agent_name': user_info.get('agent_name'),
         'color': user_info.get('color', '#3b82f6'),
-    }, room=f"doc_{document_id}", skip_sid=sid)
+    }, room=room_name, skip_sid=sid)
 
 @sio.event
 async def task_activity_updated(sid, data):
@@ -569,7 +606,7 @@ def ensure_default_setup():
             # Create ALL group if it doesn't exist
             create_all_group = """
                 INSERT INTO user_groups_table (name, description, is_business, is_system)
-                VALUES ('ALL', 'Tous les utilisateurs - Groupe par défaut', 1, 1)
+                VALUES ('ALL', 'All users - Default group', 1, 1)
             """
             db.execute_update(create_all_group)
             all_group = db.execute_query(all_group_query)
@@ -601,7 +638,7 @@ def ensure_default_setup():
             # Create demo workspace if it doesn't exist
             create_demo_ws = """
                 INSERT INTO workspaces (id, name, description, created_by, created_at, updated_at)
-                VALUES ('demo', 'Demo Workspace', 'Workspace de démo pour tester - Documents Markdown, Mots de passe et Tâches', 1, NOW(), NOW())
+                VALUES ('demo', 'Demo Workspace', 'Demo workspace for testing - Markdown Documents, Passwords and Tasks', 1, NOW(), NOW())
             """
             db.execute_update(create_demo_ws)
             print("✓ Created 'demo' workspace")
@@ -610,7 +647,7 @@ def ensure_default_setup():
             update_demo_ws = """
                 UPDATE workspaces 
                 SET name = 'Demo Workspace',
-                    description = 'Workspace de démo pour tester - Documents Markdown, Mots de passe et Tâches',
+                    description = 'Demo workspace for testing - Markdown Documents, Passwords and Tasks',
                     created_at = COALESCE(created_at, NOW()),
                     updated_at = COALESCE(updated_at, NOW()),
                     created_by = COALESCE(created_by, 1)
@@ -761,7 +798,6 @@ def ensure_default_setup():
     except Exception as e:
         print(f"⚠ Warning: Could not ensure default setup: {e}")
         import traceback
-        import traceback
         traceback.print_exc()
 
 async def start_presence_cleanup_task():
@@ -769,9 +805,9 @@ async def start_presence_cleanup_task():
     print("Starting presence cleanup task...")
     while True:
         try:
-            await asyncio.sleep(5)  # Run every 5 seconds
-            # Use 10s max age (heartbeat is every 5s)
-            cleaned = await collaborative.cleanup_stale_presence(max_age_seconds=10)
+            await asyncio.sleep(15)  # Run every 15 seconds
+            # Use 60s max age (frontend heartbeat is every 30s, so 2x margin)
+            cleaned = await collaborative.cleanup_stale_presence(max_age_seconds=60)
             if cleaned > 0:
                 print(f"Cleaned {cleaned} stale presence entries")
         except Exception as e:
@@ -870,22 +906,45 @@ async def create_workspace(workspace: WorkspaceBase, request: Request, user: Dic
         query = "INSERT INTO workspaces (id, name, description) VALUES (%s, %s, %s)"
         db.execute_update(query, (workspace_id, workspace.name, workspace.description))
         
-        # Give creator admin rights on the workspace
-        perm_query = "INSERT INTO workspace_permissions (workspace_id, user_id, permission_level) VALUES (%s, %s, 'admin')"
-        db.execute_update(perm_query, (workspace_id, user['id']))
+        # Grant Administrators group admin access to the new workspace
+        try:
+            admin_group_query = "SELECT id FROM user_groups_table WHERE name = 'Administrators' LIMIT 1"
+            admin_group = db.execute_query(admin_group_query)
+            if admin_group:
+                db.execute_update(
+                    """INSERT INTO group_workspace_permissions (group_id, workspace_id, permission_level, granted_at)
+                       VALUES (%s, %s, 'admin', NOW())
+                       ON DUPLICATE KEY UPDATE permission_level='admin'""",
+                    (admin_group[0]['id'], workspace_id)
+                )
+        except Exception as e:
+            print(f"Warning: Could not grant Administrators group access to new workspace: {e}")
         
-        # Automatically grant "Users" group read access to the new workspace
+        # Grant ALL group read access to the new workspace
+        try:
+            all_group_query = "SELECT id FROM user_groups_table WHERE name = 'ALL' LIMIT 1"
+            all_group = db.execute_query(all_group_query)
+            if all_group:
+                db.execute_update(
+                    """INSERT INTO group_workspace_permissions (group_id, workspace_id, permission_level, granted_at)
+                       VALUES (%s, %s, 'read', NOW())
+                       ON DUPLICATE KEY UPDATE permission_level='read'""",
+                    (all_group[0]['id'], workspace_id)
+                )
+        except Exception as e:
+            print(f"Warning: Could not grant ALL group access to new workspace: {e}")
+        
+        # Grant Users group read access to the new workspace
         try:
             users_group_query = "SELECT id FROM user_groups_table WHERE name = 'Users' LIMIT 1"
             users_group = db.execute_query(users_group_query)
             if users_group:
-                users_group_id = users_group[0]['id']
-                grant_users_access = """
-                    INSERT INTO group_workspace_permissions (group_id, workspace_id, permission_level, granted_at)
-                    VALUES (%s, %s, 'read', NOW())
-                    ON DUPLICATE KEY UPDATE permission_level='read'
-                """
-                db.execute_update(grant_users_access, (users_group_id, workspace_id))
+                db.execute_update(
+                    """INSERT INTO group_workspace_permissions (group_id, workspace_id, permission_level, granted_at)
+                       VALUES (%s, %s, 'read', NOW())
+                       ON DUPLICATE KEY UPDATE permission_level='read'""",
+                    (users_group[0]['id'], workspace_id)
+                )
         except Exception as e:
             print(f"Warning: Could not grant Users group access to new workspace: {e}")
         
@@ -1504,28 +1563,36 @@ async def force_unlock_document(document_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ===== Image Upload =====
+# ===== Image & File Upload =====
+
+ALLOWED_UPLOAD_EXTENSIONS = {
+    # Images
+    '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico', '.bmp', '.tiff',
+    # Documents
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp',
+    # Text
+    '.txt', '.csv', '.md', '.json', '.xml', '.yaml', '.yml', '.log',
+    # Archives
+    '.zip', '.tar', '.gz', '.rar', '.7z',
+}
 
 @app.post("/api/upload-image")
 async def upload_image(file: UploadFile = File(...)):
-    """Upload an image and return its URL"""
+    """Upload an image or document file and return its URL"""
     try:
         print(f"Upload request received - filename: {file.filename}, content_type: {file.content_type}")
         
-        # Validate file type - be more permissive
-        if not file.content_type or not file.content_type.startswith('image/'):
-            # Also check file extension as fallback
-            allowed_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg']
-            file_ext = ('.' + file.filename.split('.')[-1]).lower() if '.' in file.filename else ''
-            if file_ext not in allowed_extensions:
-                print(f"Invalid file type: {file.content_type}, extension: {file_ext}")
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"Invalid image type: {file.content_type}. Allowed: JPEG, PNG, GIF, WebP, SVG"
-                )
+        # Validate file extension
+        file_ext = ('.' + file.filename.split('.')[-1]).lower() if file.filename and '.' in file.filename else ''
+        if file_ext not in ALLOWED_UPLOAD_EXTENSIONS:
+            print(f"Invalid file type: {file.content_type}, extension: {file_ext}")
+            raise HTTPException(
+                status_code=400, 
+                detail=f"File type not allowed: {file_ext}. Allowed: images, PDF, Office documents, text files, archives."
+            )
         
-        # Generate unique filename
-        file_extension = file.filename.split('.')[-1].lower() if '.' in file.filename else 'jpg'
+        # Generate unique filename preserving original extension
+        file_extension = file.filename.split('.')[-1].lower() if file.filename and '.' in file.filename else 'bin'
         unique_filename = f"{uuid.uuid4()}.{file_extension}"
         file_path = UPLOAD_DIR / unique_filename
         
@@ -1647,14 +1714,14 @@ async def get_mcp_configs(request: Request, user: Dict = Depends(get_current_use
         """
         configs = db.execute_query(query, (user['id'],))
         
-        # Vérifier les permissions pour chaque workspace
+        # Check permissions for each workspace
         for config in configs:
             workspace_id = config['workspace_id']
             try:
-                # Vérifier que l'utilisateur a au moins 'read' sur le workspace
+                # Check that user has at least 'read' on the workspace
                 permission = await check_workspace_permission(workspace_id, user, 'read')
                 config['user_permission'] = permission
-                # Autoriser seulement si write ou admin
+                # Allow only if write or admin
                 config['mcp_allowed'] = permission in ['write', 'admin']
             except HTTPException:
                 config['user_permission'] = 'none'
@@ -1668,7 +1735,7 @@ async def get_mcp_configs(request: Request, user: Dict = Depends(get_current_use
 async def create_mcp_config(config: MCPConfigBase, request: Request, user: Dict = Depends(get_current_user)):
     """Create new MCP configuration (requires write permission on workspace)"""
     try:
-        # Vérifier que l'utilisateur a au moins 'write' sur le workspace
+        # Check that user has at least 'write' on the workspace
         permission = await check_workspace_permission(config.workspace_id, user, 'write')
         
         if permission not in ['write', 'admin']:
@@ -1677,7 +1744,7 @@ async def create_mcp_config(config: MCPConfigBase, request: Request, user: Dict 
                 detail="MCP requires 'write' or 'admin' permission on the workspace"
             )
         
-        # Vérifier qu'il n'existe pas déjà une config pour ce user/workspace/folder_id
+        # Check that a config doesn't already exist for this user/workspace/folder_id
         if config.folder_id:
             check_query = """
                 SELECT id FROM mcp_configs 
@@ -1690,7 +1757,7 @@ async def create_mcp_config(config: MCPConfigBase, request: Request, user: Dict 
                     detail="A configuration already exists for this folder"
                 )
         
-        # Vérifier qu'il n'existe pas déjà une config pour ce user/workspace/destination_path (si source_path est fourni)
+        # Check that a config doesn't already exist for this user/workspace/source_path
         if config.source_path:
             check_query = """
                 SELECT id FROM mcp_configs 
@@ -1703,14 +1770,14 @@ async def create_mcp_config(config: MCPConfigBase, request: Request, user: Dict 
                     detail="A configuration already exists for this user/workspace/source_path"
                 )
         
-        # Générer automatiquement les credentials API
+        # Auto-generate API credentials
         api_key = generate_api_key()
         api_secret = generate_api_secret()
         api_secret_hash = hash_secret(api_secret)
         
-        # Générer automatiquement un token MCP unique
+        # Auto-generate a unique MCP token
         mcp_token = generate_mcp_token()
-        # Vérifier l'unicité du token (en comparant les hash)
+        # Check token uniqueness (by comparing hashes)
         while True:
             mcp_token_hash = hashlib.sha256(mcp_token.encode()).hexdigest()
             check_token = db.execute_query("SELECT id FROM mcp_configs WHERE mcp_token_hash = %s", (mcp_token_hash,))
@@ -1733,10 +1800,10 @@ async def create_mcp_config(config: MCPConfigBase, request: Request, user: Dict 
             config.destination_path,
             config.enabled,
             api_key,
-            api_secret_hash,  # On stocke le hash, pas le secret en clair
-            mcp_token_hash,  # On stocke le hash du token pour l'authentification
-            mcp_token,  # On stocke le token en clair pour l'API
-            True  # is_active par défaut
+            api_secret_hash,  # Store hash, not plaintext secret
+            mcp_token_hash,  # Store token hash for authentication
+            mcp_token,  # Store plaintext token for API
+            True  # is_active by default
         ))
         
         return {
@@ -1750,10 +1817,10 @@ async def create_mcp_config(config: MCPConfigBase, request: Request, user: Dict 
                 "enabled": config.enabled,
                 "is_active": True,
                 "api_key": api_key,
-                "api_secret": api_secret,  # Retourné UNE SEULE fois à la création (en clair)
-                "mcp_token": mcp_token  # Retourné UNE SEULE fois à la création (en clair)
+                "api_secret": api_secret,  # Returned ONCE at creation (plaintext)
+                "mcp_token": mcp_token  # Returned ONCE at creation (plaintext)
             },
-            "message": "⚠️ Conservez le api_secret et le mcp_token, ils ne seront plus jamais affichés !"
+            "message": "⚠️ Save the api_secret and mcp_token, they will never be shown again!"
         }
     except HTTPException:
         raise
@@ -1764,15 +1831,19 @@ async def create_mcp_config(config: MCPConfigBase, request: Request, user: Dict 
 async def update_mcp_config(config_id: str, config: MCPConfigUpdate, request: Request, user: Dict = Depends(get_current_user)):
     """Update MCP configuration (requires write permission on workspace)"""
     try:
-        # Vérifier que la config existe et appartient à l'utilisateur
-        check_query = "SELECT workspace_id FROM mcp_configs WHERE id = %s AND user_id = %s"
-        existing = db.execute_query(check_query, (config_id, user['id']))
+        # Admin can update any config, regular users only their own
+        if user.get('role') == 'admin':
+            check_query = "SELECT workspace_id FROM mcp_configs WHERE id = %s"
+            existing = db.execute_query(check_query, (config_id,))
+        else:
+            check_query = "SELECT workspace_id FROM mcp_configs WHERE id = %s AND user_id = %s"
+            existing = db.execute_query(check_query, (config_id, user['id']))
         if not existing:
             raise HTTPException(status_code=404, detail="Configuration not found")
         
         workspace_id = existing[0]['workspace_id']
         
-        # Vérifier que l'utilisateur a au moins 'write' sur le workspace
+        # Check that user has at least 'write' on the workspace
         permission = await check_workspace_permission(workspace_id, user, 'write')
         
         if permission not in ['write', 'admin']:
@@ -1781,7 +1852,7 @@ async def update_mcp_config(config_id: str, config: MCPConfigUpdate, request: Re
                 detail="MCP requires 'write' or 'admin' permission on the workspace"
             )
         
-        # Construire la requête de mise à jour
+        # Build update query
         updates = []
         params = []
         
@@ -1816,9 +1887,13 @@ async def update_mcp_config(config_id: str, config: MCPConfigUpdate, request: Re
 async def delete_mcp_config(config_id: str, request: Request, user: Dict = Depends(get_current_user)):
     """Delete MCP configuration"""
     try:
-        # Vérifier que la config existe et appartient à l'utilisateur
-        check_query = "SELECT id FROM mcp_configs WHERE id = %s AND user_id = %s"
-        existing = db.execute_query(check_query, (config_id, user['id']))
+        # Admin can delete any config, regular users only their own
+        if user.get('role') == 'admin':
+            check_query = "SELECT id FROM mcp_configs WHERE id = %s"
+            existing = db.execute_query(check_query, (config_id,))
+        else:
+            check_query = "SELECT id FROM mcp_configs WHERE id = %s AND user_id = %s"
+            existing = db.execute_query(check_query, (config_id, user['id']))
         if not existing:
             raise HTTPException(status_code=404, detail="Configuration not found")
         
@@ -1835,20 +1910,24 @@ async def delete_mcp_config(config_id: str, request: Request, user: Dict = Depen
 async def regenerate_mcp_credentials(config_id: str, request: Request, user: Dict = Depends(get_current_user)):
     """Regenerate API credentials for an MCP configuration"""
     try:
-        # Vérifier que la config existe et appartient à l'utilisateur
-        check_query = "SELECT workspace_id FROM mcp_configs WHERE id = %s AND user_id = %s"
-        existing = db.execute_query(check_query, (config_id, user['id']))
+        # Admin can regenerate any config, regular users only their own
+        if user.get('role') == 'admin':
+            check_query = "SELECT workspace_id FROM mcp_configs WHERE id = %s"
+            existing = db.execute_query(check_query, (config_id,))
+        else:
+            check_query = "SELECT workspace_id FROM mcp_configs WHERE id = %s AND user_id = %s"
+            existing = db.execute_query(check_query, (config_id, user['id']))
         if not existing:
             raise HTTPException(status_code=404, detail="Configuration not found")
         
-        # Générer de nouveaux credentials API
+        # Generate new API credentials
         api_key = generate_api_key()
         api_secret = generate_api_secret()
         api_secret_hash = hash_secret(api_secret)
         
-        # Générer un nouveau token MCP
+        # Generate a new MCP token
         mcp_token = generate_mcp_token()
-        # Vérifier l'unicité du token
+        # Check token uniqueness
         while True:
             check_token = db.execute_query("SELECT id FROM mcp_configs WHERE mcp_token_hash = %s AND id != %s", (hashlib.sha256(mcp_token.encode()).hexdigest(), config_id))
             if not check_token:
@@ -1863,9 +1942,9 @@ async def regenerate_mcp_credentials(config_id: str, request: Request, user: Dic
         return {
             "success": True,
             "api_key": api_key,
-            "api_secret": api_secret,  # Retourné UNE SEULE fois
-            "mcp_token": mcp_token,  # Retourné UNE SEULE fois
-            "message": "⚠️ Conservez le api_secret et le mcp_token, ils ne seront plus jamais affichés !"
+            "api_secret": api_secret,  # Returned ONCE
+            "mcp_token": mcp_token,  # Returned ONCE
+            "message": "⚠️ Save the api_secret and mcp_token, they will never be shown again!"
         }
     except HTTPException:
         raise
@@ -1891,11 +1970,11 @@ async def mcp_authenticate(request: MCPAuthRequest):
         
         config = config[0]
         
-        # Vérifier le secret
+        # Verify secret
         if config['api_secret'] != hash_secret(request.api_secret):
             raise HTTPException(status_code=401, detail="Invalid API secret")
         
-        # Générer un token JWT temporaire pour les opérations MCP
+        # Generate a temporary JWT token for MCP operations
         token_data = {
             "user_id": config['user_id'],
             "username": config['username'],
@@ -1940,7 +2019,7 @@ async def mcp_token_authenticate(request: MCPTokenAuthRequest):
         
         config = config[0]
         
-        # Générer un token JWT temporaire pour les opérations MCP
+        # Generate a temporary JWT token for MCP operations
         token_data = {
             "user_id": config['user_id'],
             "username": config['username'],
@@ -1984,7 +2063,7 @@ async def get_mcp_config_by_folder(folder_id: str, request: Request, user: Dict 
         
         config = configs[0]
         
-        # Vérifier les permissions
+        # Check permissions
         workspace_id = config['workspace_id']
         try:
             permission = await check_workspace_permission(workspace_id, user, 'read')
@@ -2014,7 +2093,7 @@ async def get_mcp_configs_by_workspace(workspace_id: str, request: Request, user
         """
         configs = db.execute_query(query, (workspace_id, user['id']))
         
-        # Vérifier les permissions pour chaque config
+        # Check permissions for each config
         for config in configs:
             try:
                 permission = await check_workspace_permission(workspace_id, user, 'read')
@@ -2032,9 +2111,13 @@ async def get_mcp_configs_by_workspace(workspace_id: str, request: Request, user
 async def toggle_mcp_config_active(config_id: str, request: Request, user: Dict = Depends(get_current_user)):
     """Toggle is_active status of an MCP configuration"""
     try:
-        # Vérifier que la config existe et appartient à l'utilisateur
-        check_query = "SELECT is_active FROM mcp_configs WHERE id = %s AND user_id = %s"
-        existing = db.execute_query(check_query, (config_id, user['id']))
+        # Admin can toggle any config, regular users only their own
+        if user.get('role') == 'admin':
+            check_query = "SELECT is_active FROM mcp_configs WHERE id = %s"
+            existing = db.execute_query(check_query, (config_id,))
+        else:
+            check_query = "SELECT is_active FROM mcp_configs WHERE id = %s AND user_id = %s"
+            existing = db.execute_query(check_query, (config_id, user['id']))
         if not existing:
             raise HTTPException(status_code=404, detail="Configuration not found")
         
@@ -2066,7 +2149,7 @@ async def check_mcp_permission(workspace_id: str, request: Request, user: Dict =
             "mcp_allowed": mcp_allowed
         }
     except HTTPException as e:
-        # Si pas de permission, retourner 'none'
+        # No permission, return 'none'
         return {
             "success": True,
             "workspace_id": workspace_id,
@@ -2151,6 +2234,33 @@ async def document_content_updated(sid, data):
         }, skip_sid=sid)
     except Exception:
         pass
+
+@sio.on('content:change')
+async def handle_content_change(sid, data):
+    """Handle content change from a client and broadcast to others"""
+    document_id = data.get('document_id')
+    if not document_id:
+        return
+    
+    # Get user info
+    user_info = connected_users.get(sid, {})
+    if not user_info:
+        return
+    
+    content = data.get('content')
+    if content is None:
+        return
+    
+    # Broadcast to other users in the room (excluding sender)
+    await sio.emit('content:change', {
+        'document_id': document_id,
+        'content': content,
+        'user_id': user_info.get('id'),
+        'username': user_info.get('username'),
+        'cursor_line': data.get('cursor_line'),
+        'cursor_column': data.get('cursor_column'),
+    }, room=f"doc_{document_id}", skip_sid=sid)
+    
 
 # ===== Task Management WebSocket Events =====
 

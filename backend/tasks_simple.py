@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, Request, UploadFile, File
+from fastapi import APIRouter, HTTPException, Depends, Request, UploadFile, File, Body
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any, Tuple
@@ -124,10 +124,10 @@ def build_task_tree(parent_id: Optional[str] = 'root', workspace_id: str = 'demo
     
     query = """
         SELECT id, name, type, content, parent_id, status, priority, assigned_to, responsible_user_id, responsible_user_name,
-               due_date, created_at, updated_at, workspace_id
+               sort_order, due_date, created_at, updated_at, workspace_id
         FROM tasks
         WHERE parent_id = %s AND id != 'root' AND workspace_id = %s
-        ORDER BY type DESC, name ASC
+        ORDER BY type DESC, sort_order ASC, name ASC
         LIMIT 200
     """
     tasks = db.execute_query(query, (parent_id, workspace_id))
@@ -153,6 +153,13 @@ def build_task_tree(parent_id: Optional[str] = 'root', workspace_id: str = 'demo
         lock_query = "SELECT user_id, user_name FROM task_locks WHERE task_id = %s"
         locks = db.execute_query(lock_query, (task['id'],))
         task_dict['locked_by'] = locks[0] if locks else None
+        
+        # Get assignees
+        assignee_rows = db.execute_query(
+            "SELECT user_id, user_name FROM task_assignees WHERE task_id = %s ORDER BY user_name",
+            (task['id'],)
+        )
+        task_dict['assignees'] = [dict(a) for a in assignee_rows] if assignee_rows else []
         
         # Get children
         if task['type'] == 'folder':
@@ -652,8 +659,256 @@ async def get_task_tree(workspace_id: str = 'demo', user: Dict = Depends(get_cur
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/tasks/reorder")
+async def reorder_tasks(data: dict = Body(...), user: Dict = Depends(get_current_user)):
+    """Reorder tasks by updating sort_order (requires write permission)"""
+    try:
+        task_ids = data.get('task_ids', [])
+        if not task_ids:
+            raise HTTPException(status_code=400, detail="task_ids is required")
+
+        # Check permission on the first task's workspace
+        first_task = ensure_task_exists(task_ids[0])
+        workspace_id = first_task.get('workspace_id', 'demo')
+        await check_workspace_permission(workspace_id, user, 'write')
+
+        for index, task_id in enumerate(task_ids):
+            db.execute_update("UPDATE tasks SET sort_order = %s WHERE id = %s", (index, task_id))
+
+        await broadcast_task_tree_update()
+        return {"success": True, "message": "Tasks reordered"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ── Kanban Task Order ──────────────────────────────────────────────────────
+
+@router.get("/tasks/kanban-order")
+async def get_kanban_order(workspace_id: str = "demo", user: Dict = Depends(get_current_user)):
+    """Get kanban task ordering for all columns in a workspace"""
+    try:
+        rows = db.execute_query(
+            "SELECT status_slug, task_id, sort_order FROM kanban_task_order WHERE workspace_id = %s ORDER BY status_slug, sort_order ASC",
+            (workspace_id,),
+        )
+        order: Dict[str, List[str]] = {}
+        for row in rows:
+            slug = row['status_slug']
+            if slug not in order:
+                order[slug] = []
+            order[slug].append(row['task_id'])
+        return {"success": True, "order": order}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/tasks/kanban-order")
+async def save_kanban_order(data: dict = Body(...), user: Dict = Depends(get_current_user)):
+    """Save kanban task ordering for a specific column"""
+    try:
+        workspace_id = data.get("workspace_id", "demo")
+        status_slug = data.get("status_slug")
+        task_ids = data.get("task_ids", [])
+        if not status_slug:
+            raise HTTPException(status_code=400, detail="status_slug is required")
+        await check_workspace_permission(workspace_id, user, 'write')
+        # Delete existing order for this column
+        db.execute_update(
+            "DELETE FROM kanban_task_order WHERE workspace_id = %s AND status_slug = %s",
+            (workspace_id, status_slug),
+        )
+        # Insert new order
+        for idx, task_id in enumerate(task_ids):
+            db.execute_update(
+                "INSERT INTO kanban_task_order (workspace_id, status_slug, task_id, sort_order) VALUES (%s, %s, %s, %s)",
+                (workspace_id, status_slug, task_id, idx),
+            )
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ── Workflow Steps ──────────────────────────────────────────────────────────
+
+DEFAULT_WORKFLOW_STEPS = [
+    {"name": "To do", "slug": "todo", "color": "blue", "sort_order": 0},
+    {"name": "In progress", "slug": "in_progress", "color": "amber", "sort_order": 1},
+    {"name": "Done", "slug": "done", "color": "green", "sort_order": 2},
+]
+
+def ensure_workflow_steps(workspace_id: str) -> List[Dict[str, Any]]:
+    """Return workflow steps for a workspace, seeding defaults if none exist."""
+    rows = db.execute_query(
+        "SELECT id, workspace_id, name, slug, color, sort_order FROM workflow_steps WHERE workspace_id = %s ORDER BY sort_order ASC",
+        (workspace_id,),
+    )
+    if rows:
+        return [dict(r) for r in rows]
+    # Seed defaults
+    result = []
+    for step in DEFAULT_WORKFLOW_STEPS:
+        step_id = str(uuid.uuid4())
+        db.execute_update(
+            "INSERT INTO workflow_steps (id, workspace_id, name, slug, color, sort_order) VALUES (%s, %s, %s, %s, %s, %s)",
+            (step_id, workspace_id, step["name"], step["slug"], step["color"], step["sort_order"]),
+        )
+        result.append({"id": step_id, "workspace_id": workspace_id, **step})
+    return result
+
+@router.get("/tasks/workflow-steps")
+async def get_workflow_steps(workspace_id: str = "demo", user: Dict = Depends(get_current_user)):
+    """Get workflow steps for a workspace (auto-seeds defaults if empty)."""
+    try:
+        await check_workspace_permission(workspace_id, user, "read")
+        steps = ensure_workflow_steps(workspace_id)
+        return {"success": True, "steps": steps}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/tasks/workflow-steps")
+async def create_workflow_step(data: dict = Body(...), user: Dict = Depends(get_current_user)):
+    """Add a new workflow step to a workspace."""
+    try:
+        workspace_id = data.get("workspace_id", "demo")
+        await check_workspace_permission(workspace_id, user, "write")
+        name = (data.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Step name is required")
+        color = data.get("color", "gray")
+        # Generate slug from name
+        slug = name.lower().replace(" ", "_")
+        # Ensure unique slug within workspace
+        existing = db.execute_query(
+            "SELECT id FROM workflow_steps WHERE workspace_id = %s AND slug = %s", (workspace_id, slug)
+        )
+        if existing:
+            slug = f"{slug}_{str(uuid.uuid4())[:8]}"
+        # Get max sort_order
+        max_order = db.execute_query(
+            "SELECT COALESCE(MAX(sort_order), -1) AS max_order FROM workflow_steps WHERE workspace_id = %s",
+            (workspace_id,),
+        )
+        next_order = (max_order[0]["max_order"] if max_order else -1) + 1
+        step_id = str(uuid.uuid4())
+        db.execute_update(
+            "INSERT INTO workflow_steps (id, workspace_id, name, slug, color, sort_order) VALUES (%s, %s, %s, %s, %s, %s)",
+            (step_id, workspace_id, name, slug, color, next_order),
+        )
+        step = {"id": step_id, "workspace_id": workspace_id, "name": name, "slug": slug, "color": color, "sort_order": next_order}
+        return {"success": True, "step": step}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/tasks/workflow-steps/{step_id}")
+async def update_workflow_step(step_id: str, data: dict = Body(...), user: Dict = Depends(get_current_user)):
+    """Update a workflow step (name, color)."""
+    try:
+        rows = db.execute_query("SELECT * FROM workflow_steps WHERE id = %s", (step_id,))
+        if not rows:
+            raise HTTPException(status_code=404, detail="Workflow step not found")
+        step = dict(rows[0])
+        await check_workspace_permission(step["workspace_id"], user, "write")
+
+        updates, params = [], []
+        old_slug = step["slug"]
+        if "name" in data and data["name"]:
+            new_name = data["name"].strip()
+            new_slug = new_name.lower().replace(" ", "_")
+            # Ensure unique slug
+            dup = db.execute_query(
+                "SELECT id FROM workflow_steps WHERE workspace_id = %s AND slug = %s AND id != %s",
+                (step["workspace_id"], new_slug, step_id),
+            )
+            if dup:
+                new_slug = f"{new_slug}_{str(uuid.uuid4())[:8]}"
+            updates.append("name = %s")
+            params.append(new_name)
+            updates.append("slug = %s")
+            params.append(new_slug)
+        if "color" in data:
+            updates.append("color = %s")
+            params.append(data["color"])
+        if updates:
+            params.append(step_id)
+            db.execute_update(f"UPDATE workflow_steps SET {', '.join(updates)} WHERE id = %s", tuple(params))
+            # If slug changed, update all tasks using the old slug
+            updated = db.execute_query("SELECT slug FROM workflow_steps WHERE id = %s", (step_id,))
+            if updated and updated[0]["slug"] != old_slug:
+                db.execute_update(
+                    "UPDATE tasks SET status = %s WHERE status = %s AND workspace_id = %s",
+                    (updated[0]["slug"], old_slug, step["workspace_id"]),
+                )
+
+        final = db.execute_query(
+            "SELECT id, workspace_id, name, slug, color, sort_order FROM workflow_steps WHERE id = %s", (step_id,)
+        )
+        return {"success": True, "step": dict(final[0]) if final else step}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/tasks/workflow-steps/{step_id}")
+async def delete_workflow_step(step_id: str, user: Dict = Depends(get_current_user)):
+    """Delete a workflow step. Tasks with this status are moved to the first remaining step."""
+    try:
+        rows = db.execute_query("SELECT * FROM workflow_steps WHERE id = %s", (step_id,))
+        if not rows:
+            raise HTTPException(status_code=404, detail="Workflow step not found")
+        step = dict(rows[0])
+        workspace_id = step["workspace_id"]
+        await check_workspace_permission(workspace_id, user, "write")
+
+        # Must keep at least one step
+        count = db.execute_query(
+            "SELECT COUNT(*) AS cnt FROM workflow_steps WHERE workspace_id = %s", (workspace_id,)
+        )
+        if count[0]["cnt"] <= 1:
+            raise HTTPException(status_code=400, detail="Cannot delete the last workflow step")
+
+        # Move tasks to the first remaining step
+        first = db.execute_query(
+            "SELECT slug FROM workflow_steps WHERE workspace_id = %s AND id != %s ORDER BY sort_order ASC LIMIT 1",
+            (workspace_id, step_id),
+        )
+        if first:
+            db.execute_update(
+                "UPDATE tasks SET status = %s WHERE status = %s AND workspace_id = %s",
+                (first[0]["slug"], step["slug"], workspace_id),
+            )
+
+        db.execute_update("DELETE FROM workflow_steps WHERE id = %s", (step_id,))
+        await broadcast_task_tree_update()
+        return {"success": True, "message": "Workflow step deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/tasks/workflow-steps/reorder")
+async def reorder_workflow_steps(data: dict = Body(...), user: Dict = Depends(get_current_user)):
+    """Reorder workflow steps."""
+    try:
+        step_ids = data.get("step_ids", [])
+        workspace_id = data.get("workspace_id", "demo")
+        if not step_ids:
+            raise HTTPException(status_code=400, detail="step_ids is required")
+        await check_workspace_permission(workspace_id, user, "write")
+        for index, sid in enumerate(step_ids):
+            db.execute_update("UPDATE workflow_steps SET sort_order = %s WHERE id = %s", (index, sid))
+        return {"success": True, "message": "Workflow steps reordered"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.get("/tasks/{task_id}")
-async def get_task(task_id: str):
+async def get_task(task_id: str, user: Dict = Depends(get_current_user)):
     """Get single task"""
     try:
         query = "SELECT * FROM tasks WHERE id = %s"
@@ -683,8 +938,9 @@ async def get_task(task_id: str):
 
 @router.post("/tasks")
 async def create_task(task: TaskBase, user: Dict = Depends(get_current_user)):
-    """Create new task or folder"""
+    """Create new task or folder (requires write permission)"""
     try:
+        await check_workspace_permission(task.workspace_id, user, 'write')
         task_id = str(uuid.uuid4())
         
         query = """
@@ -720,9 +976,11 @@ async def create_task(task: TaskBase, user: Dict = Depends(get_current_user)):
 
 @router.put("/tasks/{task_id}")
 async def update_task(task_id: str, task: TaskUpdate, user: Dict = Depends(get_current_user)):
-    """Update task"""
+    """Update task (requires write permission)"""
     try:
         current_task = ensure_task_exists(task_id)
+        workspace_id = current_task.get('workspace_id', 'demo')
+        await check_workspace_permission(workspace_id, user, 'write')
 
         updates = []
         params = []
@@ -846,9 +1104,12 @@ async def delete_task(task_id: str, user: Dict = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/tasks/{task_id}/move")
-async def move_task(task_id: str, move_data: TaskMove):
-    """Move task to new parent"""
+async def move_task(task_id: str, move_data: TaskMove, user: Dict = Depends(get_current_user)):
+    """Move task to new parent (requires write permission)"""
     try:
+        task = ensure_task_exists(task_id)
+        workspace_id = task.get('workspace_id', 'demo')
+        await check_workspace_permission(workspace_id, user, 'write')
         db.execute_update("UPDATE tasks SET parent_id = %s WHERE id = %s", (move_data.parent_id, task_id))
         
         # Broadcast tree update to all clients
@@ -860,7 +1121,7 @@ async def move_task(task_id: str, move_data: TaskMove):
 
 @router.post("/tasks/{task_id}/copy")
 async def copy_task(task_id: str, user: Dict = Depends(get_current_user)):
-    """Copy task"""
+    """Copy task (requires write permission)"""
     try:
         query = "SELECT * FROM tasks WHERE id = %s"
         tasks = db.execute_query(query, (task_id,))
@@ -869,6 +1130,8 @@ async def copy_task(task_id: str, user: Dict = Depends(get_current_user)):
             raise HTTPException(status_code=404, detail="Task not found")
         
         task = tasks[0]
+        workspace_id = task.get('workspace_id', 'demo')
+        await check_workspace_permission(workspace_id, user, 'write')
         new_id = str(uuid.uuid4())
         
         query = """
@@ -876,7 +1139,7 @@ async def copy_task(task_id: str, user: Dict = Depends(get_current_user)):
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         db.execute_update(query, (
-            new_id, f"{task['name']} (copie)", task['type'], task['parent_id'],
+            new_id, f"{task['name']} (copy)", task['type'], task['parent_id'],
             task['content'], task['workspace_id'], user['id'],
             task['status'], task['priority'], task['assigned_to'], task['due_date']
         ))
@@ -1033,7 +1296,7 @@ async def delete_task_file_endpoint(task_id: str, file_id: str, user: Dict = Dep
 
 # Timeline & comments endpoints
 @router.get("/tasks/{task_id}/timeline")
-async def get_task_timeline(task_id: str, limit: int = 200):
+async def get_task_timeline(task_id: str, limit: int = 200, user: Dict = Depends(get_current_user)):
     """Get task timeline"""
     ensure_task_exists(task_id)
     query = """
@@ -1215,7 +1478,7 @@ async def delete_timeline_file(task_id: str, entry_id: str, file_id: str, user: 
     return {"success": True}
 
 @router.get("/tasks/{task_id}/comments")
-async def get_task_comments(task_id: str, limit: int = 200):
+async def get_task_comments(task_id: str, limit: int = 200, user: Dict = Depends(get_current_user)):
     """Get task comments"""
     ensure_task_exists(task_id)
     query = """
@@ -1308,61 +1571,6 @@ async def update_task_comment(task_id: str, comment_id: str, comment: TaskCommen
     await broadcast_task_activity_update(task_id)
     
     return {"success": True, "comment": serialize_comment(dict(rows[0]))}
-
-@router.patch("/tasks/{task_id}/timeline/{entry_id}")
-async def update_task_timeline_entry(task_id: str, entry_id: str, entry: TimelineEntryUpdate, user: Dict = Depends(get_current_user)):
-    """Update a timeline entry (only by the creator, and only manual notes)"""
-    task = ensure_task_exists(task_id)
-    
-    # Get the entry to check ownership and type
-    check_query = """
-        SELECT id, user_id, event_type, title, description FROM task_timeline
-        WHERE id = %s AND task_id = %s
-    """
-    existing = db.execute_query(check_query, (entry_id, task_id))
-    if not existing:
-        raise HTTPException(status_code=404, detail="Timeline entry not found")
-    
-    # Only allow editing manual notes
-    if existing[0]['event_type'] != 'note':
-        raise HTTPException(status_code=400, detail="Only manual notes can be edited")
-    
-    # Check if user is the creator
-    if existing[0]['user_id'] != user.get('id'):
-        raise HTTPException(status_code=403, detail="You can only edit your own timeline entries")
-    
-    # Prepare update fields
-    title = entry.title.strip() if entry.title is not None else existing[0]['title']
-    if title is None:
-        title = ''
-    description = entry.description.strip() if entry.description is not None else existing[0]['description']
-    
-    # At least description must be provided (or already exist)
-    if not description:
-        raise HTTPException(status_code=400, detail="Description cannot be empty")
-    
-    # Update the entry
-    update_query = """
-        UPDATE task_timeline
-        SET title = %s, description = %s
-        WHERE id = %s AND task_id = %s
-    """
-    db.execute_update(update_query, (title, description, entry_id, task_id))
-    
-    # Fetch updated entry
-    fetch_query = """
-        SELECT id, task_id, event_type, title, description, metadata, user_id, user_name, created_at
-        FROM task_timeline
-        WHERE id = %s
-    """
-    rows = db.execute_query(fetch_query, (entry_id,))
-    if not rows:
-        raise HTTPException(status_code=500, detail="Failed to load updated timeline entry")
-    
-    # Broadcast activity update
-    await broadcast_task_activity_update(task_id)
-    
-    return {"success": True, "entry": serialize_timeline_entry(dict(rows[0]))}
 
 @router.delete("/tasks/{task_id}/comments/{comment_id}")
 async def delete_task_comment(task_id: str, comment_id: str, user: Dict = Depends(get_current_user)):

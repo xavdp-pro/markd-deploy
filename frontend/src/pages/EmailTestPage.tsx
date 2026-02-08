@@ -34,18 +34,18 @@ const EmailTestPage: React.FC = () => {
       if (response.ok) {
         setResult({
           type: 'success',
-          message: `Email de test envoyé avec succès à ${testEmail} !`
+          message: `Test email sent successfully to ${testEmail}!`
         });
       } else {
         setResult({
           type: 'error',
-          message: data.detail || 'Échec de l\'envoi de l\'email'
+          message: data.detail || 'Failed to send email'
         });
       }
     } catch (error) {
       setResult({
         type: 'error',
-        message: 'Erreur de connexion au serveur'
+        message: 'Server connection error'
       });
     } finally {
       setIsLoading(false);
@@ -60,8 +60,8 @@ const EmailTestPage: React.FC = () => {
       <div className="flex-1 overflow-auto p-8">
         <div className="max-w-3xl mx-auto">
           <div className="mb-8">
-            <h2 className="text-3xl font-bold text-gray-800 dark:text-white">Test d'envoi d'emails</h2>
-            <p className="text-gray-600 dark:text-gray-400 mt-2">Testez la configuration SMTP Mailjet et les templates MJML</p>
+            <h2 className="text-3xl font-bold text-gray-800 dark:text-white">Email Sending Test</h2>
+            <p className="text-gray-600 dark:text-gray-400 mt-2">Test the SMTP Mailjet configuration and MJML templates</p>
           </div>
 
           {result && (
@@ -88,7 +88,7 @@ const EmailTestPage: React.FC = () => {
               <p>• <strong>Host:</strong> in-v3.mailjet.com</p>
               <p>• <strong>Port:</strong> 587 (TLS)</p>
               <p>• <strong>From:</strong> xavier@ooo.ovh</p>
-              <p>• <strong>Template:</strong> MJML (compilé en HTML)</p>
+              <p>• <strong>Template:</strong> MJML (compiled to HTML)</p>
             </div>
           </div>
 
@@ -96,15 +96,15 @@ const EmailTestPage: React.FC = () => {
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
             <h3 className="text-xl font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
               <Mail className="w-5 h-5 text-gray-800 dark:text-white" />
-              Email de test
+              Test Email
             </h3>
             <p className="text-gray-600 dark:text-gray-400 text-sm mb-4">
-              Envoie un email de test pour vérifier la configuration SMTP Mailjet
+              Send a test email to verify the SMTP Mailjet configuration
             </p>
             <form onSubmit={handleTestEmail} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Adresse email
+                  Email address
                 </label>
                 <input
                   type="email"
@@ -112,7 +112,7 @@ const EmailTestPage: React.FC = () => {
                   value={testEmail}
                   onChange={(e) => setTestEmail(e.target.value)}
                   className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500"
-                  placeholder="votre@email.com"
+                  placeholder="your@email.com"
                 />
               </div>
               <button
@@ -121,7 +121,7 @@ const EmailTestPage: React.FC = () => {
                 className="flex items-center gap-2 px-6 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50"
               >
                 <Send className="w-4 h-4" />
-                {isLoading ? 'Envoi...' : 'Envoyer email de test'}
+                {isLoading ? 'Sending...' : 'Send test email'}
               </button>
             </form>
           </div>

@@ -44,7 +44,7 @@ html.dark #root {
   background-color: #111827;
 }
 
-/* Éditeur à gauche, preview à droite */
+/* Editor on the left, preview on the right */
 .custom-md-editor-reversed .w-md-editor-content {
   display: flex !important;
   flex-direction: row !important;
@@ -68,7 +68,7 @@ html.dark #root {
   border-right: none !important;
 }
 
-/* Augmenter la taille de la police de l'éditeur */
+/* Increase editor font size */
 .custom-md-editor-reversed .w-md-editor-text-pre,
 .custom-md-editor-reversed .w-md-editor-text-input,
 .custom-md-editor-reversed .w-md-editor-input textarea {
@@ -76,7 +76,7 @@ html.dark #root {
   line-height: 1.6 !important;
 }
 
-/* Augmenter la taille de la police pour tous les éditeurs */
+/* Increase font size for all editors */
 .w-md-editor-text-pre,
 .w-md-editor-text-input,
 .w-md-editor-input textarea {
@@ -84,7 +84,44 @@ html.dark #root {
   line-height: 1.6 !important;
 }
 
-/* Custom Scrollbar */
+/* Global Scrollbar - applies to all elements */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: #d1d5db;
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #9ca3af;
+}
+
+.dark *::-webkit-scrollbar-thumb {
+  background-color: #4b5563;
+}
+
+.dark *::-webkit-scrollbar-thumb:hover {
+  background-color: #6b7280;
+}
+
+/* Firefox global scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #d1d5db transparent;
+}
+
+.dark * {
+  scrollbar-color: #4b5563 transparent;
+}
+
+/* Custom Scrollbar (legacy class, kept for compatibility) */
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -110,6 +147,50 @@ html.dark #root {
 
 .dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background-color: #6b7280;
+}
+
+/* Kanban top scrollbar — thick and easy to grab */
+.kanban-top-scroll::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+.kanban-top-scroll::-webkit-scrollbar-track {
+  background: #f3f4f6;
+  border-radius: 7px;
+}
+
+.kanban-top-scroll::-webkit-scrollbar-thumb {
+  background-color: #9ca3af;
+  border-radius: 7px;
+  border: 3px solid #f3f4f6;
+}
+
+.kanban-top-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: #6b7280;
+}
+
+.dark .kanban-top-scroll::-webkit-scrollbar-track {
+  background: #1f2937;
+}
+
+.dark .kanban-top-scroll::-webkit-scrollbar-thumb {
+  background-color: #4b5563;
+  border: 3px solid #1f2937;
+}
+
+.dark .kanban-top-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: #6b7280;
+}
+
+/* Firefox thick scrollbar */
+.kanban-top-scroll {
+  scrollbar-width: auto;
+  scrollbar-color: #9ca3af #f3f4f6;
+}
+
+.dark .kanban-top-scroll {
+  scrollbar-color: #4b5563 #1f2937;
 }
 
 /* Timeline scrollbar styling */

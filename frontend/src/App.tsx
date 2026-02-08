@@ -4,6 +4,8 @@ import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { SettingsProvider } from './contexts/SettingsContext';
 import { WorkspaceProvider } from './contexts/WorkspaceContext';
+import { UnsavedChangesProvider } from './contexts/UnsavedChangesContext';
+import UnsavedChangesModal from './components/UnsavedChangesModal';
 import LoginPage from './pages/LoginPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import AdminPage from './pages/AdminPage';
@@ -138,7 +140,7 @@ function AppContent() {
           }
         />
         <Route
-          path="/vault"
+          path="/passwords"
           element={
             <ProtectedRoute>
               <VaultPage />
@@ -214,7 +216,10 @@ function App() {
     <AuthProvider>
       <SettingsProvider>
         <WorkspaceProvider>
-          <AppContent />
+          <UnsavedChangesProvider>
+            <AppContent />
+            <UnsavedChangesModal />
+          </UnsavedChangesProvider>
         </WorkspaceProvider>
       </SettingsProvider>
       <Toaster

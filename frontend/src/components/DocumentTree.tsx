@@ -21,6 +21,7 @@ import {
   Maximize2,
   Minimize2,
   FolderTree,
+  PanelLeftClose,
 } from 'lucide-react';
 import { Document, Tag as TagType } from '../types';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
@@ -62,6 +63,7 @@ interface DocumentTreeProps {
   mcpConfigs?: Record<string, any>; // folder_id -> config
   onOpenMcpModal?: (folderId: string) => void;
   workspaceId?: string;
+  onCollapseSidebar?: () => void;
 }
 
 interface ContextMenuProps {
@@ -487,14 +489,6 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   const isExpanded = expanded[node.id];
   const isSelected = selected.some(s => s.id === node.id);
 
-  // Debug: log MCP config check for folders
-  if (node.type === 'folder' && mcpConfigs) {
-    const hasConfig = !!mcpConfigs[node.id];
-    if (hasConfig || node.name === 'TEST') {
-      console.log(`🔍 Folder "${node.name}" (id: ${node.id}): hasConfig=${hasConfig}, config=`, mcpConfigs[node.id]);
-    }
-  }
-
   const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
     id: node.id,
     disabled: node.id === 'root',
@@ -677,6 +671,7 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
   mcpConfigs = {},
   onOpenMcpModal,
   workspaceId,
+  onCollapseSidebar,
 }) => {
   const { currentWorkspace } = useWorkspace();
   const [inputModal, setInputModal] = useState<{
@@ -815,6 +810,7 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
         <div className="p-4 flex items-center justify-between">
           <h2 className="font-bold text-lg text-gray-900 dark:text-white">Documents</h2>
 
+          <div className="flex items-center gap-2">
           {/* Permission Badge */}
           {userPermission && (
             <div className="flex items-center gap-1.5 text-xs px-2 py-1 rounded">
@@ -836,6 +832,16 @@ const DocumentTree: React.FC<DocumentTreeProps> = ({
               )}
             </div>
           )}
+          {onCollapseSidebar && (
+            <button
+              onClick={onCollapseSidebar}
+              className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+              title="Hide sidebar"
+            >
+              <PanelLeftClose size={16} />
+            </button>
+          )}
+          </div>
         </div>
 
         {/* Workspace Selector */}

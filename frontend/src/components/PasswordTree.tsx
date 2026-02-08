@@ -16,6 +16,7 @@ import {
   Maximize2,
   Minimize2,
   Lock,
+  PanelLeftClose,
 } from 'lucide-react';
 import { PasswordItem, Tag as TagType } from '../types';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
@@ -46,6 +47,7 @@ interface PasswordTreeProps {
   allTags?: TagType[];
   selectedTags?: string[];
   onTagFilterChange?: (tagIds: string[]) => void;
+  onCollapseSidebar?: () => void;
 }
 
 interface ContextMenuProps {
@@ -119,8 +121,8 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             onClick={() => {
               setInputModal({
                 isOpen: true,
-                title: 'Nouveau mot de passe',
-                label: 'Nom du mot de passe',
+                title: 'New password',
+                label: 'Password name',
                 defaultValue: '',
                 onConfirm: (name) => {
                   if (onCreate) onCreate(node.id, name);
@@ -132,14 +134,14 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
           >
             <Plus size={14} />
-            Ajouter un mot de passe
+            Add password
           </button>
           <button
             onClick={() => {
               setInputModal({
                 isOpen: true,
-                title: 'Nouveau dossier',
-                label: 'Nom du dossier',
+                title: 'New folder',
+                label: 'Folder name',
                 defaultValue: '',
                 onConfirm: (name) => {
                   if (onCreateFolder) onCreateFolder(node.id, name);
@@ -151,7 +153,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
           >
             <Folder size={14} />
-            Créer un dossier
+            Create folder
           </button>
           <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
         </>
@@ -163,8 +165,8 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             onClick={() => {
               setInputModal({
                 isOpen: true,
-                title: 'Renommer',
-                label: 'Nouveau nom',
+                title: 'Rename',
+                label: 'New name',
                 defaultValue: node.name,
                 onConfirm: (newName) => {
                   if (newName.trim() && onRename) {
@@ -178,15 +180,15 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
           >
             <Edit2 size={14} />
-            Renommer
+            Rename
           </button>
           <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
           <button
             onClick={() => {
               setConfirmModal({
                 isOpen: true,
-                title: 'Supprimer le mot de passe',
-                message: `Voulez-vous vraiment supprimer "${node.name}" ?`,
+                title: 'Delete password',
+                message: `Are you sure you want to delete "${node.name}"?`,
                 onConfirm: () => {
                   if (onDelete) onDelete(node.id);
                   setConfirmModal(null);
@@ -197,7 +199,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             className="w-full px-3 py-2 text-left text-sm hover:bg-red-50 text-red-600 flex items-center gap-2"
           >
             <Trash2 size={14} />
-            Supprimer
+            Delete
           </button>
         </>
       )}
@@ -339,7 +341,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({
           <div className="flex items-center gap-1.5 flex-1 min-w-0 text-sm">
             <span className="truncate text-gray-900 dark:text-gray-100">{node.name}</span>
             {node.locked_by && (
-              <div className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400" title={`Verrouillé par ${node.locked_by.user_name}`}>
+              <div className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400" title={`Locked by ${node.locked_by.user_name}`}>
                 <Lock size={12} />
                 <span className="hidden sm:inline truncate max-w-[80px]">{node.locked_by.user_name}</span>
               </div>
@@ -406,6 +408,7 @@ const PasswordTree: React.FC<PasswordTreeProps> = ({
   allTags = [],
   selectedTags = [],
   onTagFilterChange,
+  onCollapseSidebar,
 }) => {
   const [inputModal, setInputModal] = useState<{
     isOpen: boolean;
@@ -531,14 +534,14 @@ const PasswordTree: React.FC<PasswordTreeProps> = ({
           event.preventDefault();
           event.stopPropagation();
           const itemName = firstSelected.name;
-          const itemType = firstSelected.type === 'folder' ? 'dossier' : 'mot de passe';
+          const itemType = firstSelected.type === 'folder' ? 'folder' : 'password';
           const count = selected.length;
           const message = count > 1 
-            ? `Êtes-vous sûr de vouloir supprimer ${count} éléments ?`
-            : `Êtes-vous sûr de vouloir supprimer "${itemName}" ?${firstSelected.type === 'folder' ? ' Cette action supprimera également tous les éléments contenus dans ce dossier.' : ''}`;
+            ? `Are you sure you want to delete ${count} items?`
+            : `Are you sure you want to delete "${itemName}"?${firstSelected.type === 'folder' ? ' This will also delete all items inside this folder.' : ''}`;
           setConfirmModal({
             isOpen: true,
-            title: count > 1 ? `Supprimer ${count} éléments` : `Supprimer le ${itemType}`,
+            title: count > 1 ? `Delete ${count} items` : `Delete ${itemType}`,
             message,
             onConfirm: () => {
               // Delete all selected items
@@ -564,6 +567,7 @@ const PasswordTree: React.FC<PasswordTreeProps> = ({
         <div className="p-4 flex items-center justify-between">
           <h2 className="font-bold text-lg text-gray-900 dark:text-white">Passwords</h2>
           
+          <div className="flex items-center gap-2">
           {/* Permission Badge */}
           {userPermission && (
             <div className="flex items-center gap-1.5 text-xs px-2 py-1 rounded">
@@ -585,6 +589,16 @@ const PasswordTree: React.FC<PasswordTreeProps> = ({
               )}
             </div>
           )}
+          {onCollapseSidebar && (
+            <button
+              onClick={onCollapseSidebar}
+              className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+              title="Hide sidebar"
+            >
+              <PanelLeftClose size={16} />
+            </button>
+          )}
+          </div>
         </div>
         
         {/* Workspace Selector */}
@@ -601,7 +615,7 @@ const PasswordTree: React.FC<PasswordTreeProps> = ({
               <Search className="absolute left-3 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none" />
               <input
                 type="text"
-                placeholder="Rechercher..."
+                placeholder="Search..."
                 value={searchQuery}
                 onChange={(e) => onSearchChange(e.target.value)}
                 className="w-full pl-9 pr-9 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -610,7 +624,7 @@ const PasswordTree: React.FC<PasswordTreeProps> = ({
                 <button
                   onClick={onClearSearch}
                   className="absolute right-3 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-                  title="Effacer la recherche"
+                  title="Clear search"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -628,7 +642,7 @@ const PasswordTree: React.FC<PasswordTreeProps> = ({
               type="button"
               onClick={onExpandAll}
               className="p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm"
-              title="Développer tout l'arbre"
+              title="Expand all"
             >
               <Maximize2 size={14} />
             </button>
@@ -636,7 +650,7 @@ const PasswordTree: React.FC<PasswordTreeProps> = ({
               type="button"
               onClick={onCollapseAll}
               className="p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm"
-              title="Réduire tout l'arbre"
+              title="Collapse all"
             >
               <Minimize2 size={14} />
             </button>
@@ -669,13 +683,13 @@ const PasswordTree: React.FC<PasswordTreeProps> = ({
           <div className={`text-sm text-center px-4 ${isRootOver ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-400 dark:text-gray-500'}`}>
             {isRootOver ? (
               <>
-                <div className="mb-1">📁 Déposer à la racine</div>
-                <div className="text-xs">Le mot de passe/dossier sera déplacé ici</div>
+                <div className="mb-1">📁 Drop at root</div>
+                <div className="text-xs">The password/folder will be moved here</div>
               </>
             ) : (
               <>
-                <div className="mb-1">Clic droit pour créer</div>
-                <div className="text-xs">mot de passe ou dossier</div>
+                <div className="mb-1">Right-click to create</div>
+                <div className="text-xs">password or folder</div>
               </>
             )}
           </div>
@@ -723,7 +737,7 @@ const PasswordTree: React.FC<PasswordTreeProps> = ({
             disabled={!onCreate}
           >
             <Plus size={14} />
-            Ajouter un mot de passe
+            Add password
           </button>
           <button
             onClick={(e) => {
@@ -748,7 +762,7 @@ const PasswordTree: React.FC<PasswordTreeProps> = ({
             className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
           >
             <Folder size={14} />
-            Créer un dossier
+            Create folder
           </button>
         </div>
       )}

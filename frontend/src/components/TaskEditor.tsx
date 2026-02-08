@@ -1,16 +1,54 @@
-import React, { useRef, useState } from 'react';
-import MDEditor from '@uiw/react-md-editor';
-import { Task, TaskTag, TaskAssignee } from '../types';
-import { Image, Upload } from 'lucide-react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { Task, TaskTag, TaskAssignee, WorkflowStep } from '../types';
+import {
+  Image as ImageIcon, Upload, Code, Columns2, Eye,
+  Bold, Italic, List, ListOrdered, Link, Heading1, Heading2, Quote, CheckSquare,
+  Paperclip, ChevronLeft, ChevronRight, Settings2, User, Bot,
+} from 'lucide-react';
 import toast from 'react-hot-toast';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
+import rehypeHighlight from 'rehype-highlight';
 import TaskMetadataPanel from './TaskMetadataPanel';
+import { useCollab, CollabUser } from '../hooks/useCollab';
+import CollaborativeCursors from './CollaborativeCursors';
+
+// Glassy round indicator lamp: green = saved, orange = unsaved changes
+const SaveIndicator: React.FC<{ isDirty: boolean }> = ({ isDirty }) => (
+  <div
+    className="relative w-3 h-3 rounded-full flex-shrink-0 transition-all duration-500"
+    title={isDirty ? 'Unsaved changes' : 'All changes saved'}
+  >
+    {/* Outer glow */}
+    <div
+      className={`absolute inset-0 rounded-full blur-[3px] transition-colors duration-500 ${
+        isDirty
+          ? 'bg-orange-400/60'
+          : 'bg-emerald-400/60'
+      }`}
+    />
+    {/* Main glass body */}
+    <div
+      className={`absolute inset-0 rounded-full border transition-colors duration-500 ${
+        isDirty
+          ? 'bg-gradient-to-br from-orange-300 via-orange-400 to-orange-500 border-orange-500/50'
+          : 'bg-gradient-to-br from-emerald-300 via-emerald-400 to-emerald-500 border-emerald-500/50'
+      }`}
+    />
+    {/* Glass highlight */}
+    <div className="absolute top-[1px] left-[2px] w-[5px] h-[4px] rounded-full bg-white/50" />
+  </div>
+);
 
 interface TaskEditorProps {
   task: Task;
-  content: string;
-  onContentChange: (content: string) => void;
-  onSave: () => void;
-  onCancel: () => void;
+  initialContent: string;
+  onSave: (content: string) => void;
+  onClose: () => void;
+  onDirtyChange?: (isDirty: boolean) => void;
+  userId: string;
+  userName: string;
   onStatusChange?: (status: string) => void;
   onPriorityChange?: (priority: 'low' | 'medium' | 'high') => void;
   onDueDateChange?: (isoDate: string | null) => void;
@@ -22,14 +60,27 @@ interface TaskEditorProps {
   responsibleId?: number | null;
   onAssigneesChange?: (userIds: number[], responsibleId?: number) => void;
   workspaceId?: string;
+  workflowSteps?: WorkflowStep[];
 }
+
+const ToolbarButton: React.FC<{ icon: React.ReactNode; onClick: () => void; title: string }> = ({ icon, onClick, title }) => (
+  <button
+    onClick={onClick}
+    title={title}
+    className="p-2 text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-md transition-all hover:text-blue-600 dark:hover:text-blue-400 active:bg-blue-50 dark:active:bg-blue-900/20"
+  >
+    {icon}
+  </button>
+);
 
 const TaskEditor: React.FC<TaskEditorProps> = ({
   task,
-  content,
-  onContentChange,
+  initialContent,
   onSave,
-  onCancel,
+  onClose,
+  onDirtyChange,
+  userId,
+  userName,
   onStatusChange,
   onPriorityChange,
   onDueDateChange,
@@ -41,179 +92,389 @@ const TaskEditor: React.FC<TaskEditorProps> = ({
   responsibleId = null,
   onAssigneesChange,
   workspaceId = 'demo',
+  workflowSteps,
 }) => {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const editorContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
-  
-  // Detect dark mode
-  const isDarkMode = typeof window !== 'undefined' && window.document.documentElement.classList.contains('dark');
+  const [viewMode, setViewMode] = useState<'edit' | 'split' | 'preview'>('split');
+  const [showMetadata, setShowMetadata] = useState(true);
+  const [savedContent, setSavedContent] = useState(initialContent);
 
-  const uploadImage = async (file: File) => {
-    if (!file) return;
+  // Collaborative editing via useCollab - uses task ID as document ID with 'task-' prefix
+  const {
+    content,
+    setContent,
+    users,
+    isConnected,
+    isSynced,
+    localClientId,
+    setCursor,
+  } = useCollab(`task-${task.id}`, userId, userName, initialContent);
 
-    // Validate file type
-    if (!file.type.startsWith('image/')) {
-      toast.error('Please select a valid image');
-      return;
-    }
+  // Track dirty state
+  const isDirty = content !== savedContent;
 
-    // Validate file size (max 5MB)
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error('Image must be smaller than 5 MB');
-      return;
-    }
+  // Notify parent of dirty state changes
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
 
-    setUploading(true);
+  // Sync cursor position on textarea interactions
+  useEffect(() => {
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastSentCursor: { line: number; column: number } | null = null;
+
+    const syncCursor = () => {
+      if (!textareaRef.current) return;
+      const el = textareaRef.current;
+      const lines = el.value.substring(0, el.selectionStart).split('\n');
+      const line = lines.length;
+      const column = lines[lines.length - 1].length;
+      if (lastSentCursor && lastSentCursor.line === line && lastSentCursor.column === column) return;
+      lastSentCursor = { line, column };
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => setCursor({ line, column }), 300);
+    };
+
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.addEventListener('input', syncCursor);
+    textarea.addEventListener('keyup', syncCursor);
+    textarea.addEventListener('click', syncCursor);
+    textarea.addEventListener('mouseup', syncCursor);
+    const interval = setInterval(syncCursor, 1000);
+    return () => {
+      textarea.removeEventListener('input', syncCursor);
+      textarea.removeEventListener('keyup', syncCursor);
+      textarea.removeEventListener('click', syncCursor);
+      textarea.removeEventListener('mouseup', syncCursor);
+      clearInterval(interval);
+      if (debounceTimer) clearTimeout(debounceTimer);
+    };
+  }, [setCursor]);
+
+  const handleSave = useCallback(() => {
+    onSave(content);
+    setSavedContent(content);
+  }, [content, onSave]);
+
+  const otherUsers = users.filter(u => !u.isLocal);
+
+  // Insert markdown at cursor position
+  const insertMarkdown = (prefix: string, suffix: string = '') => {
+    if (!textareaRef.current) return;
+    const el = textareaRef.current;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const selectedText = el.value.substring(start, end);
+    const newText = el.value.substring(0, start) + prefix + selectedText + suffix + el.value.substring(end);
+    setContent(newText);
+    setTimeout(() => {
+      el.focus();
+      el.setSelectionRange(start + prefix.length, end + prefix.length);
+    }, 0);
+  };
+
+  // Sync scroll from editor to preview
+  const handleScroll = () => {
+    if (!textareaRef.current || !previewRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = textareaRef.current;
+    const ratio = scrollTop / (scrollHeight - clientHeight);
+    previewRef.current.scrollTop = ratio * (previewRef.current.scrollHeight - previewRef.current.clientHeight);
+  };
+
+  const performUpload = async (file: File) => {
     const formData = new FormData();
     formData.append('file', file);
-
+    setUploading(true);
     try {
       const response = await fetch('/api/upload-image', {
         method: 'POST',
         body: formData,
+        credentials: 'include',
       });
-
-      if (!response.ok) {
-        throw new Error('Upload failed');
-      }
-
+      if (!response.ok) throw new Error(`Upload failed: ${response.status}`);
       const data = await response.json();
-      const imageMarkdown = `\n![${file.name}](${data.url})\n`;
-      onContentChange(content + imageMarkdown);
-      toast.success('Image uploaded successfully');
-    } catch (error) {
-      console.error('Error uploading image:', error);
-      toast.error('Image upload failed');
+      const url = data.url;
+      if (file.type.startsWith('image/')) {
+        insertMarkdown(`\n![${file.name}](${url})\n`);
+      } else {
+        insertMarkdown(`\n[📎 ${file.name}](${url})\n`);
+      }
+      toast.success('File uploaded');
+    } catch (err) {
+      console.error('Upload error:', err);
+      toast.error('Upload failed');
     } finally {
       setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      await uploadImage(file);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-    }
+    if (file) await performUpload(file);
   };
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
-    e.stopPropagation();
     setDragActive(false);
-
-    const file = e.dataTransfer.files?.[0];
-    if (file && file.type.startsWith('image/')) {
-      await uploadImage(file);
-    }
-  };
-
-  const handleDrag = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActive(true);
-    } else if (e.type === 'dragleave') {
-      setDragActive(false);
-    }
+    const file = e.dataTransfer.files[0];
+    if (file) await performUpload(file);
   };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-        <h2 className="font-bold text-lg text-gray-900 dark:text-white">{task.name}</h2>
-        <div className="flex gap-2">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            onChange={handleImageUpload}
-            className="hidden"
-          />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            className="px-4 py-2 bg-purple-600 dark:bg-purple-500 text-white rounded hover:bg-purple-700 dark:hover:bg-purple-600 disabled:bg-gray-300 dark:disabled:bg-gray-600 disabled:cursor-not-allowed flex items-center gap-2"
-            title="Upload an image"
-          >
-            {uploading ? (
-              <>
-                <Upload size={16} className="animate-bounce" />
-                Upload...
-              </>
-            ) : (
-              <>
-                <Image size={16} />
-                Image
-              </>
+    <div className="flex flex-col h-full bg-white dark:bg-gray-900 overflow-hidden">
+      {/* Hidden File Input */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        className="hidden"
+        onChange={handleFileUpload}
+      />
+
+      {/* Header / Toolbar */}
+      <div className="border-b dark:border-gray-800 shrink-0 bg-white dark:bg-gray-900">
+        {/* Top Row: Title & Actions */}
+        <div className="px-4 py-3 flex items-center justify-between border-b dark:border-gray-800/50">
+          <div className="flex items-center gap-3 min-w-0">
+            <SaveIndicator isDirty={isDirty} />
+            <h2 className="font-bold text-sm text-gray-900 dark:text-white truncate max-w-md">{task.name}</h2>
+            <span className="text-[10px] font-medium text-gray-400 dark:text-gray-500">
+              {isDirty ? 'Unsaved changes' : 'Saved'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* View mode toggle */}
+            <div className="flex items-center rounded-lg border border-gray-200 dark:border-gray-600 overflow-hidden">
+              <button
+                onClick={() => setViewMode('edit')}
+                className={`p-1.5 transition-colors ${
+                  viewMode === 'edit'
+                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400'
+                    : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700'
+                }`}
+                title="Edit only"
+              >
+                <Code size={14} />
+              </button>
+              <button
+                onClick={() => setViewMode('split')}
+                className={`p-1.5 border-x border-gray-200 dark:border-gray-600 transition-colors ${
+                  viewMode === 'split'
+                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400'
+                    : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700'
+                }`}
+                title="Split view"
+              >
+                <Columns2 size={14} />
+              </button>
+              <button
+                onClick={() => setViewMode('preview')}
+                className={`p-1.5 transition-colors ${
+                  viewMode === 'preview'
+                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400'
+                    : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700'
+                }`}
+                title="Preview only"
+              >
+                <Eye size={14} />
+              </button>
+            </div>
+            {/* Metadata panel toggle */}
+            <button
+              onClick={() => setShowMetadata(!showMetadata)}
+              className={`p-1.5 rounded-lg border transition-colors ${
+                showMetadata
+                  ? 'border-blue-300 bg-blue-50 text-blue-600 dark:border-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                  : 'border-gray-200 text-gray-500 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-400 dark:hover:bg-gray-700'
+              }`}
+              title={showMetadata ? 'Hide metadata' : 'Show metadata'}
+            >
+              <Settings2 size={14} />
+            </button>
+            {/* Collaborators */}
+            {otherUsers.length > 0 && (
+              <div className="flex items-center gap-1 mr-1">
+                {otherUsers.slice(0, 4).map(u => (
+                  <div
+                    key={u.clientId}
+                    className="w-6 h-6 rounded-full border-2 border-white dark:border-gray-900 flex items-center justify-center text-[10px] font-bold text-white shadow-sm"
+                    style={{ backgroundColor: u.color }}
+                    title={`${u.name}${u.isTyping ? ' (typing...)' : ''}`}
+                  >
+                    {u.isAgent ? <Bot size={10} /> : u.name.charAt(0).toUpperCase()}
+                    {u.isTyping && (
+                      <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-green-400 rounded-full animate-pulse border border-white" />
+                    )}
+                  </div>
+                ))}
+                {otherUsers.length > 4 && (
+                  <span className="text-[10px] text-gray-400 ml-0.5">+{otherUsers.length - 4}</span>
+                )}
+              </div>
             )}
-          </button>
-          <button
-            onClick={onSave}
-            className="px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded hover:bg-blue-700 dark:hover:bg-blue-600"
-          >
-            Save
-          </button>
-          <button
-            onClick={onCancel}
-            className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 rounded hover:bg-gray-300 dark:hover:bg-gray-600"
-          >
-            Cancel
-          </button>
-        </div>
-      </div>
-
-      <div className="flex flex-1 gap-4 overflow-hidden px-4 pb-4">
-        <div className="w-80 flex-shrink-0 overflow-y-auto">
-          <TaskMetadataPanel
-            task={task}
-            canEdit={true}
-            onStatusChange={onStatusChange}
-            onPriorityChange={onPriorityChange}
-            onDueDateChange={onDueDateChange}
-            tags={tags}
-            availableTags={availableTags}
-            onAddTag={onAddTag}
-            onRemoveTag={onRemoveTag}
-            assignees={assignees}
-            responsibleId={responsibleId ?? undefined}
-            onAssigneesChange={onAssigneesChange}
-            workspaceId={workspaceId}
-            className="h-full"
-          />
+            <button onClick={handleSave} className="px-5 py-1.5 bg-blue-600 text-white rounded-md text-sm font-bold hover:bg-blue-700 shadow-md transition-all active:scale-95">
+              Save
+            </button>
+            <button onClick={onClose} className="px-5 py-1.5 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-white rounded-md text-sm font-bold hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
+              Close
+            </button>
+          </div>
         </div>
 
-        <div className="flex-1 overflow-hidden rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
-          <div
-            className="relative h-full"
-        onDragEnter={handleDrag}
-        onDragLeave={handleDrag}
-        onDragOver={handleDrag}
-        onDrop={handleDrop}
-      >
-        {dragActive && (
-              <div className="absolute inset-0 z-50 flex items-center justify-center border-4 border-dashed border-blue-500 bg-blue-500/10">
-                <div className="rounded-lg bg-white p-6 text-center shadow-xl dark:bg-gray-800">
-              <Upload size={48} className="mx-auto mb-3 text-blue-600" />
-                  <p className="text-lg font-semibold text-blue-600 dark:text-blue-400">Drop your image here</p>
-                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">The image will be inserted into the task</p>
+        {/* Second Row: Markdown Tools (hidden in preview mode) */}
+        {viewMode !== 'preview' && (
+          <div className="px-2 py-1.5 flex items-center overflow-x-auto no-scrollbar">
+            <div className="flex items-center gap-0.5">
+              <ToolbarButton icon={<Heading1 size={16} />} onClick={() => insertMarkdown('# ')} title="Heading 1" />
+              <ToolbarButton icon={<Heading2 size={16} />} onClick={() => insertMarkdown('## ')} title="Heading 2" />
+              <div className="w-px h-4 bg-gray-200 dark:bg-gray-800 mx-1.5" />
+              <ToolbarButton icon={<Bold size={16} />} onClick={() => insertMarkdown('**', '**')} title="Bold" />
+              <ToolbarButton icon={<Italic size={16} />} onClick={() => insertMarkdown('_', '_')} title="Italic" />
+              <div className="w-px h-4 bg-gray-200 dark:bg-gray-800 mx-1.5" />
+              <ToolbarButton icon={<List size={16} />} onClick={() => insertMarkdown('- ')} title="List" />
+              <ToolbarButton icon={<ListOrdered size={16} />} onClick={() => insertMarkdown('1. ')} title="Ordered List" />
+              <ToolbarButton icon={<CheckSquare size={16} />} onClick={() => insertMarkdown('- [ ] ')} title="Task List" />
+              <ToolbarButton icon={<Code size={16} />} onClick={() => insertMarkdown('```\n', '\n```')} title="Code" />
+              <ToolbarButton icon={<Quote size={16} />} onClick={() => insertMarkdown('> ')} title="Quote" />
+              <ToolbarButton icon={<Link size={16} />} onClick={() => insertMarkdown('[', '](url)')} title="Link" />
+              <div className="w-px h-4 bg-gray-200 dark:bg-gray-800 mx-1.5" />
+              <ToolbarButton
+                icon={uploading ? <div className="animate-spin rounded-full h-4 w-4 border-2 border-blue-500 border-t-transparent" /> : <ImageIcon size={16} />}
+                onClick={() => fileInputRef.current?.click()}
+                title="Upload Image"
+              />
+              <ToolbarButton
+                icon={<Paperclip size={16} />}
+                onClick={() => fileInputRef.current?.click()}
+                title="Attach File"
+              />
             </div>
           </div>
         )}
-        <MDEditor
-          value={content}
-          onChange={(val) => onContentChange(val || '')}
-          height="100%"
-          data-color-mode={isDarkMode ? 'dark' : 'light'}
-          preview="edit"
-          hideToolbar={false}
-          extraCommands={[]}
-        />
       </div>
+
+      {/* Main content area */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Editor / Preview panels */}
+        <div
+          className="flex-1 flex overflow-hidden relative"
+          onDragEnter={() => setDragActive(true)}
+          onDragLeave={() => setDragActive(false)}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={handleDrop}
+        >
+          {/* Editor Panel */}
+          {viewMode !== 'preview' && (
+            <div ref={editorContainerRef} className={`${viewMode === 'split' ? 'flex-1' : 'w-full'} h-full relative ${viewMode === 'split' ? 'border-r dark:border-gray-800' : ''}`}>
+              <textarea
+                ref={textareaRef}
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                onScroll={handleScroll}
+                className="w-full h-full p-8 bg-white dark:bg-[#0d1117] text-gray-900 dark:text-gray-100 font-mono text-[15px] leading-[1.6] resize-none outline-none border-none relative z-10"
+                style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace' }}
+                placeholder="Type your markdown here..."
+                spellCheck={false}
+              />
+              {/* Collaborative cursors overlay */}
+              <div className="absolute inset-0 z-20 pointer-events-none">
+                <CollaborativeCursors
+                  users={users.map(u => ({
+                    client_id: u.clientId,
+                    username: u.name,
+                    color: u.color,
+                    is_agent: !!u.isAgent,
+                    agent_name: u.agentName,
+                    cursor_line: u.cursor?.line,
+                    cursor_column: u.cursor?.column,
+                    is_local: u.isLocal,
+                  }))}
+                  localClientId={localClientId}
+                  textareaElement={textareaRef.current}
+                  content={content}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Preview Panel */}
+          {viewMode !== 'edit' && (
+            <div
+              ref={previewRef}
+              className="flex-1 h-full overflow-y-auto p-10 bg-gray-50/50 dark:bg-gray-900/20 text-gray-900 dark:text-gray-100"
+            >
+              <div className="prose prose-lg dark:prose-invert max-w-none">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm, remarkBreaks]}
+                  rehypePlugins={[rehypeHighlight]}
+                  components={{
+                    h1: ({node, ...props}) => <h1 className="text-3xl font-bold border-b border-gray-300 dark:border-gray-700 pb-2 mb-4 mt-6 first:mt-0" {...props} />,
+                    h2: ({node, ...props}) => <h2 className="text-2xl font-semibold border-b border-gray-300 dark:border-gray-700 pb-2 mb-4 mt-6 first:mt-0" {...props} />,
+                    h3: ({node, ...props}) => <h3 className="text-xl font-semibold mb-3 mt-5 first:mt-0" {...props} />,
+                    p: ({node, ...props}) => <p className="mb-4 leading-relaxed" {...props} />,
+                    ul: ({node, ...props}) => <ul className="list-disc pl-6 mb-4 space-y-1" {...props} />,
+                    ol: ({node, ...props}) => <ol className="list-decimal pl-6 mb-4 space-y-1" {...props} />,
+                    li: ({node, ...props}) => <li className="my-1" {...props} />,
+                    code: ({node, inline, ...props}: any) =>
+                      inline ? (
+                        <code className="bg-gray-200 dark:bg-gray-800 rounded px-1.5 py-0.5 text-sm font-mono" {...props} />
+                      ) : (
+                        <code {...props} />
+                      ),
+                    pre: ({node, ...props}) => <pre className="bg-gray-100 dark:bg-gray-900 rounded-lg p-4 mb-4 overflow-x-auto" {...props} />,
+                    blockquote: ({node, ...props}) => <blockquote className="border-l-4 border-gray-400 dark:border-gray-600 pl-4 italic text-gray-700 dark:text-gray-300 my-4" {...props} />,
+                    img: ({node, ...props}) => <img className="max-w-full rounded-lg my-4" {...props} />,
+                    table: ({node, ...props}) => <table className="border-collapse w-full mb-4 border border-gray-300 dark:border-gray-700" {...props} />,
+                    th: ({node, ...props}) => <th className="border border-gray-300 dark:border-gray-700 px-3 py-2 bg-gray-100 dark:bg-gray-800 font-semibold" {...props} />,
+                    td: ({node, ...props}) => <td className="border border-gray-300 dark:border-gray-700 px-3 py-2" {...props} />,
+                    a: ({node, ...props}) => <a className="text-blue-600 dark:text-blue-400 hover:underline" {...props} />,
+                  }}
+                >
+                  {content || '*Start typing to see the preview...*'}
+                </ReactMarkdown>
+              </div>
+            </div>
+          )}
+
+          {/* Drag & Drop Overlay */}
+          {dragActive && (
+            <div className="absolute inset-0 z-50 bg-blue-500/10 border-4 border-dashed border-blue-500 flex items-center justify-center pointer-events-none">
+              <div className="bg-white dark:bg-gray-800 p-8 rounded-2xl shadow-2xl text-center transform scale-110 border dark:border-gray-700">
+                <Upload size={48} className="mx-auto mb-4 text-blue-500 animate-bounce" />
+                <p className="text-xl font-bold text-gray-900 dark:text-white">Drop your image here</p>
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* Metadata Panel (collapsible) */}
+        {showMetadata && (
+          <div className="w-72 flex-shrink-0 border-l dark:border-gray-800 overflow-y-auto bg-gray-50 dark:bg-gray-900/50">
+            <TaskMetadataPanel
+              task={task}
+              canEdit={true}
+              onStatusChange={onStatusChange}
+              onPriorityChange={onPriorityChange}
+              onDueDateChange={onDueDateChange}
+              tags={tags}
+              availableTags={availableTags}
+              onAddTag={onAddTag}
+              onRemoveTag={onRemoveTag}
+              assignees={assignees}
+              responsibleId={responsibleId ?? undefined}
+              onAssigneesChange={onAssigneesChange}
+              workspaceId={workspaceId}
+              className="h-full"
+              workflowSteps={workflowSteps}
+            />
+          </div>
+        )}
       </div>
     </div>
   );

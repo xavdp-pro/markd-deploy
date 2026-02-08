@@ -86,28 +86,28 @@ document_presence: Dict[str, Dict[str, UserPresence]] = {}
 # Active streaming sessions: session_id -> StreamingSession
 streaming_sessions: Dict[str, StreamingSession] = {}
 
-# Maximally distinct color palette (SashaTrubetskoy / Kelly colors optimized)
+# Distinct color palette - all readable with white text (min contrast ratio ~3:1)
 USER_COLORS = [
     '#e6194b', # Red
-    '#3cb44b', # Green 
-    '#ffe119', # Yellow
+    '#3cb44b', # Green
     '#4363d8', # Blue
     '#f58231', # Orange
     '#911eb4', # Purple
-    '#42d4f4', # Cyan
+    '#c71585', # Medium Violet Red
     '#f032e6', # Magenta
-    '#bfef45', # Lime
-    '#fabebe', # Pink
     '#469990', # Teal
-    '#dcbeff', # Lavender
     '#9a6324', # Brown
-    '#fffac8', # Beige
     '#800000', # Maroon
-    '#aaffc3', # Mint
     '#808000', # Olive
-    '#ffd8b1', # Apricot
     '#000075', # Navy
-    '#808080'  # Gray
+    '#808080', # Gray
+    '#d63384', # Raspberry
+    '#0d6efd', # Royal Blue
+    '#198754', # Forest Green
+    '#6f42c1', # Indigo
+    '#dc3545', # Crimson
+    '#0dcaf0', # Sky (dark enough for white text at large size)
+    '#fd7e14', # Tangerine
 ]
 
 # Agent colors (distinct from user colors)
@@ -196,6 +196,13 @@ async def join_document(sid: str, document_id: str, user_info: Dict) -> List[Dic
             'document_id': document_id,
             'user': presence.to_dict()
         }, room=f"doc_{document_id}")
+        
+        # Also send updated full list to all users in the room
+        all_users = get_deduplicated_users(document_id)
+        await sio.emit('presence_updated', {
+            'document_id': document_id,
+            'users': all_users
+        }, room=f"doc_{document_id}")
     
     # Return current users (deduplicated by user_id)
     return get_deduplicated_users(document_id)
@@ -229,6 +236,13 @@ async def leave_document(sid: str, document_id: str) -> None:
                 'document_id': document_id,
                 'user_id': user.user_id,
                 'username': user.username
+            }, room=f"doc_{document_id}")
+            
+            # Also send updated full list to all users in the room
+            all_users = get_deduplicated_users(document_id)
+            await sio.emit('presence_updated', {
+                'document_id': document_id,
+                'users': all_users
             }, room=f"doc_{document_id}")
 
 

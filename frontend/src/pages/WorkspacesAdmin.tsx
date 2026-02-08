@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Edit2, Trash2, FolderTree, Save, X, Users, Shield, Eye, Edit } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Plus, Edit2, Trash2, FolderTree, Save, X, Users, Shield, Eye, Edit, ChevronDown, Check } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -20,6 +20,115 @@ interface Group {
 interface GroupPermission {
   [groupId: string]: 'none' | 'read' | 'write' | 'admin';
 }
+
+const PERMISSION_OPTIONS: Array<{ value: 'none' | 'read' | 'write' | 'admin'; label: string; shortLabel: string; description: string; icon: React.ReactNode; color: string; bg: string }> = [
+  {
+    value: 'none',
+    label: 'No access',
+    shortLabel: '—',
+    description: 'Cannot see this workspace',
+    icon: <span className="w-3.5 h-3.5 flex items-center justify-center text-gray-400 text-xs font-bold">—</span>,
+    color: 'text-gray-500 dark:text-gray-400',
+    bg: 'bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600',
+  },
+  {
+    value: 'read',
+    label: 'RO (Read)',
+    shortLabel: 'RO',
+    description: 'Read only access',
+    icon: <Eye className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />,
+    color: 'text-emerald-700 dark:text-emerald-300',
+    bg: 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-300 dark:border-emerald-700',
+  },
+  {
+    value: 'write',
+    label: 'RW (Write)',
+    shortLabel: 'RW',
+    description: 'Read & write access',
+    icon: <Edit className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />,
+    color: 'text-blue-700 dark:text-blue-300',
+    bg: 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700',
+  },
+  {
+    value: 'admin',
+    label: 'Admin',
+    shortLabel: 'Admin',
+    description: 'Full control',
+    icon: <Shield className="w-3.5 h-3.5 text-red-600 dark:text-red-400" />,
+    color: 'text-red-700 dark:text-red-300',
+    bg: 'bg-red-50 dark:bg-red-900/30 border-red-300 dark:border-red-700',
+  },
+];
+
+const PermissionSelect: React.FC<{
+  value: string;
+  onChange: (value: 'none' | 'read' | 'write' | 'admin') => void;
+}> = ({ value, onChange }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    if (open) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  const current = PERMISSION_OPTIONS.find(o => o.value === value) || PERMISSION_OPTIONS[0];
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className={`
+          flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium
+          transition-all cursor-pointer select-none min-w-[130px]
+          ${current.bg} ${current.color}
+          hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-400/40
+        `}
+      >
+        {current.icon}
+        <span className="flex-1 text-left">{current.label}</span>
+        <ChevronDown className={`w-3.5 h-3.5 opacity-60 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 z-50 mt-1.5 w-52 rounded-xl border border-gray-200 bg-white py-1 shadow-xl dark:border-gray-700 dark:bg-gray-800 animate-in fade-in slide-in-from-top-1 duration-150">
+          {PERMISSION_OPTIONS.map((option) => {
+            const isSelected = option.value === value;
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => { onChange(option.value); setOpen(false); }}
+                className={`
+                  flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors
+                  ${isSelected
+                    ? 'bg-blue-50 dark:bg-blue-900/20'
+                    : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                  }
+                `}
+              >
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-700">
+                  {option.icon}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className={`text-sm font-medium ${isSelected ? 'text-blue-700 dark:text-blue-300' : 'text-gray-900 dark:text-gray-100'}`}>
+                    {option.label}
+                  </div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">{option.description}</div>
+                </div>
+                {isSelected && <Check className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const WorkspacesAdmin: React.FC = () => {
   const { user } = useAuth();
@@ -101,7 +210,7 @@ const WorkspacesAdmin: React.FC = () => {
       }
     } catch (err) {
       console.error('Error loading data:', err);
-      toast.error('Erreur lors du chargement');
+      toast.error('Error loading data');
     } finally {
       setLoading(false);
     }
@@ -109,7 +218,7 @@ const WorkspacesAdmin: React.FC = () => {
 
   const handleCreate = async () => {
     if (!formData.name.trim()) {
-      toast.error('Le nom est requis');
+      toast.error('Name is required');
       return;
     }
 
@@ -123,20 +232,20 @@ const WorkspacesAdmin: React.FC = () => {
       const data = await response.json();
 
       if (data.success) {
-        toast.success('Workspace créé');
+        toast.success('Workspace created');
         setCreating(false);
         setFormData({ name: '', description: '' });
         loadData();
       }
     } catch (err) {
       console.error('Error creating workspace:', err);
-      toast.error('Erreur lors de la création');
+      toast.error('Error creating workspace');
     }
   };
 
   const handleUpdate = async (id: string) => {
     if (!formData.name.trim()) {
-      toast.error('Le nom est requis');
+      toast.error('Name is required');
       return;
     }
 
@@ -150,19 +259,19 @@ const WorkspacesAdmin: React.FC = () => {
       const data = await response.json();
 
       if (data.success) {
-        toast.success('Workspace modifié');
+        toast.success('Workspace updated');
         setEditing(null);
         setFormData({ name: '', description: '' });
         loadData();
       }
     } catch (err) {
       console.error('Error updating workspace:', err);
-      toast.error('Erreur lors de la modification');
+      toast.error('Error updating workspace');
     }
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Voulez-vous vraiment supprimer "${name}" ?`)) {
+    if (!confirm(`Are you sure you want to delete "${name}"?`)) {
       return;
     }
 
@@ -174,12 +283,12 @@ const WorkspacesAdmin: React.FC = () => {
       const data = await response.json();
 
       if (data.success) {
-        toast.success('Workspace supprimé');
+        toast.success('Workspace deleted');
         loadData();
       }
     } catch (err) {
       console.error('Error deleting workspace:', err);
-      toast.error('Erreur lors de la suppression');
+      toast.error('Error deleting workspace');
     }
   };
 
@@ -198,7 +307,7 @@ const WorkspacesAdmin: React.FC = () => {
             method: 'DELETE',
             credentials: 'include',
           });
-          toast.success('Accès retiré');
+          toast.success('Access removed');
         }
       } else if (currentLevel === 'none') {
         // Add permission
@@ -208,7 +317,7 @@ const WorkspacesAdmin: React.FC = () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspace_id: workspaceId, permission_level: newLevel }),
         });
-        toast.success('Accès accordé');
+        toast.success('Access granted');
       } else {
         // Update permission
         await fetch(`/api/groups/${groupId}/workspaces/${workspaceId}`, {
@@ -217,7 +326,7 @@ const WorkspacesAdmin: React.FC = () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ workspace_id: workspaceId, permission_level: newLevel }),
         });
-        toast.success('Permission modifiée');
+        toast.success('Permission updated');
       }
 
       // Update local state
@@ -230,7 +339,7 @@ const WorkspacesAdmin: React.FC = () => {
       }));
     } catch (err) {
       console.error('Error updating permission:', err);
-      toast.error('Erreur lors de la modification');
+      toast.error('Error updating permission');
     }
   };
 
@@ -266,14 +375,14 @@ const WorkspacesAdmin: React.FC = () => {
   const getPermissionLabel = (perm: string | undefined) => {
     switch (perm) {
       case 'admin': return 'Admin';
-      case 'write': return 'Écriture (RW)';
-      case 'read': return 'Lecture (RO)';
-      default: return 'Aucun accès';
+      case 'write': return 'Write (RW)';
+      case 'read': return 'Read (RO)';
+      default: return 'No access';
     }
   };
 
   if (loading) {
-    return <div className="p-8 text-center text-gray-900 dark:text-gray-100 bg-gray-50 dark:bg-gray-900 min-h-screen">Chargement...</div>;
+    return <div className="p-8 text-center text-gray-900 dark:text-gray-100 bg-gray-50 dark:bg-gray-900 min-h-screen">Loading...</div>;
   }
 
   return (
@@ -281,10 +390,10 @@ const WorkspacesAdmin: React.FC = () => {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
-            {isAdmin ? 'Gestion des Workspaces' : 'Mes Workspaces'}
+            {isAdmin ? 'Workspace Management' : 'My Workspaces'}
           </h1>
           <p className="text-gray-600 dark:text-gray-400 mt-1">
-            {isAdmin ? 'Configurez les permissions par groupe métier' : 'Vos workspaces et vos droits d\'accès'}
+            {isAdmin ? 'Configure permissions per business group' : 'Your workspaces and access rights'}
           </p>
         </div>
         {isAdmin && (
@@ -293,7 +402,7 @@ const WorkspacesAdmin: React.FC = () => {
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors"
         >
           <Plus className="w-5 h-5" />
-          Nouveau Workspace
+          New Workspace
         </button>
         )}
       </div>
@@ -302,11 +411,11 @@ const WorkspacesAdmin: React.FC = () => {
       {isAdmin && (
       <div className="mb-6 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
         <p className="text-sm text-blue-900 dark:text-blue-300">
-          <strong>Principe :</strong> Les utilisateurs font partie de groupes métier (ALL, Developers, etc.). 
-          Pour chaque workspace, choisissez le niveau d'accès de chaque groupe.
+          <strong>Principle:</strong> Users belong to business groups (ALL, Developers, etc.). 
+          For each workspace, choose the access level for each group.
         </p>
         <p className="text-sm text-blue-800 dark:text-blue-400 mt-2">
-          <strong>Aucun</strong> = pas d'accès • <strong>RO</strong> = lecture seule • <strong>RW</strong> = lecture + écriture • <strong>Admin</strong> = accès complet
+          <strong>None</strong> = no access • <strong>RO</strong> = read only • <strong>RW</strong> = read + write • <strong>Admin</strong> = full access
         </p>
       </div>
       )}
@@ -314,18 +423,18 @@ const WorkspacesAdmin: React.FC = () => {
       {/* Create Form */}
       {isAdmin && creating && (
         <div className="mb-6 p-6 bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700">
-          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">Créer un workspace</h3>
+          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">Create a workspace</h3>
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Nom du workspace *
+                Workspace name *
               </label>
               <input
                 type="text"
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="Ex: Documentation Produit"
+                placeholder="e.g. Product Documentation"
               />
             </div>
             <div>
@@ -337,7 +446,7 @@ const WorkspacesAdmin: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 rows={3}
-                placeholder="Description du workspace..."
+                placeholder="Workspace description..."
               />
             </div>
             <div className="flex gap-2">
@@ -346,14 +455,14 @@ const WorkspacesAdmin: React.FC = () => {
                 className="px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded-md hover:bg-blue-700 dark:hover:bg-blue-600 flex items-center gap-2"
               >
                 <Save className="w-4 h-4" />
-                Créer
+                Create
               </button>
               <button
                 onClick={cancelEdit}
                 className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-300 dark:hover:bg-gray-600 flex items-center gap-2"
               >
                 <X className="w-4 h-4" />
-                Annuler
+                Cancel
               </button>
             </div>
           </div>
@@ -388,14 +497,14 @@ const WorkspacesAdmin: React.FC = () => {
                       className="px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded-md hover:bg-blue-700 dark:hover:bg-blue-600 flex items-center gap-2"
                     >
                       <Save className="w-4 h-4" />
-                      Enregistrer
+                      Save
                     </button>
                     <button
                       onClick={cancelEdit}
                       className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-300 dark:hover:bg-gray-600 flex items-center gap-2"
                     >
                       <X className="w-4 h-4" />
-                      Annuler
+                      Cancel
                     </button>
                   </div>
                 </div>
@@ -425,14 +534,14 @@ const WorkspacesAdmin: React.FC = () => {
                         <button
                           onClick={() => startEdit(workspace)}
                           className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
-                          title="Modifier"
+                          title="Edit"
                         >
                           <Edit2 className="w-4 h-4" />
                         </button>
                         <button
                           onClick={() => handleDelete(workspace.id, workspace.name)}
                           className="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-colors"
-                          title="Supprimer"
+                          title="Delete"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -447,7 +556,7 @@ const WorkspacesAdmin: React.FC = () => {
                   <div className="p-6">
                     <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
                       <Users className="w-4 h-4 text-gray-900 dark:text-white" />
-                      Permissions par groupe
+                      Permissions per group
                     </h4>
                     <div className="grid gap-2">
                       {groups.map((group) => {
@@ -462,28 +571,19 @@ const WorkspacesAdmin: React.FC = () => {
                               <div className="min-w-0 flex-1">
                                 <div className="font-medium text-gray-900 dark:text-gray-100">{group.name}</div>
                                 <div className="text-xs text-gray-500 dark:text-gray-400">
-                                  {group.user_count} membre{group.user_count !== 1 ? 's' : ''}
+                                  {group.user_count} member{group.user_count !== 1 ? 's' : ''}
                                   {group.description && ` • ${group.description}`}
                                 </div>
                               </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                              <select
-                                value={level}
-                                onChange={(e) => handlePermissionChange(
-                                  workspace.id,
-                                  group.id,
-                                  e.target.value as any
-                                )}
-                                className={`px-3 py-1.5 rounded-md border text-sm font-medium transition-colors ${getPermissionColor(level)}`}
-                              >
-                                <option value="none">Aucun</option>
-                                <option value="read">RO (Lecture)</option>
-                                <option value="write">RW (Écriture)</option>
-                                <option value="admin">Admin</option>
-                              </select>
-                              {getPermissionIcon(level)}
-                            </div>
+                            <PermissionSelect
+                              value={level}
+                              onChange={(newLevel) => handlePermissionChange(
+                                workspace.id,
+                                group.id,
+                                newLevel
+                              )}
+                            />
                           </div>
                         );
                       })}
@@ -496,12 +596,12 @@ const WorkspacesAdmin: React.FC = () => {
                     <div className="p-6 border-t border-gray-200 dark:border-gray-700">
                       <div className="flex items-center justify-between">
                         <div>
-                          <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Vos droits sur ce workspace</h4>
+                          <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-1">Your rights on this workspace</h4>
                           <p className="text-xs text-gray-500 dark:text-gray-400">
-                            {userPermission === 'admin' && 'Vous avez un accès complet à ce workspace'}
-                            {userPermission === 'write' && 'Vous pouvez lire et modifier les documents de ce workspace'}
-                            {userPermission === 'read' && 'Vous pouvez uniquement lire les documents de ce workspace'}
-                            {userPermission === 'none' && 'Vous n\'avez pas accès à ce workspace'}
+                            {userPermission === 'admin' && 'You have full access to this workspace'}
+                            {userPermission === 'write' && 'You can read and edit documents in this workspace'}
+                            {userPermission === 'read' && 'You can only read documents in this workspace'}
+                            {userPermission === 'none' && 'You do not have access to this workspace'}
                           </p>
                         </div>
                         <div className={`px-4 py-2 rounded-md border text-sm font-medium ${getPermissionColor(userPermission)}`}>
@@ -521,14 +621,14 @@ const WorkspacesAdmin: React.FC = () => {
         <div className="text-center py-12 bg-gray-50 dark:bg-gray-800 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-700">
           <FolderTree className="w-12 h-12 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
           <p className="text-gray-600 dark:text-gray-400 mb-4">
-            {isAdmin ? 'Aucun workspace créé' : 'Aucun workspace accessible'}
+            {isAdmin ? 'No workspaces created' : 'No accessible workspaces'}
           </p>
           {isAdmin && (
           <button
             onClick={() => setCreating(true)}
             className="px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-600"
           >
-            Créer le premier workspace
+            Create the first workspace
           </button>
           )}
         </div>

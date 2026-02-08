@@ -116,7 +116,7 @@ const LoginPage: React.FC = () => {
                 onClick={() => navigate('/forgot-password')}
                 className="text-sm text-blue-600 hover:text-blue-700 underline"
               >
-                Mot de passe oublié ?
+                Forgot password?
               </button>
             </div>
           </form>

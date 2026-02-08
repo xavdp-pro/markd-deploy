@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { UserPlus, Trash2, Edit2, Shield, User as UserIcon, LayoutGrid } from 'lucide-react';
+import { UserPlus, Trash2, Edit2, Shield, User as UserIcon, LayoutGrid, Eye, EyeOff } from 'lucide-react';
 import Header from '../components/layout/Header';
 import { useAuth } from '../contexts/AuthContext';
 import { useSettings } from '../contexts/SettingsContext';
@@ -21,6 +21,7 @@ const AdminPage: React.FC = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showPassword, setShowPassword] = useState(false);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -38,6 +39,7 @@ const AdminPage: React.FC = () => {
           setShowCreateModal(false);
           setEditingUser(null);
           setFormData({ username: '', email: '', password: '', role: 'user' });
+          setShowPassword(false);
         }
       }
     };
@@ -77,6 +79,7 @@ const AdminPage: React.FC = () => {
       if (response.ok) {
         setShowCreateModal(false);
         setFormData({ username: '', email: '', password: '', role: 'user' });
+        setShowPassword(false);
         fetchUsers();
       }
     } catch (error) {
@@ -97,6 +100,7 @@ const AdminPage: React.FC = () => {
       if (response.ok) {
         setEditingUser(null);
         setFormData({ username: '', email: '', password: '', role: 'user' });
+        setShowPassword(false);
         fetchUsers();
       }
     } catch (error) {
@@ -128,6 +132,7 @@ const AdminPage: React.FC = () => {
       password: '',
       role: user.role,
     });
+    setShowPassword(false);
   };
 
   const handleToggleModule = async (module: keyof typeof modules) => {
@@ -168,7 +173,7 @@ const AdminPage: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
               {/* Documents Module */}
               <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 border border-gray-200 dark:border-gray-700">
                 <div className="flex items-center justify-between mb-4">
@@ -185,6 +190,44 @@ const AdminPage: React.FC = () => {
                 </div>
                 <p className="text-sm text-gray-600 dark:text-gray-400">
                   Markdown documentation management system. Organize files in folders and edit with rich text editor.
+                </p>
+              </div>
+
+              {/* Passwords Module */}
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Passwords</h3>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      className="sr-only peer"
+                      checked={modules.passwords}
+                      onChange={() => handleToggleModule('passwords')}
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Secure password vault. Store and share credentials safely with team members.
+                </p>
+              </div>
+
+              {/* Files Module */}
+              <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Files</h3>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      className="sr-only peer"
+                      checked={modules.files}
+                      onChange={() => handleToggleModule('files')}
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  File management system. Upload, organize and share files within workspaces.
                 </p>
               </div>
 
@@ -207,22 +250,22 @@ const AdminPage: React.FC = () => {
                 </p>
               </div>
 
-              {/* Passwords Module */}
+              {/* Schemas Module */}
               <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 border border-gray-200 dark:border-gray-700">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Passwords</h3>
+                  <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Schemas</h3>
                   <label className="relative inline-flex items-center cursor-pointer">
                     <input 
                       type="checkbox" 
                       className="sr-only peer"
-                      checked={modules.passwords}
-                      onChange={() => handleToggleModule('passwords')}
+                      checked={modules.schemas}
+                      onChange={() => handleToggleModule('schemas')}
                     />
                     <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
                   </label>
                 </div>
                 <p className="text-sm text-gray-600 dark:text-gray-400">
-                  Secure password vault. Store and share credentials safely with team members.
+                  Database schema designer. Create and manage data models with visual editor.
                 </p>
               </div>
             </div>
@@ -234,7 +277,7 @@ const AdminPage: React.FC = () => {
               <p className="text-gray-600 dark:text-gray-400 mt-1">Manage application users and permissions</p>
             </div>
             <button
-              onClick={() => setShowCreateModal(true)}
+              onClick={() => { setShowCreateModal(true); setShowPassword(false); }}
               className="flex items-center gap-2 px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors"
             >
               <UserPlus className="w-5 h-5" />
@@ -352,12 +395,22 @@ const AdminPage: React.FC = () => {
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Password {editingUser && '(leave blank to keep current)'}
                 </label>
-                <input
-                  type="password"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    className="w-full px-4 py-2 pr-10 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
+                    title={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                  >
+                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                </div>
               </div>
 
               <div>
@@ -381,6 +434,7 @@ const AdminPage: React.FC = () => {
                   setShowCreateModal(false);
                   setEditingUser(null);
                   setFormData({ username: '', email: '', password: '', role: 'user' });
+                  setShowPassword(false);
                 }}
                 className="flex-1 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
               >

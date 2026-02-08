@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { FileEdit, Lock, Unlock, Link, ChevronLeft, ChevronRight } from 'lucide-react';
+import { FileEdit, Link, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import MDEditor from '@uiw/react-md-editor';
-import { Task, TaskTimelineItem, TaskComment, TaskTag, TaskAssignee, TaskFile, TaskChecklistItem } from '../types';
+import { Task, TaskComment, TaskTag, TaskAssignee, TaskFile, TaskChecklistItem, WorkflowStep } from '../types';
 import TaskMetadataPanel from './TaskMetadataPanel';
-import TaskTimeline from './TaskTimeline';
 import TaskComments from './TaskComments';
 import TaskFiles from './TaskFiles';
 import TaskChecklist from './TaskChecklist';
@@ -15,10 +14,7 @@ interface TaskViewerProps {
   task: Task;
   onEdit: () => void;
   canEdit?: boolean;
-  lockedByOther?: boolean;
-  currentUserId?: string;
   presenceUsers?: Array<{ id: string; username: string }>;
-  onUnlock?: () => void;
   isEditing?: boolean;
   onStatusChange?: (status: string) => void;
   onPriorityChange?: (priority: 'low' | 'medium' | 'high') => void;
@@ -31,40 +27,31 @@ interface TaskViewerProps {
   responsibleId?: number | null;
   onAssigneesChange?: (userIds: number[], responsibleId?: number) => void;
   workspaceId?: string;
-  timeline: TaskTimelineItem[];
-  timelineLoading?: boolean;
-  onAddTimelineEntry?: (entry: { title: string; description?: string }) => Promise<void>;
   comments: TaskComment[];
   commentsLoading?: boolean;
   onAddComment?: (content: string) => Promise<void>;
   onUpdateComment?: (commentId: string, content: string) => Promise<void>;
   onDeleteComment?: (commentId: string) => Promise<void>;
-  onUpdateTimelineEntry?: (entryId: string, data: { title?: string; description?: string }) => Promise<void>;
-  onDeleteTimelineEntry?: (entryId: string) => Promise<void>;
   canCollaborate?: boolean;
   currentUserId?: number | null;
-  taskId?: string;
   files?: TaskFile[];
   filesLoading?: boolean;
   onUploadFile?: (file: File) => Promise<void>;
   onDeleteFile?: (fileId: string) => Promise<void>;
-  onUpdateFileNote?: (fileId: string, note: string) => Promise<void>;
   checklistItems?: TaskChecklistItem[];
   checklistLoading?: boolean;
   onAddChecklistItem?: (text: string) => Promise<void>;
   onToggleChecklistItem?: (itemId: string, completed: boolean) => Promise<void>;
   onDeleteChecklistItem?: (itemId: string) => Promise<void>;
   onUpdateChecklistItem?: (itemId: string, text: string) => Promise<void>;
+  workflowSteps?: WorkflowStep[];
 }
 
 const TaskViewer: React.FC<TaskViewerProps> = ({
   task,
   onEdit,
   canEdit = true,
-  lockedByOther = false,
-  // currentUserId,
   presenceUsers,
-  onUnlock,
   isEditing = false,
   onStatusChange,
   onPriorityChange,
@@ -77,11 +64,6 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
   responsibleId = null,
   onAssigneesChange,
   workspaceId = 'demo',
-  timeline,
-  timelineLoading = false,
-  onAddTimelineEntry,
-  onUpdateTimelineEntry,
-  onDeleteTimelineEntry,
   comments,
   commentsLoading = false,
   onAddComment,
@@ -89,22 +71,27 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
   onDeleteComment,
   canCollaborate = true,
   currentUserId,
-  taskId,
   files = [],
   filesLoading = false,
   onUploadFile,
   onDeleteFile,
-  onUpdateFileNote,
   checklistItems = [],
   checklistLoading = false,
   onAddChecklistItem,
   onToggleChecklistItem,
   onDeleteChecklistItem,
   onUpdateChecklistItem,
+  workflowSteps,
 }) => {
-  const isLockedByMe = task.locked_by !== null && !lockedByOther;
-  const canUnlock = isLockedByMe && !isEditing;
-  const [activeTab, setActiveTab] = useState<'details' | 'checklist' | 'timeline' | 'comments' | 'files'>('details');
+  const [activeTab, setActiveTab] = useState<'details' | 'checklist' | 'comments' | 'files'>(() => {
+    try {
+      const saved = sessionStorage.getItem('markd_task_active_tab');
+      if (saved && ['details', 'checklist', 'comments', 'files'].includes(saved)) {
+        return saved as 'details' | 'checklist' | 'comments' | 'files';
+      }
+    } catch {}
+    return 'details';
+  });
   const [isMetadataCollapsed, setIsMetadataCollapsed] = useState<boolean>(false);
   const commentCount = comments.length;
   const checklistCount = checklistItems.length;
@@ -137,18 +124,28 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
   const copyLinkToClipboard = () => {
     const url = `${window.location.origin}${window.location.pathname}#task=${task.id}`;
     navigator.clipboard.writeText(url);
-    toast.success('Lien copié ! Vous pouvez le coller dans un document Markdown ou une autre tâche');
+    toast.success('Link copied! You can paste it in a Markdown document or another task');
   };
   
   const copyMarkdownToClipboard = () => {
     const url = `${window.location.origin}${window.location.pathname}#task=${task.id}`;
     const markdown = `✅ [${task.name}](${url})`;
     navigator.clipboard.writeText(markdown);
-    toast.success('Lien Markdown copié !');
+    toast.success('Markdown link copied!');
   };
 
+  // Persist active tab to sessionStorage
   useEffect(() => {
-    setActiveTab(commentCount > 0 ? 'comments' : 'details');
+    try { sessionStorage.setItem('markd_task_active_tab', activeTab); } catch {}
+  }, [activeTab]);
+
+  // Only reset tab when switching to a different task
+  const prevTaskIdRef = React.useRef(task.id);
+  useEffect(() => {
+    if (prevTaskIdRef.current !== task.id) {
+      prevTaskIdRef.current = task.id;
+      setActiveTab(commentCount > 0 ? 'comments' : 'details');
+    }
   }, [task.id]);
   
   return (
@@ -160,18 +157,6 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
             <h2 className="text-xl font-bold text-gray-900 dark:text-white">
               {task.name}
             </h2>
-            {lockedByOther && task.locked_by && (
-              <span className="flex items-center gap-1.5 rounded-full bg-red-50 px-2.5 py-0.5 text-xs font-medium text-red-600 dark:bg-red-900/30 dark:text-red-400">
-                <Lock size={12} />
-                Verrouillé par {task.locked_by.user_name}
-              </span>
-            )}
-            {isLockedByMe && (
-              <span className="flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
-                <Lock size={12} />
-                Verrouillé par vous
-              </span>
-            )}
           </div>
         </div>
         
@@ -182,43 +167,26 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
           <button
             onClick={copyLinkToClipboard}
             className="px-3 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors flex items-center gap-2"
-            title="Copier le lien vers cette tâche pour le coller ailleurs"
+            title="Copy link to this task"
           >
             <Link className="w-4 h-4" />
-            Copier le lien
+            Copy link
           </button>
           <button
             onClick={copyMarkdownToClipboard}
             className="px-3 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors"
-            title="Copier le lien au format Markdown : ✅ [Nom](URL)"
+            title="Copy as Markdown link: ✅ [Name](URL)"
           >
             Markdown
           </button>
-          {canUnlock && onUnlock && (
-            <button
-              onClick={onUnlock}
-              className="px-3 py-2 text-sm text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded transition-colors flex items-center gap-2"
-              title="Retirer mon verrou"
-            >
-              <Unlock className="w-4 h-4" />
-              Déverrouiller
-            </button>
-          )}
           {canEdit && (
             <button
               onClick={onEdit}
-              disabled={lockedByOther}
-              className={`
-                flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all
-                ${lockedByOther
-                  ? 'cursor-not-allowed bg-gray-100 text-gray-400 dark:bg-gray-800 dark:text-gray-600'
-                  : 'bg-blue-600 text-white shadow-sm hover:bg-blue-700 hover:shadow active:translate-y-0.5 dark:bg-blue-600 dark:hover:bg-blue-500'
-                }
-              `}
-              title={isLockedByMe ? 'Reprendre l\'édition' : lockedByOther ? `Verrouillé par ${task.locked_by?.user_name}` : 'Éditer la tâche'}
+              className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all bg-blue-600 text-white shadow-sm hover:bg-blue-700 hover:shadow active:translate-y-0.5 dark:bg-blue-600 dark:hover:bg-blue-500"
+              title="Edit task"
             >
               <FileEdit size={16} />
-              {isLockedByMe ? 'Reprendre' : 'Éditer'}
+              Edit
             </button>
           )}
         </div>
@@ -230,7 +198,7 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
           <div className="w-80 flex-shrink-0 overflow-y-auto custom-scrollbar">
             <TaskMetadataPanel
               task={task}
-              canEdit={canEdit && !lockedByOther}
+              canEdit={canEdit}
               onStatusChange={onStatusChange}
               onPriorityChange={onPriorityChange}
               onDueDateChange={onDueDateChange}
@@ -244,6 +212,7 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
               workspaceId={workspaceId}
               className="h-auto"
               onCollapse={() => setIsMetadataCollapsed(true)}
+              workflowSteps={workflowSteps}
             />
           </div>
         )}
@@ -253,11 +222,10 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
           {/* Tabs */}
           <nav className="flex items-center gap-6 border-b border-gray-100 px-6 dark:border-gray-800 relative">
             {[
-              { id: 'details', label: 'Détails' },
+              { id: 'details', label: 'Details' },
               { id: 'checklist', label: `Checklist ${checklistCount > 0 ? `(${completedChecklistCount}/${checklistCount})` : ''}` },
-              { id: 'comments', label: `Discussion ${commentCount > 0 ? `(${commentCount})` : ''}` },
-              { id: 'timeline', label: 'Timeline' },
-              { id: 'files', label: 'Fichiers' }
+              { id: 'comments', label: `Comments ${commentCount > 0 ? `(${commentCount})` : ''}` },
+              { id: 'files', label: 'Files' }
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -282,7 +250,7 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
               <button
                 onClick={() => setIsMetadataCollapsed(false)}
                 className="ml-auto flex items-center justify-center h-8 w-8 rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-800 transition-colors border border-gray-200 dark:border-gray-700"
-                title="Afficher les métadonnées"
+                title="Show metadata"
               >
                 <ChevronRight size={18} />
               </button>
@@ -317,30 +285,11 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
                 <TaskChecklist
                   items={checklistItems}
                   loading={checklistLoading}
-                  canEdit={canEdit && !lockedByOther}
+                  canEdit={canEdit}
                   onAddItem={onAddChecklistItem}
                   onToggleItem={onToggleChecklistItem}
                   onDeleteItem={onDeleteChecklistItem}
                   onUpdateItem={onUpdateChecklistItem}
-                />
-              </div>
-            )}
-
-            {activeTab === 'timeline' && (
-              <div className="h-full overflow-hidden">
-                <TaskTimeline
-                  items={timeline}
-                  loading={timelineLoading}
-                  canAdd={canCollaborate}
-                  taskId={task.id}
-                  onAdd={onAddTimelineEntry}
-                  onUpdate={onUpdateTimelineEntry}
-                  onDelete={onDeleteTimelineEntry}
-                  currentUserId={currentUserId}
-                  onRefresh={async () => {
-                    // Timeline will refresh via websocket automatically
-                    // If needed, could call refreshTaskActivity here but it's handled by parent
-                  }}
                 />
               </div>
             )}
@@ -354,7 +303,6 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
                   onAdd={onAddComment}
                   onUpdate={onUpdateComment}
                   onDelete={onDeleteComment}
-                  taskId={taskId}
                   currentUserId={currentUserId}
                 />
               </div>
@@ -368,7 +316,6 @@ const TaskViewer: React.FC<TaskViewerProps> = ({
                   canUpload={canCollaborate && !!onUploadFile}
                   onUpload={onUploadFile}
                   onDelete={onDeleteFile}
-                  onUpdateFileNote={onUpdateFileNote}
                 />
               </div>
             )}

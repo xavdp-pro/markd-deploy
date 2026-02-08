@@ -62,15 +62,15 @@ def verify_password(password: str, hashed: str) -> bool:
 def validate_password(password: str) -> tuple[bool, str]:
     """Validate password strength"""
     if len(password) < 10:
-        return False, "Le mot de passe doit contenir au moins 10 caractères"
+        return False, "Password must contain at least 10 characters"
     if not any(c.isupper() for c in password):
-        return False, "Le mot de passe doit contenir au moins 1 majuscule (A-Z)"
+        return False, "Password must contain at least 1 uppercase letter (A-Z)"
     if not any(c.islower() for c in password):
-        return False, "Le mot de passe doit contenir au moins 1 minuscule (a-z)"
+        return False, "Password must contain at least 1 lowercase letter (a-z)"
     if not any(c.isdigit() for c in password):
-        return False, "Le mot de passe doit contenir au moins 1 chiffre (0-9)"
+        return False, "Password must contain at least 1 digit (0-9)"
     if not any(c in '!@#$%^&*(),.?":{}|<>' for c in password):
-        return False, "Le mot de passe doit contenir au moins 1 symbole"
+        return False, "Password must contain at least 1 symbol"
     return True, ""
 
 def generate_reset_code() -> str:
@@ -451,7 +451,7 @@ async def forgot_password(request: ForgotPasswordRequest):
         
         if not users:
             # Return success even if email not found for security
-            return {"success": True, "message": "Si l'email existe, un code a été envoyé"}
+            return {"success": True, "message": "If the email exists, a reset code has been sent"}
         
         user = users[0]
         
@@ -472,7 +472,7 @@ async def forgot_password(request: ForgotPasswordRequest):
         # Send email
         send_password_reset_email(user['email'], user['username'], code)
         
-        return {"success": True, "message": "Code de réinitialisation envoyé"}
+        return {"success": True, "message": "Reset code sent"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -498,9 +498,9 @@ async def verify_reset_code(request: VerifyCodeRequest):
         tokens = db.execute_query(token_query, (user_id, request.code))
         
         if not tokens:
-            raise HTTPException(status_code=400, detail="Code invalide ou expiré")
+            raise HTTPException(status_code=400, detail="Invalid or expired code")
         
-        return {"success": True, "message": "Code vérifié"}
+        return {"success": True, "message": "Code verified"}
     except HTTPException:
         raise
     except Exception as e:
@@ -533,7 +533,7 @@ async def reset_password(request: ResetPasswordRequest):
         tokens = db.execute_query(token_query, (user_id, request.code))
         
         if not tokens:
-            raise HTTPException(status_code=400, detail="Code invalide ou expiré")
+            raise HTTPException(status_code=400, detail="Invalid or expired code")
         
         # Update password
         new_hash = hash_password(request.newPassword)
@@ -544,7 +544,7 @@ async def reset_password(request: ResetPasswordRequest):
         mark_used_query = "UPDATE password_reset_tokens SET used = 1 WHERE id = %s"
         db.execute_update(mark_used_query, (tokens[0]['id'],))
         
-        return {"success": True, "message": "Mot de passe réinitialisé"}
+        return {"success": True, "message": "Password reset successfully"}
     except HTTPException:
         raise
     except Exception as e:
@@ -573,11 +573,11 @@ async def test_email(request: TestEmailRequest):
             <div class="container">
                 <div class="header">
                     <h1>📝 MarkD</h1>
-                    <p>Test d'envoi d'email</p>
+                    <p>Email sending test</p>
                 </div>
                 <div class="content">
-                    <h2>Email de test réussi !</h2>
-                    <p>Ceci est un email de test pour vérifier la configuration SMTP Mailjet.</p>
+                    <h2>Test email successful!</h2>
+                    <p>This is a test email to verify the SMTP Mailjet configuration.</p>
                     <p><strong>Configuration:</strong></p>
                     <ul>
                         <li>Provider: Mailjet</li>
@@ -585,7 +585,7 @@ async def test_email(request: TestEmailRequest):
                         <li>Port: 587 (TLS)</li>
                         <li>From: xavier@ooo.ovh</li>
                     </ul>
-                    <p>Si vous recevez cet email, la configuration fonctionne correctement ! ✅</p>
+                    <p>If you receive this email, the configuration is working correctly! ✅</p>
                 </div>
                 <div class="footer">
                     <p>© 2025 MarkD Documentation Manager</p>
@@ -597,16 +597,18 @@ async def test_email(request: TestEmailRequest):
         
         success = send_email(
             request.email,
-            "Test d'envoi d'email - MarkD",
+            "Test email - MarkD",
             html_content
         )
         
         if success:
-            return {"success": True, "message": "Email de test envoyé avec succès"}
+            return {"success": True, "message": "Test email sent successfully"}
         else:
-            raise HTTPException(status_code=500, detail="Échec de l'envoi de l'email")
+            raise HTTPException(status_code=500, detail="Failed to send email. Check SMTP configuration (MAIL_HOST, MAIL_USERNAME, MAIL_PASSWORD in .env)")
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e) or "Unknown error sending email")
 
 # Dependency for JWT authentication
 async def get_current_user(request: Request) -> dict:

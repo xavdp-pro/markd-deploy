@@ -9,11 +9,13 @@ interface MarkdownLinkHandlerProps {
 const MarkdownLinkHandler: React.FC<MarkdownLinkHandlerProps> = (props) => {
   const { href, children, ...rest } = props;
   
-  // Detect internal links (doc, task, vault)
+  // Detect internal links (doc, task, password, file, schema)
   const isInternalLink = href && (
     href.includes('#doc=') || 
     href.includes('#task=') || 
-    href.includes('#vault=')
+    href.includes('#password=') ||
+    href.includes('#file=') ||
+    href.includes('#schema=')
   );
 
   // Internal links open in new tab, external links follow default behavior

@@ -1,16 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent } from '@dnd-kit/core';
-import { CheckSquare, Folder, LayoutGrid } from 'lucide-react';
-import { Task, SessionState, TaskTimelineItem, TaskComment, TaskTag, TaskAssignee, TaskFile, TaskChecklistItem } from './types';
+import { CheckSquare, Folder, LayoutGrid, PanelLeftOpen } from 'lucide-react';
+import { Task, SessionState, TaskComment, TaskTag, TaskAssignee, TaskFile, TaskChecklistItem, WorkflowStep } from './types';
 import { api } from './services/api';
 import { websocket } from './services/websocket';
 import { useWorkspace } from './contexts/WorkspaceContext';
 import { useAuth } from './contexts/AuthContext';
+import { useUnsavedChanges } from './contexts/UnsavedChangesContext';
 import TaskTree from './components/TaskTree';
 import TaskViewer from './components/TaskViewer';
 import TaskEditor from './components/TaskEditor';
-import TaskKanbanModal from './components/TaskKanbanModal';
+import TaskKanban from './components/TaskKanbanModal';
 import { getHashSelection, setHashSelection, onHashChange } from './utils/urlHash';
 
 const TASK_SESSION_KEY = 'markd_tasks_session_state';
@@ -33,6 +34,7 @@ const loadTaskSessionState = (): TaskSessionState | null => {
 function TasksApp() {
   const { user } = useAuth();
   const { currentWorkspace, userPermission } = useWorkspace();
+  const { setUnsavedChanges, guardAction } = useUnsavedChanges();
   const canWrite = userPermission === 'write' || userPermission === 'admin';
 
   const [tree, setTree] = useState<Task[]>([]);
@@ -51,8 +53,6 @@ function TasksApp() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'todo' | 'doing' | 'done'>('all');
   const [priorityFilter, setPriorityFilter] = useState<'all' | 'low' | 'medium' | 'high'>('all');
   
-  const [timeline, setTimeline] = useState<TaskTimelineItem[]>([]);
-  const [timelineLoading, setTimelineLoading] = useState(false);
   const [comments, setComments] = useState<TaskComment[]>([]);
   const [commentsLoading, setCommentsLoading] = useState(false);
   const [taskTags, setTaskTags] = useState<TaskTag[]>([]);
@@ -64,7 +64,18 @@ function TasksApp() {
   const [filesLoading, setFilesLoading] = useState(false);
   const [checklistItems, setChecklistItems] = useState<TaskChecklistItem[]>([]);
   const [checklistLoading, _setChecklistLoading] = useState(false);
-  const [isKanbanModalOpen, setIsKanbanModalOpen] = useState(false);
+  const [isKanbanView, setIsKanbanView] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    return localStorage.getItem('markd_tasks_sidebar_collapsed') === 'true';
+  });
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem('markd_tasks_sidebar_collapsed', String(next));
+      return next;
+    });
+  }, []);
+  const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([]);
   const [taskTagsMap, setTaskTagsMap] = useState<Record<string, TaskTag[]>>({});
   const [pendingSelection, setPendingSelection] = useState<string | null>(null);
   const prevTreeRef = React.useRef<Task[] | null>(null);
@@ -83,21 +94,6 @@ function TasksApp() {
     selectedRef.current = selected;
   }, [selected]);
 
-  const getUserId = useCallback((): string => {
-    const stored = localStorage.getItem('markd_user');
-    if (stored) {
-      try { return String(JSON.parse(stored).id); } catch (e) { console.error(e); }
-    }
-    return `user-${Math.random().toString(36).slice(2, 11)}`;
-  }, []);
-
-  const getUserName = useCallback((): string => {
-    const stored = localStorage.getItem('markd_user');
-    if (stored) {
-      try { return JSON.parse(stored).username; } catch (e) { console.error(e); }
-    }
-    return `User-${Math.random().toString(36).slice(2, 7)}`;
-  }, []);
 
   const filterTree = useCallback(
     (nodes: Task[], query: string, tagIds: string[]): Task[] => {
@@ -150,13 +146,13 @@ function TasksApp() {
     return findNode(tree);
   }, [activeId, tree]);
 
-  const refreshTaskActivity = useCallback(async (taskId: string) => {
-    setTimelineLoading(true); setCommentsLoading(true);
+  const refreshComments = useCallback(async (taskId: string) => {
+    setCommentsLoading(true);
     try {
-      const [tl, cm] = await Promise.all([api.getTaskTimeline(taskId), api.getTaskComments(taskId)]);
-      setTimeline(tl.timeline); setComments(cm.comments);
+      const cm = await api.getTaskComments(taskId);
+      setComments(cm.comments);
     } catch (e) { console.error(e); }
-    finally { setTimelineLoading(false); setCommentsLoading(false); }
+    finally { setCommentsLoading(false); }
   }, []);
 
   const refreshTaskTags = useCallback(async (taskId: string) => {
@@ -313,7 +309,7 @@ function TasksApp() {
         setSelected([firstTask]);
         setEditContent(firstTask.content || '');
         await Promise.all([
-          refreshTaskActivity(firstTask.id),
+          refreshComments(firstTask.id),
           refreshTaskTags(firstTask.id),
           refreshTaskAssignees(firstTask.id),
           refreshTaskFiles(firstTask.id),
@@ -328,7 +324,7 @@ function TasksApp() {
         isRestoringRef.current = false;
       }, 200);
     }, 100);
-  }, [refreshTaskActivity, refreshTaskTags, refreshTaskAssignees, refreshTaskFiles, refreshTaskChecklist, saveSelectedTasks]);
+  }, [refreshComments, refreshTaskTags, refreshTaskAssignees, refreshTaskFiles, refreshTaskChecklist, saveSelectedTasks]);
 
   useEffect(() => {
     const loadData = async () => {
@@ -385,7 +381,15 @@ function TasksApp() {
     try { const r = await api.getTaskTags(taskId); if (r.success) setTaskTagsMap(p => ({ ...p, [taskId]: r.tags })); } catch (e) { console.error(e); }
   }, [taskTagsMap]);
 
-  useEffect(() => { if (currentWorkspace) { loadAllTaskTags(); setSelectedTags([]); } }, [currentWorkspace, loadAllTaskTags]);
+  // Load workflow steps for current workspace
+  const loadWorkflowSteps = useCallback(async () => {
+    try {
+      const r = await api.getWorkflowSteps(currentWorkspace);
+      if (r.success) setWorkflowSteps(r.steps);
+    } catch (e) { console.error('Failed to load workflow steps', e); }
+  }, [currentWorkspace]);
+
+  useEffect(() => { if (currentWorkspace) { loadAllTaskTags(); setSelectedTags([]); loadWorkflowSteps(); } }, [currentWorkspace, loadAllTaskTags, loadWorkflowSteps]);
 
   useEffect(() => {
     if (tree.length > 0) {
@@ -407,16 +411,24 @@ function TasksApp() {
   const handleCollapseAll = useCallback(() => { setExpanded({ root: true }); }, []);
 
   const handleSelectTask = useCallback((task: Task) => {
-    setSelected([task]);
-    if (task.type === 'task') {
-      // Save to hash and sessionStorage (skip if already processing from hash)
-      if (!processingHashRef.current && !isRestoringRef.current) {
-        saveSelectedTasks([task.id]);
+    const doSelect = () => {
+      setSelected([task]);
+      if (task.type === 'task') {
+        // Save to hash and sessionStorage (skip if already processing from hash)
+        if (!processingHashRef.current && !isRestoringRef.current) {
+          saveSelectedTasks([task.id]);
+        }
+        setEditContent(task.content || '');
+        refreshComments(task.id); refreshTaskTags(task.id); refreshTaskAssignees(task.id); refreshTaskFiles(task.id); refreshTaskChecklist(task.id);
       }
-      setEditContent(task.content || '');
-      refreshTaskActivity(task.id); refreshTaskTags(task.id); refreshTaskAssignees(task.id); refreshTaskFiles(task.id); refreshTaskChecklist(task.id);
+    };
+    // If editing, guard the selection change
+    if (editMode) {
+      guardAction(doSelect);
+    } else {
+      doSelect();
     }
-  }, [refreshTaskActivity, refreshTaskTags, refreshTaskAssignees, refreshTaskFiles, refreshTaskChecklist, saveSelectedTasks]);
+  }, [editMode, guardAction, refreshComments, refreshTaskTags, refreshTaskAssignees, refreshTaskFiles, refreshTaskChecklist, saveSelectedTasks]);
 
   const handleSelectAll = useCallback(() => { setSelected(tree); }, [tree]);
 
@@ -460,8 +472,7 @@ function TasksApp() {
 
   // Listen to hash changes (when navigating back to this module)
   useEffect(() => {
-    const cleanup = onHashChange((selections) => {
-      const hashIds = selections.task;
+    const handleHashRestore = (hashIds: string[]) => {
       // Use refs to get latest values without causing re-renders
       const currentTree = treeRef.current;
       const currentSelected = selectedRef.current;
@@ -475,6 +486,10 @@ function TasksApp() {
         }
         
         // Set flag to prevent saving during restoration
+        if (isRestoringRef.current || processingHashRef.current) {
+          return;
+        }
+        
         isRestoringRef.current = true;
         processingHashRef.current = true;
         loadSelectedTasks(hashIds, currentTree).then(() => {
@@ -485,9 +500,28 @@ function TasksApp() {
           }, 200);
         });
       }
+    };
+    
+    const cleanup = onHashChange((selections) => {
+      handleHashRestore(selections.task);
     });
     
-    return cleanup;
+    // Also check on visibility change (when returning to module)
+    const handleVisibilityChange = () => {
+      if (!document.hidden && treeRef.current.length > 0) {
+        const hashIds = getHashSelection('task');
+        if (hashIds.length > 0) {
+          handleHashRestore(hashIds);
+        }
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      cleanup();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [loadSelectedTasks]);
   
   // Save selected tasks when selection changes
@@ -505,85 +539,127 @@ function TasksApp() {
   const handleCreateTask = useCallback(async (parentId: string, name: string) => {
     try {
       const r = await api.createTask({ name, type: 'task', parent_id: parentId, content: '', workspace_id: currentWorkspace, status: 'todo', priority: 'medium' });
-      if (r.success) { toast.success('Tâche créée'); setPendingSelection(r.task.id); await refreshTree(); }
-    } catch (e) { toast.error('Erreur création tâche'); }
+      if (r.success) { toast.success('Task created'); setPendingSelection(r.task.id); await refreshTree(); }
+    } catch (e) { toast.error('Error creating task'); }
   }, [currentWorkspace, refreshTree]);
 
   const handleCreateFolder = useCallback(async (parentId: string, name: string) => {
     try {
       const r = await api.createTask({ name, type: 'folder', parent_id: parentId, workspace_id: currentWorkspace });
-      if (r.success) { toast.success('Dossier créé'); setPendingSelection(r.task.id); await refreshTree(); }
-    } catch (e) { toast.error('Erreur création dossier'); }
+      if (r.success) { toast.success('Folder created'); setPendingSelection(r.task.id); await refreshTree(); }
+    } catch (e) { toast.error('Error creating folder'); }
   }, [currentWorkspace, refreshTree]);
 
   const handleDelete = useCallback(async (id: string) => {
-    try { await api.deleteTask(id); toast.success('Supprimé'); setSelected(p => p.filter(t => t.id !== id)); await refreshTree(); } catch (e) { toast.error('Erreur suppression'); }
+    try { await api.deleteTask(id); toast.success('Deleted'); setSelected(p => p.filter(t => t.id !== id)); await refreshTree(); } catch (e) { toast.error('Error deleting'); }
   }, [refreshTree]);
 
   const handleRename = useCallback(async (id: string, newName: string) => {
-    try { await api.updateTask(id, { name: newName }); toast.success('Renommé'); await refreshTree(); } catch (e) { toast.error('Erreur renommage'); }
+    try { await api.updateTask(id, { name: newName }); toast.success('Renamed'); await refreshTree(); } catch (e) { toast.error('Error renaming'); }
   }, [refreshTree]);
 
   const handleCopy = useCallback(async (id: string) => {
-    try { await api.copyTask(id); toast.success('Copié'); await refreshTree(); } catch (e) { toast.error('Erreur copie'); }
+    try { await api.copyTask(id); toast.success('Copied'); await refreshTree(); } catch (e) { toast.error('Error copying'); }
   }, [refreshTree]);
 
-  const handleUnlock = useCallback(async () => {
-    if (selected.length !== 1) return;
-    const task = selected[0];
-    
-    // Use user from context or fallback to local helper
-    const userId = user?.id ? String(user.id) : getUserId();
-    
-    try {
-      await api.unlockTask(task.id, userId);
-      toast.success('Verrou retiré');
-    } catch (e) {
-      console.error(e);
-      toast.error('Impossible de retirer le verrou');
-    }
-  }, [selected, user, getUserId]);
-
-  const handleForceUnlock = useCallback(async (id: string) => {
-    try { await api.unlockTask(id, 'force'); toast.success('Déverrouillé'); await refreshTree(); } catch (e) { toast.error('Erreur déverrouillage'); }
-  }, [refreshTree]);
 
   const handleDragStart = useCallback((event: DragStartEvent) => { setActiveId(event.active.id as string); }, []);
   const handleDragEnd = useCallback(async (event: DragEndEvent) => {
     setActiveId(null);
     const { active, over } = event;
     if (!over || active.id === over.id) return;
-    try { await api.moveTask(active.id as string, over.id as string); toast.success('Déplacé'); await refreshTree(); } catch (e) { toast.error('Erreur déplacement'); }
-  }, [refreshTree]);
+
+    // Find the target node in the tree to determine if it's a folder or task
+    const findNode = (nodes: Task[], id: string): Task | null => {
+      for (const n of nodes) {
+        if (n.id === id) return n;
+        if (n.children) {
+          const found = findNode(n.children, id);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+
+    const overId = over.id as string;
+    const targetNode = findNode(tree, overId);
+
+    // If dropping onto a folder → move inside it
+    // If dropping onto a task → move to the same parent (become sibling)
+    // If target not found (e.g. root area) → move to root
+    let newParentId: string;
+    if (!targetNode) {
+      newParentId = 'root';
+    } else if (targetNode.type === 'folder') {
+      newParentId = targetNode.id;
+    } else {
+      newParentId = targetNode.parent_id || 'root';
+    }
+
+    // Don't move if already in the same parent
+    const activeNode = findNode(tree, active.id as string);
+    if (activeNode && activeNode.parent_id === newParentId) return;
+
+    try { await api.moveTask(active.id as string, newParentId); toast.success('Moved'); await refreshTree(); } catch (e) { toast.error('Error moving'); }
+  }, [refreshTree, tree]);
 
   const handleClearSearch = useCallback(() => { setSearchQuery(''); setExpanded({ root: true }); }, []);
   const handleMouseDown = useCallback(() => { setIsResizing(true); }, []);
 
   const handleKanbanStatusChange = useCallback(async (taskId: string, status: string) => {
-    try { await api.updateTask(taskId, { status }); await refreshTree(); toast.success('Statut mis à jour'); } catch (e) { toast.error('Erreur mise à jour statut'); }
+    try { await api.updateTask(taskId, { status }); await refreshTree(); toast.success('Status updated'); } catch (e) { toast.error('Error updating status'); }
   }, [refreshTree]);
 
-  const handleSave = useCallback(async () => {
-    if (selected.length === 0) return;
-    try { await api.updateTask(selected[0].id, { content: editContent }); await api.unlockTask(selected[0].id, getUserId()); setEditMode(false); toast.success('Enregistré'); refreshTree(); } catch (e) { toast.error('Erreur enregistrement'); }
-  }, [selected, editContent, getUserId, refreshTree]);
+  const handleKanbanReorder = useCallback(async (taskIds: string[]) => {
+    try { await api.reorderTasks(taskIds); } catch (e) { console.error('Error reordering tasks:', e); }
+  }, []);
 
-  const handleCancel = useCallback(async () => {
-    if (selected.length === 0) return;
-    try { await api.unlockTask(selected[0].id, getUserId()); setEditMode(false); setEditContent(selected[0].content || ''); } catch (e) { console.error(e); }
-  }, [selected, getUserId]);
-
-  const handleEdit = useCallback(async () => {
+  const handleSave = useCallback(async (contentFromEditor: string) => {
     if (selected.length === 0) return;
     try {
-      const r = await api.lockTask(selected[0].id, getUserId(), getUserName());
-      if (r.success) { setEditMode(true); setEditContent(selected[0].content || ''); } else { toast.error('Verrouillé par un autre utilisateur'); }
-    } catch (e) { toast.error('Erreur verrouillage'); }
-  }, [selected, getUserId, getUserName]);
+      await api.updateTask(selected[0].id, { content: contentFromEditor });
+      setEditMode(false);
+      setEditContent(contentFromEditor);
+      toast.success('Saved');
+      refreshTree();
+    } catch (e) { toast.error('Error saving'); }
+  }, [selected, refreshTree]);
+
+  const handleClose = useCallback(() => {
+    setEditMode(false);
+  }, []);
+
+  // Track unsaved changes for the global guard modal
+  const editorDirtyRef = React.useRef(false);
+
+  const handleEditorDirtyChange = useCallback((isDirty: boolean) => {
+    editorDirtyRef.current = isDirty;
+    if (editMode) {
+      setUnsavedChanges(isDirty, {
+        onSave: undefined, // Save is handled by the editor itself
+        onDiscard: () => {
+          setEditMode(false);
+          setEditContent(selected.length > 0 ? (selected[0].content || '') : '');
+        },
+      });
+    }
+  }, [editMode, selected, setUnsavedChanges]);
+
+  useEffect(() => {
+    if (!editMode) {
+      setUnsavedChanges(false);
+    }
+  }, [editMode, setUnsavedChanges]);
+
+  const handleEdit = useCallback(() => {
+    if (selected.length === 0) return;
+    setEditMode(true);
+    setEditContent(selected[0].content || '');
+  }, [selected]);
 
   const updateTaskField = async (field: string, value: any) => {
     if (selected.length === 0) return;
-    try { await api.updateTask(selected[0].id, { [field]: value }); setSelected(p => p.map(t => t.id === selected[0].id ? { ...t, [field]: value } : t)); refreshTree(); toast.success('Mis à jour'); } catch (e) { toast.error('Erreur mise à jour'); }
+    try { await api.updateTask(selected[0].id, { [field]: value }); setSelected(p => p.map(t => t.id === selected[0].id ? { ...t, [field]: value } : t)); refreshTree(); toast.success('Updated'); } catch (e) { toast.error('Error updating'); }
   };
   const handleStatusChange = (s: string) => updateTaskField('status', s);
   const handlePriorityChange = (p: string) => updateTaskField('priority', p);
@@ -591,27 +667,15 @@ function TasksApp() {
 
   const handleAddTag = async (name: string) => {
     if (selected.length === 0) return;
-    try { const r = await api.updateTaskTags(selected[0].id, [...taskTags.map(t => t.name), name]); setTaskTags(r.tags); toast.success('Tag ajouté'); } catch (e) { toast.error('Erreur ajout tag'); }
+    try { const r = await api.updateTaskTags(selected[0].id, [...taskTags.map(t => t.name), name]); setTaskTags(r.tags); toast.success('Tag added'); } catch (e) { toast.error('Error adding tag'); }
   };
   const handleRemoveTag = async (tagId: string) => {
     if (selected.length === 0) return;
-    try { const r = await api.updateTaskTags(selected[0].id, taskTags.filter(t => t.id !== tagId).map(t => t.name)); setTaskTags(r.tags); toast.success('Tag supprimé'); } catch (e) { toast.error('Erreur suppression tag'); }
+    try { const r = await api.updateTaskTags(selected[0].id, taskTags.filter(t => t.id !== tagId).map(t => t.name)); setTaskTags(r.tags); toast.success('Tag removed'); } catch (e) { toast.error('Error removing tag'); }
   };
   const handleAssignmentsChange = async (assigneeIds: number[], respId?: number) => {
     if (selected.length === 0) return;
-    try { const r = await api.updateTaskAssignees(selected[0].id, { assignee_ids: assigneeIds, responsible_id: respId ?? null }); setAssignees(r.assignees); setResponsibleId(r.responsible_id ?? null); toast.success('Assignations mises à jour'); } catch (e) { toast.error('Erreur mise à jour assignations'); }
-  };
-  const handleAddTimelineEntry = async (entry: { title: string; description?: string }) => {
-    if (selected.length === 0) return;
-    try {
-      const r = await api.addTaskTimelineEntry(selected[0].id, entry);
-      setTimeline(p => [r.entry, ...p]);
-      toast.success('Note ajoutée');
-      return r; // Return the result so TaskTimeline can access entry.id
-    } catch (e) {
-      toast.error('Erreur ajout note');
-      throw e;
-    }
+    try { const r = await api.updateTaskAssignees(selected[0].id, { assignee_ids: assigneeIds, responsible_id: respId ?? null }); setAssignees(r.assignees); setResponsibleId(r.responsible_id ?? null); toast.success('Assignments updated'); } catch (e) { toast.error('Error updating assignments'); }
   };
   const handleAddComment = async (content: string) => {
     if (selected.length === 0) return;
@@ -619,9 +683,9 @@ function TasksApp() {
       // Create comment with content (file links should already be included in content)
       const r = await api.addTaskComment(selected[0].id, { content });
       setComments(p => [...p, r.comment]);
-      toast.success('Commentaire ajouté');
+      toast.success('Comment added');
     } catch (e) {
-      toast.error('Erreur ajout commentaire');
+      toast.error('Error adding comment');
       throw e;
     }
   };
@@ -630,20 +694,9 @@ function TasksApp() {
     try {
       const r = await api.updateTaskComment(selected[0].id, commentId, { content });
       setComments(p => p.map(c => c.id === commentId ? r.comment : c));
-      toast.success('Commentaire modifié');
+      toast.success('Comment updated');
     } catch (e) {
-      toast.error('Erreur modification commentaire');
-      throw e;
-    }
-  };
-  const handleUpdateTimelineEntry = async (entryId: string, data: { title?: string; description?: string }) => {
-    if (selected.length === 0) return;
-    try {
-      const r = await api.updateTaskTimelineEntry(selected[0].id, entryId, data);
-      setTimeline(p => p.map(t => t.id === entryId ? r.entry : t));
-      toast.success('Note modifiée');
-    } catch (e) {
-      toast.error('Erreur modification note');
+      toast.error('Error updating comment');
       throw e;
     }
   };
@@ -652,50 +705,35 @@ function TasksApp() {
     try {
       await api.deleteTaskComment(selected[0].id, commentId);
       setComments(p => p.filter(c => c.id !== commentId));
-      toast.success('Commentaire supprimé');
+      toast.success('Comment deleted');
     } catch (e) {
-      toast.error('Erreur suppression commentaire');
-      throw e;
-    }
-  };
-  const handleDeleteTimelineEntry = async (entryId: string) => {
-    if (selected.length === 0) return;
-    try {
-      await api.deleteTaskTimelineEntry(selected[0].id, entryId);
-      setTimeline(p => p.filter(t => t.id !== entryId));
-      toast.success('Entrée supprimée');
-    } catch (e) {
-      toast.error('Erreur suppression entrée');
+      toast.error('Error deleting comment');
       throw e;
     }
   };
   const handleUploadFile = async (file: File) => {
     if (selected.length === 0) return;
-    try { const r = await api.uploadTaskFile(selected[0].id, file); setFiles(p => [r.file, ...p]); toast.success('Fichier uploadé'); } catch (e) { toast.error('Erreur upload'); }
+    try { const r = await api.uploadTaskFile(selected[0].id, file); setFiles(p => [r.file, ...p]); toast.success('File uploaded'); } catch (e) { toast.error('Error uploading file'); }
   };
   const handleDeleteFile = async (fileId: string) => {
     if (selected.length === 0) return;
-    try { await api.deleteTaskFile(selected[0].id, fileId); setFiles(p => p.filter(f => f.id !== fileId)); toast.success('Fichier supprimé'); } catch (e) { toast.error('Erreur suppression fichier'); }
-  };
-  const handleUpdateFileNote = async (fileId: string, note: string) => {
-    if (selected.length === 0) return;
-    try { await api.updateTaskFileNote(selected[0].id, fileId, note); setFiles(p => p.map(f => f.id === fileId ? { ...f, markdown_note: note } : f)); toast.success('Note mise à jour'); } catch (e) { toast.error('Erreur mise à jour note'); }
+    try { await api.deleteTaskFile(selected[0].id, fileId); setFiles(p => p.filter(f => f.id !== fileId)); toast.success('File deleted'); } catch (e) { toast.error('Error deleting file'); }
   };
   const handleAddChecklistItem = async (text: string) => {
     if (selected.length === 0) return;
-    try { const r = await api.addTaskChecklistItem(selected[0].id, text); setChecklistItems(p => [...p, r.item]); toast.success('Item ajouté'); } catch (e) { toast.error('Erreur ajout item'); }
+    try { const r = await api.addTaskChecklistItem(selected[0].id, text); setChecklistItems(p => [...p, r.item]); toast.success('Item added'); } catch (e) { toast.error('Error adding item'); }
   };
   const handleToggleChecklistItem = async (itemId: string, completed: boolean) => {
     if (selected.length === 0) return;
-    try { await api.updateTaskChecklistItem(selected[0].id, itemId, { completed }); setChecklistItems(p => p.map(i => i.id === itemId ? { ...i, completed } : i)); } catch (e) { toast.error('Erreur mise à jour item'); }
+    try { await api.updateTaskChecklistItem(selected[0].id, itemId, { completed }); setChecklistItems(p => p.map(i => i.id === itemId ? { ...i, completed } : i)); } catch (e) { toast.error('Error updating item'); }
   };
   const handleDeleteChecklistItem = async (itemId: string) => {
     if (selected.length === 0) return;
-    try { await api.deleteTaskChecklistItem(selected[0].id, itemId); setChecklistItems(p => p.filter(i => i.id !== itemId)); toast.success('Item supprimé'); } catch (e) { toast.error('Erreur suppression item'); }
+    try { await api.deleteTaskChecklistItem(selected[0].id, itemId); setChecklistItems(p => p.filter(i => i.id !== itemId)); toast.success('Item deleted'); } catch (e) { toast.error('Error deleting item'); }
   };
   const handleUpdateChecklistItem = async (itemId: string, text: string) => {
     if (selected.length === 0) return;
-    try { await api.updateTaskChecklistItem(selected[0].id, itemId, { text }); setChecklistItems(p => p.map(i => i.id === itemId ? { ...i, text } : i)); toast.success('Item mis à jour'); } catch (e) { toast.error('Erreur mise à jour item'); }
+    try { await api.updateTaskChecklistItem(selected[0].id, itemId, { text }); setChecklistItems(p => p.map(i => i.id === itemId ? { ...i, text } : i)); toast.success('Item updated'); } catch (e) { toast.error('Error updating item'); }
   };
 
   useEffect(() => {
@@ -713,14 +751,11 @@ function TasksApp() {
     });
 
     const unsub1 = websocket.onTaskTreeChanged(async () => { await refreshTree(); });
-    const unsub2 = websocket.onTaskLockUpdate((taskId, lockInfo) => {
-      setTree(p => { const upd = (nodes: Task[]): Task[] => nodes.map(n => n.id === taskId ? { ...n, locked_by: lockInfo } : n.children ? { ...n, children: upd(n.children) } : n); return upd(p); });
-      setSelected(p => p.map(t => t.id === taskId ? { ...t, locked_by: lockInfo } : t));
-    });
+    const unsub2 = websocket.onTaskLockUpdate(() => { /* Lock disabled for tasks */ });
     const unsub3 = websocket.onTaskActivityUpdate((taskId) => {
       // Use ref to check selection without causing re-renders
       if (selectedRef.current.some(s => s.id === taskId)) {
-        refreshTaskActivity(taskId);
+        refreshComments(taskId);
         refreshTaskTags(taskId);
         refreshTaskAssignees(taskId);
         refreshTaskFiles(taskId);
@@ -728,7 +763,7 @@ function TasksApp() {
       }
     });
     return () => { unsubPresence(); unsub1(); unsub2(); unsub3(); websocket.disconnect(); };
-  }, [refreshTree, refreshTaskActivity, refreshTaskTags, refreshTaskAssignees, refreshTaskFiles, refreshTaskChecklist]);
+  }, [refreshTree, refreshComments, refreshTaskTags, refreshTaskAssignees, refreshTaskFiles, refreshTaskChecklist]);
 
   // Presence join/leave
   useEffect(() => {
@@ -739,18 +774,6 @@ function TasksApp() {
     return () => { if (taskId) websocket.leaveDocument(taskId); };
   }, [user]);
 
-  // Heartbeat
-  useEffect(() => {
-    // Use ref to check selection without causing re-renders
-    if (!editMode || selectedRef.current.length !== 1) return;
-    const task = selectedRef.current[0];
-    const userId = user?.id ? String(user.id) : getUserId();
-    if (task.locked_by?.user_id && String(task.locked_by.user_id) === userId) {
-      api.heartbeatTask(task.id).catch(console.error);
-      const i = setInterval(() => api.heartbeatTask(task.id).catch(console.error), 120000);
-      return () => clearInterval(i);
-    }
-  }, [editMode, user, getUserId]);
 
   // Auto-select pending item
   useEffect(() => {
@@ -761,35 +784,67 @@ function TasksApp() {
     }
   }, [pendingSelection, tree, handleSelectTask]);
 
+  if (isKanbanView) {
+    return (
+      <TaskKanban
+        tasks={filteredTree}
+        workspaceId={currentWorkspace}
+        onBack={() => setIsKanbanView(false)}
+        onSelectTask={(task) => { setIsKanbanView(false); handleSelectTask(task); }}
+        onStatusChange={canWrite ? handleKanbanStatusChange : undefined}
+        onReorder={canWrite ? handleKanbanReorder : undefined}
+      />
+    );
+  }
+
   return (
     <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div className="flex h-full bg-gray-50 dark:bg-gray-900" style={{ cursor: isResizing ? 'col-resize' : activeId ? 'grabbing' : 'default' }}>
-        <div className="flex flex-col" style={{ width: treeWidth }}>
-          <div className="p-4 border-b border-gray-200 dark:border-gray-800">
-            <button onClick={() => setIsKanbanModalOpen(true)} className="flex w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-3 text-sm font-medium text-blue-700 transition-all hover:from-blue-100 hover:to-indigo-100 hover:shadow-md dark:border-blue-800 dark:from-blue-900/20 dark:to-indigo-900/20 dark:text-blue-400 dark:hover:from-blue-900/30 dark:hover:to-indigo-900/30" title="Ouvrir la vue Kanban">
-              <LayoutGrid size={18} /> Vue Kanban
+        {/* Collapsed sidebar strip */}
+        {sidebarCollapsed ? (
+          <div className="flex flex-col items-center gap-2 border-r border-gray-200 bg-white py-3 px-1.5 dark:border-gray-700 dark:bg-gray-800">
+            <button
+              onClick={toggleSidebar}
+              className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              title="Show sidebar"
+            >
+              <PanelLeftOpen size={18} />
+            </button>
+            <button
+              onClick={() => setIsKanbanView(true)}
+              className="rounded-lg p-2 text-blue-500 transition-colors hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30"
+              title="Kanban View"
+            >
+              <LayoutGrid size={18} />
             </button>
           </div>
-          <TaskTree tree={filteredTree} expanded={expanded} selected={selected} onToggleExpand={handleToggleExpand} onExpandAll={handleExpandAll} onCollapseAll={handleCollapseAll} onSelect={handleSelectTask} onSelectAll={handleSelectAll} onCreate={canWrite ? handleCreateTask : undefined} onCreateFolder={canWrite ? handleCreateFolder : undefined} onDelete={canWrite ? handleDelete : undefined} onRename={canWrite ? handleRename : undefined} onCopy={handleCopy} userPermission={userPermission} searchQuery={searchQuery} onSearchChange={setSearchQuery} onClearSearch={handleClearSearch} statusFilter={statusFilter} onStatusFilterChange={setStatusFilter} priorityFilter={priorityFilter} onPriorityFilterChange={setPriorityFilter} allTags={availableTags} selectedTags={selectedTags} onTagFilterChange={setSelectedTags} onUnlock={canWrite ? handleForceUnlock : undefined} width={treeWidth} readOnly={userPermission === 'read'} />
-        </div>
-        <div className="w-1 cursor-col-resize bg-gray-300 transition-colors hover:bg-blue-500 dark:bg-gray-700" onMouseDown={handleMouseDown} />
+        ) : (
+          <>
+            <div className="flex flex-col" style={{ width: treeWidth }}>
+              <div className="flex items-center gap-2 p-4 border-b border-gray-200 dark:border-gray-800">
+                <button onClick={() => setIsKanbanView(true)} className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-blue-200 bg-gradient-to-r from-blue-50 to-indigo-50 px-4 py-3 text-sm font-medium text-blue-700 transition-all hover:from-blue-100 hover:to-indigo-100 hover:shadow-md dark:border-blue-800 dark:from-blue-900/20 dark:to-indigo-900/20 dark:text-blue-400 dark:hover:from-blue-900/30 dark:hover:to-indigo-900/30" title="Open Kanban view">
+                  <LayoutGrid size={18} /> Kanban View
+                </button>
+              </div>
+              <TaskTree tree={filteredTree} expanded={expanded} selected={selected} onToggleExpand={handleToggleExpand} onExpandAll={handleExpandAll} onCollapseAll={handleCollapseAll} onSelect={handleSelectTask} onSelectAll={handleSelectAll} onCreate={canWrite ? handleCreateTask : undefined} onCreateFolder={canWrite ? handleCreateFolder : undefined} onDelete={canWrite ? handleDelete : undefined} onRename={canWrite ? handleRename : undefined} onCopy={handleCopy} userPermission={userPermission} searchQuery={searchQuery} onSearchChange={setSearchQuery} onClearSearch={handleClearSearch} statusFilter={statusFilter} onStatusFilterChange={setStatusFilter} priorityFilter={priorityFilter} onPriorityFilterChange={setPriorityFilter} allTags={availableTags} selectedTags={selectedTags} onTagFilterChange={setSelectedTags} width={treeWidth} readOnly={userPermission === 'read'} onCollapseSidebar={toggleSidebar} />
+            </div>
+            <div className="w-1 cursor-col-resize bg-gray-300 transition-colors hover:bg-blue-500 dark:bg-gray-700" onMouseDown={handleMouseDown} />
+          </>
+        )}
         {selected.length > 0 ? (
           editMode ? (
             <div className="flex flex-1 flex-col">
-              <TaskEditor task={selected[0]} content={editContent} onContentChange={setEditContent} onSave={handleSave} onCancel={handleCancel} onStatusChange={handleStatusChange} onPriorityChange={handlePriorityChange} onDueDateChange={handleDueDateChange} tags={taskTags} availableTags={availableTags} onAddTag={canWrite ? handleAddTag : undefined} onRemoveTag={canWrite ? handleRemoveTag : undefined} assignees={assignees} responsibleId={responsibleId} onAssigneesChange={canWrite ? handleAssignmentsChange : undefined} workspaceId={currentWorkspace} />
+              <TaskEditor task={selected[0]} initialContent={editContent} onSave={handleSave} onClose={handleClose} onDirtyChange={handleEditorDirtyChange} userId={user?.id || ''} userName={user?.username || 'Anonymous'} onStatusChange={handleStatusChange} onPriorityChange={handlePriorityChange} onDueDateChange={handleDueDateChange} tags={taskTags} availableTags={availableTags} onAddTag={canWrite ? handleAddTag : undefined} onRemoveTag={canWrite ? handleRemoveTag : undefined} assignees={assignees} responsibleId={responsibleId} onAssigneesChange={canWrite ? handleAssignmentsChange : undefined} workspaceId={currentWorkspace} workflowSteps={workflowSteps} />
             </div>
           ) : (
             <div className="flex flex-1 flex-col">
-              <TaskViewer task={selected[0]} onEdit={handleEdit} canEdit={selected[0].type === 'task' && canWrite} lockedByOther={Boolean(selected[0].locked_by && selected[0].locked_by.user_id !== getUserId())} onStatusChange={handleStatusChange} onPriorityChange={handlePriorityChange} onDueDateChange={handleDueDateChange} tags={taskTags} availableTags={availableTags} onAddTag={canWrite ? handleAddTag : undefined} onRemoveTag={canWrite ? handleRemoveTag : undefined} assignees={assignees} responsibleId={responsibleId} onAssigneesChange={canWrite ? handleAssignmentsChange : undefined} workspaceId={currentWorkspace} timeline={timeline} timelineLoading={timelineLoading} onAddTimelineEntry={canWrite ? handleAddTimelineEntry : undefined} comments={comments} commentsLoading={commentsLoading} onAddComment={canWrite ? handleAddComment : undefined} canCollaborate={canWrite} files={files} filesLoading={filesLoading} onUploadFile={canWrite ? handleUploadFile : undefined} onDeleteFile={canWrite ? handleDeleteFile : undefined} onUpdateFileNote={canWrite ? handleUpdateFileNote : undefined} checklistItems={checklistItems} checklistLoading={checklistLoading} onAddChecklistItem={canWrite ? handleAddChecklistItem : undefined} onToggleChecklistItem={canWrite ? handleToggleChecklistItem : undefined} onDeleteChecklistItem={canWrite ? handleDeleteChecklistItem : undefined}                 onUpdateChecklistItem={canWrite ? handleUpdateChecklistItem : undefined}
+              <TaskViewer task={selected[0]} onEdit={handleEdit} canEdit={selected[0].type === 'task' && canWrite} onStatusChange={handleStatusChange} onPriorityChange={handlePriorityChange} onDueDateChange={handleDueDateChange} tags={taskTags} availableTags={availableTags} onAddTag={canWrite ? handleAddTag : undefined} onRemoveTag={canWrite ? handleRemoveTag : undefined} assignees={assignees} responsibleId={responsibleId} onAssigneesChange={canWrite ? handleAssignmentsChange : undefined} workspaceId={currentWorkspace} comments={comments} commentsLoading={commentsLoading} onAddComment={canWrite ? handleAddComment : undefined} canCollaborate={canWrite} files={files} filesLoading={filesLoading} onUploadFile={canWrite ? handleUploadFile : undefined} onDeleteFile={canWrite ? handleDeleteFile : undefined} checklistItems={checklistItems} checklistLoading={checklistLoading} onAddChecklistItem={canWrite ? handleAddChecklistItem : undefined} onToggleChecklistItem={canWrite ? handleToggleChecklistItem : undefined} onDeleteChecklistItem={canWrite ? handleDeleteChecklistItem : undefined} onUpdateChecklistItem={canWrite ? handleUpdateChecklistItem : undefined}
                 presenceUsers={presence[selected[0].id]}
-                onUnlock={handleUnlock}
                 isEditing={false}
-                currentUserId={user?.id || null}
-                taskId={selected[0].id}
-                onUpdateTimelineEntry={canWrite ? handleUpdateTimelineEntry : undefined}
-                onDeleteTimelineEntry={canWrite ? handleDeleteTimelineEntry : undefined}
+                currentUserId={user?.id ? Number(user.id) : null}
                 onUpdateComment={canWrite ? handleUpdateComment : undefined}
                 onDeleteComment={canWrite ? handleDeleteComment : undefined}
+                workflowSteps={workflowSteps}
               />
             </div>
           )
@@ -799,7 +854,6 @@ function TasksApp() {
           </div>
         )}
       </div>
-      <TaskKanbanModal isOpen={isKanbanModalOpen} onClose={() => setIsKanbanModalOpen(false)} tasks={filteredTree} onSelectTask={handleSelectTask} onStatusChange={canWrite ? handleKanbanStatusChange : undefined} />
       <DragOverlay dropAnimation={null}>
         {activeNode ? (
           <div className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 shadow-xl dark:border-gray-600 dark:bg-gray-800">

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Header from '../components/layout/Header';
-import { Key, Lock, Folder, X, Trash2 } from 'lucide-react';
+import { Key, Lock, Folder, X, Trash2, PanelLeftOpen } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useWorkspace } from '../contexts/WorkspaceContext';
 import { toast } from 'react-hot-toast';
@@ -31,6 +31,16 @@ const VaultPage: React.FC = () => {
     const saved = localStorage.getItem('vaultSidebarWidth');
     return saved ? parseInt(saved, 10) : 320;
   });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    return localStorage.getItem('markd_vault_sidebar_collapsed') === 'true';
+  });
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem('markd_vault_sidebar_collapsed', String(next));
+      return next;
+    });
+  }, []);
   const [isResizing, setIsResizing] = useState(false);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [allTags, setAllTags] = useState<TagType[]>([]);
@@ -73,7 +83,7 @@ const VaultPage: React.FC = () => {
                     return null;
                 };
                 const name = findName(prevTree);
-                if (name) toast(`${lockInfo.user_name} édite "${name}"`, { icon: '🔒' });
+                if (name) toast(`${lockInfo.user_name} is editing "${name}"`, { icon: '🔒' });
             }
             return newTree;
         });
@@ -161,7 +171,7 @@ const VaultPage: React.FC = () => {
         setShowForm(true);
     } catch (e) {
         console.error(e);
-        toast.error("Impossible de verrouiller le mot de passe");
+        toast.error("Failed to lock password");
     }
   };
 
@@ -182,11 +192,11 @@ const VaultPage: React.FC = () => {
     
     try {
       await api.unlockPassword(selectedPassword.id, String(user.id));
-      toast.success('Verrou retiré');
+      toast.success('Lock removed');
       // Tree will be updated via WebSocket
     } catch (e) {
       console.error(e);
-      toast.error("Impossible de retirer le verrou");
+      toast.error("Failed to remove lock");
     }
   };
 
@@ -373,6 +383,18 @@ const VaultPage: React.FC = () => {
     }
   }, [loadSelectedPasswords]);
 
+  // Load all tags for filter
+  const loadAllTags = useCallback(async () => {
+    try {
+      const result = await api.getPasswordTagSuggestions('', 100);
+      if (result.success) {
+        setAllTags(result.tags);
+      }
+    } catch (error) {
+      console.error('Error loading tags:', error);
+    }
+  }, []);
+
   // Fetch tree when workspace changes or when workspaces are loaded
   useEffect(() => {
     if (currentWorkspace && currentWorkspace !== '') {
@@ -383,12 +405,11 @@ const VaultPage: React.FC = () => {
       fetchTree(currentWorkspace);
       loadAllTags();
     }
-  }, [currentWorkspace, fetchTree]);
+  }, [currentWorkspace, fetchTree, loadAllTags]);
   
   // Listen to hash changes (when navigating back to this module)
   useEffect(() => {
-    const cleanup = onHashChange((selections) => {
-      const hashIds = selections.password;
+    const handleHashRestore = (hashIds: string[]) => {
       if (hashIds.length > 0 && tree.length > 0) {
         // Check if selection is already correct to avoid loop
         const currentIds = selected.map(s => s.id).sort().join(',');
@@ -397,18 +418,44 @@ const VaultPage: React.FC = () => {
           return; // Already selected, no need to restore
         }
         
+        // Prevent processing if already restoring
+        if (isRestoringRef.current || processingHashRef.current) {
+          return;
+        }
+        
         // Set flag to prevent saving during restoration
         isRestoringRef.current = true;
+        processingHashRef.current = true;
         loadSelectedPasswords(hashIds, tree).then(() => {
           // Reset flag after restoration
           setTimeout(() => {
             isRestoringRef.current = false;
+            processingHashRef.current = false;
           }, 200);
         });
       }
+    };
+    
+    const cleanup = onHashChange((selections) => {
+      handleHashRestore(selections.password);
     });
     
-    return cleanup;
+    // Also check on visibility change (when returning to module)
+    const handleVisibilityChange = () => {
+      if (!document.hidden && tree.length > 0) {
+        const hashIds = getHashSelection('password');
+        if (hashIds.length > 0) {
+          handleHashRestore(hashIds);
+        }
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      cleanup();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [tree, loadSelectedPasswords, selected]);
 
   // Load tags for a password
@@ -500,7 +547,7 @@ const VaultPage: React.FC = () => {
     if (item.type === 'password' && (!event || (!event.ctrlKey && !event.metaKey && !event.shiftKey))) {
       // Set URL hash (skip if already processing from hash)
       if (!processingHashRef.current) {
-        window.location.hash = `vault=${item.id}`;
+        window.location.hash = `password=${item.id}`;
       }
       fetchPasswordDetail(item.id);
     }
@@ -552,8 +599,8 @@ const VaultPage: React.FC = () => {
     if (tree.length === 0) return;
     const handleHashChange = async () => {
       const hash = window.location.hash;
-      if (hash.startsWith('#vault=')) {
-        const passwordId = hash.replace('#vault=', '');
+      if (hash.startsWith('#password=')) {
+        const passwordId = hash.replace('#password=', '');
         if (passwordId && selectedPassword?.id === passwordId) {
           // Already selected, skip to avoid loop
           return;
@@ -671,7 +718,7 @@ const VaultPage: React.FC = () => {
                       onClick={onView}
                       className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400 dark:border-blue-400 dark:text-blue-300 dark:hover:bg-blue-900/30"
                     >
-                      Voir
+                      View
                     </button>
                   </div>
                 </div>
@@ -745,7 +792,7 @@ const VaultPage: React.FC = () => {
           for (const ch of showLimited(created)) {
             toast.custom(
               <ToastChange
-                title={`Nouveau ${ch.type === 'folder' ? 'dossier' : 'mot de passe'} : ${ch.name}`}
+                title={`New ${ch.type === 'folder' ? 'folder' : 'password'}: ${ch.name}`}
                 onView={() => expandToAndSelect(ch.id, result.tree || [])}
               />,
               { duration: 25000 }
@@ -754,8 +801,8 @@ const VaultPage: React.FC = () => {
           for (const ch of showLimited(movedOrRenamed)) {
             toast.custom(
               <ToastChange
-                title={`${ch.type === 'folder' ? 'Dossier' : 'Mot de passe'} mis à jour : ${ch.name}`}
-                subtitle="Renommé ou déplacé"
+                title={`${ch.type === 'folder' ? 'Folder' : 'Password'} updated: ${ch.name}`}
+                subtitle="Renamed or moved"
                 onView={() => expandToAndSelect(ch.id, result.tree || [])}
               />,
               { duration: 25000 }
@@ -764,15 +811,15 @@ const VaultPage: React.FC = () => {
           for (const ch of showLimited(contentUpdated)) {
             toast.custom(
               <ToastChange
-                title={`Mot de passe mis à jour : ${ch.name}`}
-                subtitle="Contenu enregistré"
+                title={`Password updated: ${ch.name}`}
+                subtitle="Content saved"
                 onView={() => expandToAndSelect(ch.id, result.tree || [])}
               />,
               { duration: 25000 }
             );
           }
 
-          // Toast for deletions (without "Voir" button)
+          // Toast for deletions (without "View" button)
           for (const del of showLimited(deleted)) {
             const ToastDelete: React.FC<{ title: string; path: string }> = ({ title, path }) => {
               const [start, setStart] = React.useState(false);
@@ -812,7 +859,7 @@ const VaultPage: React.FC = () => {
             };
             toast.custom(
               <ToastDelete
-                title={`${del.type === 'folder' ? 'Dossier' : 'Mot de passe'} supprimé : ${del.name}`}
+                title={`${del.type === 'folder' ? 'Folder' : 'Password'} deleted: ${del.name}`}
                 path={del.path}
               />,
               { duration: 25000 }
@@ -864,17 +911,6 @@ const VaultPage: React.FC = () => {
     };
   }, [currentWorkspace, handleSelectPassword]);
 
-  // Load all tags for filter
-  const loadAllTags = async () => {
-    try {
-      const result = await api.getPasswordTagSuggestions('', 100);
-      if (result.success) {
-        setAllTags(result.tags);
-      }
-    } catch (error) {
-      console.error('Error loading tags:', error);
-    }
-  };
 
 
   const handleToggleExpand = useCallback((id: string) => {
@@ -941,7 +977,7 @@ const VaultPage: React.FC = () => {
 
   const handleCreateFolder = useCallback(async (parentId: string, name: string) => {
     if (!name || !name.trim()) {
-      toast.error('Le nom du dossier ne peut pas être vide');
+      toast.error('Folder name cannot be empty');
       return;
     }
 
@@ -958,7 +994,7 @@ const VaultPage: React.FC = () => {
 
       if (result.success) {
         const newFolderId = result.id;
-        toast.success(`Dossier "${name.trim()}" créé`);
+        toast.success(`Folder "${name.trim()}" created`);
         await fetchTree(currentWorkspace);
 
         // Auto-expand parent folder if created inside a folder
@@ -971,11 +1007,11 @@ const VaultPage: React.FC = () => {
           setPendingSelection(newFolderId);
         }
       } else {
-        toast.error((result as any).detail || 'Erreur lors de la création du dossier');
+        toast.error((result as any).detail || 'Failed to create folder');
       }
     } catch (error: any) {
       console.error('Error creating folder:', error);
-      const errorMessage = error.detail || error.message || error.toString() || 'Erreur lors de la création du dossier';
+      const errorMessage = error.detail || error.message || error.toString() || 'Failed to create folder';
       toast.error(errorMessage);
     }
   }, [currentWorkspace, fetchTree]);
@@ -1025,7 +1061,7 @@ const VaultPage: React.FC = () => {
         };
         const activeNode = findNode(tree, id);
         if (activeNode) {
-          toast.success(`"${activeNode.name}" déplacé`);
+          toast.success(`"${activeNode.name}" moved`);
         }
         await fetchTree(currentWorkspace);
       }
@@ -1093,15 +1129,15 @@ const VaultPage: React.FC = () => {
       }
 
       if (successCount > 0) {
-        const targetName = targetId === 'root' ? 'la racine' : `"${targetNode?.name}"`;
+        const targetName = targetId === 'root' ? 'root' : `"${targetNode?.name}"`;
         const message = itemsToMove.length === 1 
-          ? `"${itemsToMove[0].name}" déplacé vers ${targetName}`
-          : `${successCount} éléments déplacés vers ${targetName}`;
+          ? `"${itemsToMove[0].name}" moved to ${targetName}`
+          : `${successCount} items moved to ${targetName}`;
         toast.success(message);
       }
 
       if (errors.length > 0) {
-        toast.error(`Erreur lors du déplacement de : ${errors.slice(0, 3).join(', ')}${errors.length > 3 ? '...' : ''}`);
+        toast.error(`Failed to move: ${errors.slice(0, 3).join(', ')}${errors.length > 3 ? '...' : ''}`);
       }
 
     } catch (error) {
@@ -1118,10 +1154,10 @@ const VaultPage: React.FC = () => {
       if (result.success) {
         setPasswordTags(prev => ({ ...prev, [passwordId]: result.tags }));
         await loadAllTags();
-        toast.success('Tag ajouté');
+        toast.success('Tag added');
       }
     } catch (error) {
-      toast.error('Erreur lors de l\'ajout du tag');
+      toast.error('Failed to add tag');
       throw error;
     }
   };
@@ -1134,10 +1170,10 @@ const VaultPage: React.FC = () => {
       const result = await api.updatePasswordTags(passwordId, newTags);
       if (result.success) {
         setPasswordTags(prev => ({ ...prev, [passwordId]: result.tags }));
-        toast.success('Tag supprimé');
+        toast.success('Tag removed');
       }
     } catch (error) {
-      toast.error('Erreur lors de la suppression du tag');
+      toast.error('Failed to remove tag');
       throw error;
     }
   };
@@ -1238,11 +1274,11 @@ const VaultPage: React.FC = () => {
           fetchPasswordDetail(modifiedId);
         }
       } else {
-        toast.error((result as any).detail || 'Erreur lors de la modification');
+        toast.error((result as any).detail || 'Failed to update password');
       }
     } catch (error: any) {
       console.error('Error updating password:', error);
-      toast.error(error.detail || 'Erreur de connexion au serveur');
+      toast.error(error.detail || 'Server connection error');
     } finally {
       setIsLoading(false);
     }
@@ -1262,9 +1298,9 @@ const VaultPage: React.FC = () => {
       if (!response.ok) {
         const data = await response.json();
         if (response.status === 403) {
-          toast.error('Permission refusée : vous devez avoir les droits d\'écriture ou admin');
+          toast.error('Permission denied: write or admin access required');
         } else {
-          toast.error(data.detail || 'Erreur lors de la suppression');
+          toast.error(data.detail || 'Failed to delete');
         }
         return;
       }
@@ -1280,7 +1316,7 @@ const VaultPage: React.FC = () => {
       }
     } catch (error) {
       console.error('Delete error:', error);
-      toast.error('Erreur de connexion au serveur');
+      toast.error('Server connection error');
     }
   };
 
@@ -1368,57 +1404,73 @@ const VaultPage: React.FC = () => {
       <Header />
       
       <div className="flex-1 overflow-hidden flex" style={{ cursor: isResizing ? 'col-resize' : 'default' }}>
+        {/* Collapsed sidebar strip */}
+        {sidebarCollapsed ? (
+          <div className="flex flex-col items-center gap-2 border-r border-gray-200 bg-white py-3 px-1.5 dark:border-gray-700 dark:bg-gray-800">
+            <button
+              onClick={toggleSidebar}
+              className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              title="Show sidebar"
+            >
+              <PanelLeftOpen size={18} />
+            </button>
+          </div>
+        ) : (
+          <>
         {/* Password Tree */}
-        <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          <PasswordTree
-            tree={filteredTree}
-            expanded={expanded}
-            selected={selected}
-            onToggleExpand={handleToggleExpand}
-            onExpandAll={handleExpandAll}
-            onCollapseAll={handleCollapseAll}
-            onSelect={handleSelectPassword}
-            onSelectAll={handleSelectAll}
-            onCreate={userPermission !== 'read' ? handleCreatePassword : undefined}
-            onCreateFolder={userPermission !== 'read' ? handleCreateFolder : undefined}
-            onDelete={userPermission !== 'read' ? handleDelete : undefined}
-            onRename={userPermission !== 'read' ? handleRename : undefined}
-            width={sidebarWidth}
-            readOnly={userPermission === 'read'}
-            userPermission={userPermission}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            onClearSearch={() => setSearchQuery('')}
-            allTags={allTags}
-            selectedTags={selectedTags}
-            onTagFilterChange={setSelectedTags}
-          />
-          <DragOverlay dropAnimation={null}>
-            {activeId ? (() => {
-              const findNode = (nodes: PasswordItem[], id: string): PasswordItem | null => {
-                for (const node of nodes) {
-                  if (node.id === id) return node;
-                  if (node.children) {
-                    const found = findNode(node.children, id);
-                    if (found) return found;
+        <div className="flex flex-col" style={{ width: sidebarWidth }}>
+          <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+            <PasswordTree
+              tree={filteredTree}
+              expanded={expanded}
+              selected={selected}
+              onToggleExpand={handleToggleExpand}
+              onExpandAll={handleExpandAll}
+              onCollapseAll={handleCollapseAll}
+              onSelect={handleSelectPassword}
+              onSelectAll={handleSelectAll}
+              onCreate={userPermission !== 'read' ? handleCreatePassword : undefined}
+              onCreateFolder={userPermission !== 'read' ? handleCreateFolder : undefined}
+              onDelete={userPermission !== 'read' ? handleDelete : undefined}
+              onRename={userPermission !== 'read' ? handleRename : undefined}
+              width={sidebarWidth}
+              readOnly={userPermission === 'read'}
+              userPermission={userPermission}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              onClearSearch={() => setSearchQuery('')}
+              allTags={allTags}
+              selectedTags={selectedTags}
+              onTagFilterChange={setSelectedTags}
+              onCollapseSidebar={toggleSidebar}
+            />
+            <DragOverlay dropAnimation={null}>
+              {activeId ? (() => {
+                const findNode = (nodes: PasswordItem[], id: string): PasswordItem | null => {
+                  for (const node of nodes) {
+                    if (node.id === id) return node;
+                    if (node.children) {
+                      const found = findNode(node.children, id);
+                      if (found) return found;
+                    }
                   }
-                }
-                return null;
-              };
-              const activeNode = findNode(tree, activeId);
-              return activeNode ? (
-                <div className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-xl px-4 py-2 flex items-center gap-2 cursor-grabbing">
-                  {activeNode.type === 'folder' ? (
-                    <Folder size={16} className="text-blue-600 dark:text-blue-400" />
-                  ) : (
-                    <Key size={16} className="text-gray-600 dark:text-gray-400" />
-                  )}
-                  <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{activeNode.name}</span>
-                </div>
-              ) : null;
-            })() : null}
-          </DragOverlay>
-        </DndContext>
+                  return null;
+                };
+                const activeNode = findNode(tree, activeId);
+                return activeNode ? (
+                  <div className="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-xl px-4 py-2 flex items-center gap-2 cursor-grabbing">
+                    {activeNode.type === 'folder' ? (
+                      <Folder size={16} className="text-blue-600 dark:text-blue-400" />
+                    ) : (
+                      <Key size={16} className="text-gray-600 dark:text-gray-400" />
+                    )}
+                    <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{activeNode.name}</span>
+                  </div>
+                ) : null;
+              })() : null}
+            </DragOverlay>
+          </DndContext>
+        </div>
 
         {/* Resizer handle */}
         <div
@@ -1428,6 +1480,8 @@ const VaultPage: React.FC = () => {
         >
           <div className="absolute inset-y-0 -left-1 -right-1 group-hover:bg-blue-200 dark:group-hover:bg-blue-800 group-hover:opacity-20" />
         </div>
+          </>
+        )}
 
         {/* Main content */}
         <div className="flex-1 overflow-y-auto p-8 bg-gray-50 dark:bg-gray-900">
@@ -1474,7 +1528,7 @@ const VaultPage: React.FC = () => {
             <div className="flex items-center justify-center h-full text-gray-400 dark:text-gray-500">
               <div className="text-center">
                 <Lock className="w-16 h-16 mx-auto mb-4 text-gray-400 dark:text-gray-600" />
-                <p className="text-lg">Sélectionnez un mot de passe pour voir les détails</p>
+                <p className="text-lg">Select a password to view details</p>
               </div>
             </div>
           )}
@@ -1485,10 +1539,10 @@ const VaultPage: React.FC = () => {
     {/* Confirm Delete Modal */}
     <ConfirmModal
         isOpen={deleteConfirm !== null}
-        title="Supprimer le mot de passe"
-        message={`Voulez-vous vraiment supprimer "${deleteConfirm?.title}" ? Cette action est irréversible.`}
-        confirmText="Supprimer"
-        cancelText="Annuler"
+        title="Delete password"
+        message={`Are you sure you want to delete "${deleteConfirm?.title}"? This action cannot be undone.`}
+        confirmText="Delete"
+        cancelText="Cancel"
         variant="danger"
         onConfirm={confirmDelete}
         onCancel={() => setDeleteConfirm(null)}

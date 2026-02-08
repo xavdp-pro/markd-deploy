@@ -1,4 +1,4 @@
-import { Document, Task, TaskTimelineItem, TaskTimelineFile, TaskComment, Tag, TaskChecklistItem, TaskTag, TaskAssignee, TaskFile, FileItem, FileDetail, SchemaItem, SchemaDetail, Device, Connection, DeviceTemplate, CustomDeviceTemplate } from '../types';
+import { Document, Task, TaskComment, Tag, TaskChecklistItem, TaskTag, TaskAssignee, TaskFile, FileItem, FileDetail, SchemaItem, SchemaDetail, Device, Connection, DeviceTemplate, CustomDeviceTemplate, WorkflowStep } from '../types';
 
 const API_BASE = '/api';
 
@@ -173,6 +173,55 @@ class ApiService {
     });
   }
 
+  async reorderTasks(taskIds: string[]): Promise<{ success: boolean }> {
+    return this.request('/tasks/reorder', {
+      method: 'POST',
+      body: JSON.stringify({ task_ids: taskIds }),
+    });
+  }
+
+  // ── Workflow Steps ─────────────────────────────────────────────────────
+  async getWorkflowSteps(workspaceId: string): Promise<{ success: boolean; steps: WorkflowStep[] }> {
+    return this.request(`/tasks/workflow-steps?workspace_id=${encodeURIComponent(workspaceId)}`);
+  }
+
+  async createWorkflowStep(workspaceId: string, name: string, color: string = 'gray'): Promise<{ success: boolean; step: WorkflowStep }> {
+    return this.request('/tasks/workflow-steps', {
+      method: 'POST',
+      body: JSON.stringify({ workspace_id: workspaceId, name, color }),
+    });
+  }
+
+  async updateWorkflowStep(stepId: string, data: { name?: string; color?: string }): Promise<{ success: boolean; step: WorkflowStep }> {
+    return this.request(`/tasks/workflow-steps/${stepId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteWorkflowStep(stepId: string): Promise<{ success: boolean }> {
+    return this.request(`/tasks/workflow-steps/${stepId}`, { method: 'DELETE' });
+  }
+
+  // ── Kanban Task Order ──────────────────────────────────────────────────
+  async getKanbanOrder(workspaceId: string): Promise<{ success: boolean; order: Record<string, string[]> }> {
+    return this.request(`/tasks/kanban-order?workspace_id=${encodeURIComponent(workspaceId)}`);
+  }
+
+  async saveKanbanOrder(workspaceId: string, statusSlug: string, taskIds: string[]): Promise<{ success: boolean }> {
+    return this.request('/tasks/kanban-order', {
+      method: 'PUT',
+      body: JSON.stringify({ workspace_id: workspaceId, status_slug: statusSlug, task_ids: taskIds }),
+    });
+  }
+
+  async reorderWorkflowSteps(workspaceId: string, stepIds: string[]): Promise<{ success: boolean }> {
+    return this.request('/tasks/workflow-steps/reorder', {
+      method: 'POST',
+      body: JSON.stringify({ workspace_id: workspaceId, step_ids: stepIds }),
+    });
+  }
+
   async copyTask(id: string): Promise<{ success: boolean; task_id: string }> {
     return this.request(`/tasks/${id}/copy`, {
       method: 'POST',
@@ -250,13 +299,6 @@ class ApiService {
     });
   }
 
-  async updateTaskFileNote(taskId: string, fileId: string, note: string): Promise<{ success: boolean }> {
-    return this.request(`/tasks/${taskId}/files/${fileId}/note`, {
-      method: 'PUT',
-      body: JSON.stringify({ markdown_note: note }),
-    });
-  }
-
   async getTaskChecklist(id: string): Promise<{ success: boolean; items: TaskChecklistItem[] }> {
     return this.request(`/tasks/${id}/checklist`);
   }
@@ -285,44 +327,6 @@ class ApiService {
     });
   }
 
-  async getTaskTimeline(id: string): Promise<{ success: boolean; timeline: TaskTimelineItem[] }> {
-    return this.request(`/tasks/${id}/timeline`);
-  }
-
-  async addTaskTimelineEntry(
-    id: string,
-    data: { title: string; description?: string; event_type?: string }
-  ): Promise<{ success: boolean; entry: TaskTimelineItem }> {
-    return this.request(`/tasks/${id}/timeline`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  }
-
-  async uploadTimelineFile(
-    taskId: string,
-    entryId: string,
-    file: File
-  ): Promise<{ success: boolean; file: TaskTimelineFile }> {
-    const formData = new FormData();
-    formData.append('file', file);
-    return this.request(`/tasks/${taskId}/timeline/${entryId}/files`, {
-      method: 'POST',
-      body: formData,
-      headers: {}, // Let browser set Content-Type for FormData
-    });
-  }
-
-  async deleteTimelineFile(
-    taskId: string,
-    entryId: string,
-    fileId: string
-  ): Promise<{ success: boolean }> {
-    return this.request(`/tasks/${taskId}/timeline/${entryId}/files/${fileId}`, {
-      method: 'DELETE',
-    });
-  }
-
   async getTaskComments(id: string): Promise<{ success: boolean; comments: TaskComment[] }> {
     return this.request(`/tasks/${id}/comments`);
   }
@@ -341,21 +345,8 @@ class ApiService {
     });
   }
 
-  async updateTaskTimelineEntry(taskId: string, entryId: string, data: { title?: string; description?: string }): Promise<{ success: boolean; entry: TaskTimelineItem }> {
-    return this.request(`/tasks/${taskId}/timeline/${entryId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    });
-  }
-
   async deleteTaskComment(taskId: string, commentId: string): Promise<{ success: boolean }> {
     return this.request(`/tasks/${taskId}/comments/${commentId}`, {
-      method: 'DELETE',
-    });
-  }
-
-  async deleteTaskTimelineEntry(taskId: string, entryId: string): Promise<{ success: boolean }> {
-    return this.request(`/tasks/${taskId}/timeline/${entryId}`, {
       method: 'DELETE',
     });
   }
@@ -793,11 +784,11 @@ class ApiService {
   }
 
   // ===== System Settings =====
-  async getModuleSettings(): Promise<{ documents: boolean; tasks: boolean; passwords: boolean }> {
+  async getModuleSettings(): Promise<{ documents: boolean; tasks: boolean; passwords: boolean; files: boolean; schemas: boolean }> {
     return this.request('/admin/settings/modules');
   }
 
-  async updateModuleSettings(settings: { documents: boolean; tasks: boolean; passwords: boolean }): Promise<{ success: boolean; message: string }> {
+  async updateModuleSettings(settings: { documents: boolean; tasks: boolean; passwords: boolean; files: boolean; schemas: boolean }): Promise<{ success: boolean; message: string }> {
     return this.request('/admin/settings/modules', {
       method: 'POST',
       body: JSON.stringify(settings),

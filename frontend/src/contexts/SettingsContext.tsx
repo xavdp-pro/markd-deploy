@@ -5,6 +5,8 @@ export interface ModuleSettings {
   documents: boolean;
   tasks: boolean;
   passwords: boolean;
+  files: boolean;
+  schemas: boolean;
 }
 
 interface SettingsContextType {
@@ -18,6 +20,8 @@ const defaultSettings: ModuleSettings = {
   documents: true,
   tasks: true,
   passwords: true,
+  files: true,
+  schemas: true,
 };
 
 const SettingsContext = createContext<SettingsContextType | undefined>(undefined);

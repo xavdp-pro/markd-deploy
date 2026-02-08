@@ -17,6 +17,7 @@ import {
   X,
   Maximize2,
   Minimize2,
+  PanelLeftClose,
 } from 'lucide-react';
 import { SchemaItem, Tag as TagType } from '../types';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
@@ -49,6 +50,7 @@ interface SchemaTreeProps {
   allTags?: TagType[];
   selectedTags?: string[];
   onTagFilterChange?: (tagIds: string[]) => void;
+  onCollapseSidebar?: () => void;
 }
 
 interface ContextMenuProps {
@@ -517,6 +519,7 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
   allTags = [],
   selectedTags = [],
   onTagFilterChange,
+  onCollapseSidebar,
 }) => {
   const [inputModal, setInputModal] = useState<{
     isOpen: boolean;
@@ -654,6 +657,7 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
         <div className="p-4 flex items-center justify-between">
           <h2 className="font-bold text-lg text-gray-900 dark:text-white">Schemas</h2>
           
+          <div className="flex items-center gap-2">
           {/* Permission Badge */}
           {userPermission && (
             <div className="flex items-center gap-1.5 text-xs px-2 py-1 rounded">
@@ -675,6 +679,16 @@ const SchemaTree: React.FC<SchemaTreeProps> = ({
               )}
             </div>
           )}
+          {onCollapseSidebar && (
+            <button
+              onClick={onCollapseSidebar}
+              className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+              title="Hide sidebar"
+            >
+              <PanelLeftClose size={16} />
+            </button>
+          )}
+          </div>
         </div>
         
         {/* Workspace Selector */}

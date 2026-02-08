@@ -3,7 +3,6 @@ import {
   File,
   Folder,
   FolderOpen,
-  Plus,
   Trash2,
   Edit2,
   Download,
@@ -19,6 +18,7 @@ import {
   X,
   Maximize2,
   Minimize2,
+  PanelLeftClose,
 } from 'lucide-react';
 import { FileItem, Tag as TagType } from '../types';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
@@ -54,6 +54,7 @@ interface FileTreeProps {
   allTags?: TagType[];
   selectedTags?: string[];
   onTagFilterChange?: (tagIds: string[]) => void;
+  onCollapseSidebar?: () => void;
 }
 
 interface ContextMenuProps {
@@ -77,7 +78,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
   y,
   node,
   onClose,
-  onCreate,
+  onCreate: _onCreate,
   onCreateFolder,
   onDelete,
   onRename,
@@ -141,27 +142,8 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             onClick={() => {
               setInputModal({
                 isOpen: true,
-                title: 'Nouveau document',
-                label: 'Nom du document',
-                defaultValue: '',
-                onConfirm: (name) => {
-                  if (onCreate) onCreate(node.id, name);
-                  setInputModal(null);
-                  onClose();
-                }
-              });
-            }}
-            className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
-          >
-            <Plus size={14} />
-            Ajouter un document
-          </button>
-          <button
-            onClick={() => {
-              setInputModal({
-                isOpen: true,
-                title: 'Nouveau dossier',
-                label: 'Nom du dossier',
+                title: 'New folder',
+                label: 'Folder name',
                 defaultValue: '',
                 onConfirm: (name) => {
                   if (onCreateFolder) onCreateFolder(node.id, name);
@@ -173,7 +155,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
           >
             <Folder size={14} />
-            Créer un dossier
+            Create folder
           </button>
           {onOpenUploadModal ? (
             <button
@@ -184,7 +166,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
               className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
             >
               <Upload size={14} />
-              Importer un fichier
+              Import file
             </button>
           ) : onUpload ? (
             <button
@@ -202,7 +184,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
               className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
             >
               <Upload size={14} />
-              Importer un fichier
+              Import file
             </button>
           ) : null}
           <div className="border-t border-gray-200 dark:border-gray-700 my-1" />
@@ -215,8 +197,8 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             onClick={() => {
               setInputModal({
                 isOpen: true,
-                title: 'Renommer',
-                label: 'Nouveau nom',
+                title: 'Rename',
+                label: 'New name',
                 defaultValue: node.name,
                 onConfirm: (name) => {
                   if (onRename) onRename(node.id, name);
@@ -228,7 +210,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
           >
             <Edit2 size={14} />
-            Renommer
+            Rename
           </button>
           {node.type === 'file' && onDownload && (
             <button
@@ -236,7 +218,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
               className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
             >
               <Download size={14} />
-              Télécharger
+              Download
             </button>
           )}
           {node.type === 'file' && node.locked_by && onUnlock && (() => {
@@ -251,8 +233,8 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
                   onClick={() => {
                     setConfirmModal({
                       isOpen: true,
-                      title: 'Déverrouiller le document',
-                      message: `Voulez-vous déverrouiller "${node.name}" (verrouillé par ${node.locked_by?.user_name}) ?`,
+                      title: 'Unlock document',
+                      message: `Unlock "${node.name}" (locked by ${node.locked_by?.user_name})?`,
                       onConfirm: () => {
                         if (onUnlock) onUnlock(node.id);
                         setConfirmModal(null);
@@ -272,8 +254,8 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
                   onClick={() => {
                     setConfirmModal({
                       isOpen: true,
-                      title: 'Débloquer le document',
-                      message: `Voulez-vous débloquer "${node.name}" ?`,
+                      title: 'Unlock document',
+                      message: `Unlock "${node.name}"?`,
                       onConfirm: () => {
                         if (onUnlock) onUnlock(node.id);
                         setConfirmModal(null);
@@ -284,7 +266,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
                   className="w-full px-3 py-2 text-left text-sm hover:bg-orange-50 text-orange-600 flex items-center gap-2"
                 >
                   <Unlock size={14} />
-                  Débloquer mon fichier
+                  Unlock my file
                 </button>
               );
             } else {
@@ -303,14 +285,14 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
                       }
                       const adminLines = admins.length
                         ? admins.map(a => `- ${a.username}${a.email ? ' (' + a.email + ')' : ''}`).join('\n')
-                        : '- Aucun administrateur trouvé';
-                      const lockedBy = node.locked_by?.user_name || 'Utilisateur inconnu';
+                        : '- No administrators found';
+                      const lockedBy = node.locked_by?.user_name || 'Unknown user';
                       const lockedAt = (node.locked_by as any)?.locked_at || null;
-                      const when = lockedAt ? `\nHeure du verrou: ${lockedAt}` : '';
+                      const when = lockedAt ? `\nLocked at: ${lockedAt}` : '';
                       setConfirmModal({
                         isOpen: true,
-                        title: 'Déverrouillage non autorisé',
-                        message: `Ce document est en cours d’édition par ${lockedBy}.${when}\n\nVeuillez contacter un administrateur pour le déverrouiller:\n${adminLines}`,
+                        title: 'Unlock not authorized',
+                        message: `This document is being edited by ${lockedBy}.${when}\n\nPlease contact an administrator to unlock it:\n${adminLines}`,
                         onConfirm: () => {
                           setConfirmModal(null);
                           onClose();
@@ -319,8 +301,8 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
                     } catch (e) {
                       setConfirmModal({
                         isOpen: true,
-                        title: 'Déverrouillage non autorisé',
-                        message: 'Ce document est verrouillé. Veuillez contacter un administrateur.',
+                        title: 'Unlock not authorized',
+                        message: 'This document is locked. Please contact an administrator.',
                         onConfirm: () => {
                           setConfirmModal(null);
                           onClose();
@@ -331,7 +313,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
                   className="w-full px-3 py-2 text-left text-sm hover:bg-orange-50 text-orange-600 flex items-center gap-2"
                 >
                   <Unlock size={14} />
-                  Déverrouiller (contacter admin)
+                  Unlock (contact admin)
                 </button>
               );
             }
@@ -342,8 +324,8 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
           onClick={() => {
             setConfirmModal({
               isOpen: true,
-              title: 'Supprimer le document',
-              message: `Voulez-vous vraiment supprimer "${node.name}" ?`,
+              title: 'Delete',
+              message: `Are you sure you want to delete "${node.name}"?`,
               onConfirm: () => {
                 if (onDelete) onDelete(node.id);
                 setConfirmModal(null);
@@ -354,7 +336,7 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
           className="w-full px-3 py-2 text-left text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-2"
         >
           <Trash2 size={14} />
-          Supprimer
+          Delete
         </button>
       </>
     )}
@@ -582,6 +564,7 @@ const FileTree: React.FC<FileTreeProps> = ({
   allTags = [],
   selectedTags = [],
   onTagFilterChange,
+  onCollapseSidebar,
 }) => {
   const [inputModal, setInputModal] = useState<{
     isOpen: boolean;
@@ -686,14 +669,14 @@ const FileTree: React.FC<FileTreeProps> = ({
           event.preventDefault();
           event.stopPropagation();
           const itemName = firstSelected.name;
-          const itemType = firstSelected.type === 'folder' ? 'dossier' : 'document';
+          const itemType = firstSelected.type === 'folder' ? 'folder' : 'file';
           const count = selected.length;
           const message = count > 1 
-            ? `Êtes-vous sûr de vouloir supprimer ${count} éléments ?`
-            : `Êtes-vous sûr de vouloir supprimer "${itemName}" ?${firstSelected.type === 'folder' ? ' Cette action supprimera également tous les éléments contenus dans ce dossier.' : ''}`;
+            ? `Are you sure you want to delete ${count} items?`
+            : `Are you sure you want to delete "${itemName}"?${firstSelected.type === 'folder' ? ' This will also delete all items inside this folder.' : ''}`;
           setConfirmModal({
             isOpen: true,
-            title: count > 1 ? `Supprimer ${count} éléments` : `Supprimer le ${itemType}`,
+            title: count > 1 ? `Delete ${count} items` : `Delete ${itemType}`,
             message,
             onConfirm: () => {
               // Delete all selected items
@@ -719,6 +702,7 @@ const FileTree: React.FC<FileTreeProps> = ({
         <div className="p-4 flex items-center justify-between">
           <h2 className="font-bold text-lg text-gray-900 dark:text-white">Files</h2>
           
+          <div className="flex items-center gap-2">
           {/* Permission Badge */}
           {userPermission && (
             <div className="flex items-center gap-1.5 text-xs px-2 py-1 rounded">
@@ -740,6 +724,16 @@ const FileTree: React.FC<FileTreeProps> = ({
               )}
             </div>
           )}
+          {onCollapseSidebar && (
+            <button
+              onClick={onCollapseSidebar}
+              className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+              title="Hide sidebar"
+            >
+              <PanelLeftClose size={16} />
+            </button>
+          )}
+          </div>
         </div>
         
         {/* Workspace Selector */}
@@ -756,7 +750,7 @@ const FileTree: React.FC<FileTreeProps> = ({
               <Search className="absolute left-3 w-4 h-4 text-gray-400 dark:text-gray-500 pointer-events-none" />
               <input
                 type="text"
-                placeholder="Rechercher..."
+                placeholder="Search..."
                 value={searchQuery}
                 onChange={(e) => onSearchChange(e.target.value)}
                 className="w-full pl-9 pr-9 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -765,7 +759,7 @@ const FileTree: React.FC<FileTreeProps> = ({
                 <button
                   onClick={onClearSearch}
                   className="absolute right-3 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-                  title="Effacer la recherche"
+                  title="Clear search"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -782,7 +776,7 @@ const FileTree: React.FC<FileTreeProps> = ({
               type="button"
               onClick={onExpandAll}
               className="p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm shadow-sm"
-              title="Développer tout l'arbre"
+              title="Expand all"
             >
               <Maximize2 size={14} />
             </button>
@@ -790,7 +784,7 @@ const FileTree: React.FC<FileTreeProps> = ({
               type="button"
               onClick={onCollapseAll}
               className="p-1.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors bg-white/90 dark:bg-gray-800/90 backdrop-blur-sm shadow-sm"
-              title="Réduire tout l'arbre"
+              title="Collapse all"
             >
               <Minimize2 size={14} />
             </button>
@@ -827,13 +821,13 @@ const FileTree: React.FC<FileTreeProps> = ({
           <div className={`text-sm text-center px-4 ${isRootOver ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-400 dark:text-gray-500'}`}>
             {isRootOver ? (
               <>
-                <div className="mb-1">📁 Déposer à la racine</div>
-                <div className="text-xs">Le fichier/dossier sera déplacé ici</div>
+                <div className="mb-1">📁 Drop at root</div>
+                <div className="text-xs">The file/folder will be moved here</div>
               </>
             ) : (
               <>
-              <div className="mb-1">Clic droit pour créer</div>
-              <div className="text-xs">fichier ou dossier</div>
+              <div className="mb-1">Right-click to create</div>
+              <div className="text-xs">file or folder</div>
               </>
             )}
           </div>
@@ -855,7 +849,7 @@ const FileTree: React.FC<FileTreeProps> = ({
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >
-          {onOpenUploadModal ? (
+          {onOpenUploadModal && (
             <button
               onClick={() => {
                 onOpenUploadModal('root');
@@ -863,30 +857,8 @@ const FileTree: React.FC<FileTreeProps> = ({
               }}
               className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
             >
-              <Plus size={14} />
-              Ajouter un fichier
-            </button>
-          ) : (
-            <button
-              onClick={() => {
-                if (!onCreate) return;
-                setInputModal({
-                  isOpen: true,
-                  title: 'Nouveau document',
-                  label: 'Nom du document',
-                  defaultValue: '',
-                  onConfirm: (name) => {
-                    onCreate('root', name);
-                    setInputModal(null);
-                    closeContextMenu();
-                  }
-                });
-              }}
-              className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
-              disabled={!onCreate}
-            >
-              <Plus size={14} />
-              Ajouter un fichier
+              <Upload size={14} />
+              Import file
             </button>
           )}
           <button
@@ -894,8 +866,8 @@ const FileTree: React.FC<FileTreeProps> = ({
               if (!onCreateFolder) return;
               setInputModal({
                 isOpen: true,
-                title: 'Nouveau dossier',
-                label: 'Nom du dossier',
+                title: 'New folder',
+                label: 'Folder name',
                 defaultValue: '',
                 onConfirm: (name) => {
                   onCreateFolder('root', name);
@@ -907,7 +879,7 @@ const FileTree: React.FC<FileTreeProps> = ({
             className="w-full px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
           >
             <Folder size={14} />
-            Créer un dossier
+            Create folder
           </button>
         </div>
       )}

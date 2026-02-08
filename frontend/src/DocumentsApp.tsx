@@ -6,19 +6,21 @@ import { websocket } from './services/websocket';
 import { sessionStorageService } from './services/sessionStorage';
 import { useWorkspace } from './contexts/WorkspaceContext';
 import { useAuth } from './contexts/AuthContext';
+import { useUnsavedChanges } from './contexts/UnsavedChangesContext';
 import DocumentTree from './components/DocumentTree';
 import DocumentViewer from './components/DocumentViewer';
 import DocumentEditor from './components/DocumentEditor';
 import CollaborativeEditor from './components/CollaborativeEditor';
 import MCPConfigModal from './components/MCPConfigModal';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent } from '@dnd-kit/core';
-import { File, Folder, X, Trash2 } from 'lucide-react';
+import { File, Folder, X, Trash2, PanelLeftOpen } from 'lucide-react';
 import { getHashSelection, setHashSelection, onHashChange } from './utils/urlHash';
 import { USE_COLLABORATIVE_EDITING } from './config/features';
 
 function App() {
   const { user } = useAuth();
   const { currentWorkspace, userPermission } = useWorkspace();
+  const { setUnsavedChanges, guardAction } = useUnsavedChanges();
   const [tree, setTree] = useState<Document[]>([]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({ root: true });
   const [selected, setSelected] = useState<Document[]>([]);
@@ -32,6 +34,16 @@ function App() {
     const saved = localStorage.getItem('markd_tree_width');
     return saved ? parseInt(saved, 10) : 320;
   });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    return localStorage.getItem('markd_docs_sidebar_collapsed') === 'true';
+  });
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem('markd_docs_sidebar_collapsed', String(next));
+      return next;
+    });
+  }, []);
   const [isResizing, setIsResizing] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -219,13 +231,10 @@ function App() {
         data.configs.forEach((config: any) => {
           if (config.folder_id) {
             configMap[config.folder_id] = config;
-            console.log(`📋 MCP Config mapped: folder_id=${config.folder_id}, is_active=${config.is_active}`);
           } else {
             console.warn('⚠️ MCP Config without folder_id:', config);
           }
         });
-        console.log(`📋 MCP Configs loaded for workspace ${currentWorkspace}:`, configMap);
-        console.log(`📋 Total configs: ${data.configs.length}, Mapped: ${Object.keys(configMap).length}`);
         setMcpConfigs(configMap);
       } else {
         console.error('❌ Failed to load MCP configs:', data);
@@ -505,7 +514,6 @@ function App() {
   // Auto-select pending folder after tree is updated
   useEffect(() => {
     if (pendingSelection && tree.length > 0) {
-      console.log('🟢 [PENDING SELECTION] Processing:', pendingSelection, 'Tree nodes:', tree.length);
 
       // Helper to find path to target node
       const findPathToNode = (nodes: Document[], targetId: string, path: string[] = []): string[] | null => {
@@ -524,7 +532,6 @@ function App() {
 
       // Find path to the target node
       const pathToNode = findPathToNode(tree, pendingSelection);
-      console.log('🟢 [PENDING SELECTION] Path to node:', pathToNode);
 
       if (pathToNode) {
         // Expand only the path to the node (not the whole tree)
@@ -533,7 +540,6 @@ function App() {
           pathToNode.forEach(nodeId => {
             newExpanded[nodeId] = true;
           });
-          console.log('🟢 [PENDING SELECTION] Expanded path:', pathToNode, 'all expanded:', Object.keys(newExpanded));
           return newExpanded;
         });
       } else {
@@ -544,7 +550,6 @@ function App() {
       const findAndSelectItem = (nodes: Document[], targetId: string, parentPath: string[] = []): Document | null => {
         for (const node of nodes) {
           if (node.id === targetId) {
-            console.log('✅ [PENDING SELECTION] Found folder:', node.name, node.id, 'type:', node.type, 'parentPath:', parentPath);
             return node;
           }
           if (node.children) {
@@ -578,7 +583,6 @@ function App() {
         };
 
         const parentPath = calculateParentPath(tree, pendingSelection);
-        console.log('✅ [PENDING SELECTION] Parent path calculated:', parentPath);
 
         // Expand all parents in the path
         if (parentPath.length > 0) {
@@ -587,7 +591,6 @@ function App() {
             parentPath.forEach(parentId => {
               newExpanded[parentId] = true;
             });
-            console.log('✅ [PENDING SELECTION] Expanded parent path:', parentPath);
             return newExpanded;
           });
         }
@@ -598,40 +601,19 @@ function App() {
           setSelected([foundNode]);
           setPendingSelection(null);
           pendingSelectionRef.current = null;
-          console.log('✅ [PENDING SELECTION] Selected folder:', foundNode.name, foundNode.id);
         });
       } else {
         // Node not found in tree yet - this is expected when the folder was just created
         // The WebSocket handler will reload the tree and then process pendingSelection
         // So we just log and wait - don't clear pendingSelection here!
-        console.log('🟡 [PENDING SELECTION] Node not found in tree yet, waiting for WebSocket reload:', pendingSelection);
         // DO NOT clear pendingSelection here - let the WebSocket handler process it
       }
     }
   }, [pendingSelection, tree]);
 
 
-  // Emit presence events when selection changes
-  useEffect(() => {
-    if (!user) return;
-
-    // Leave previous document(s)
-    // For now, we only track presence on single selection
-
-    // Join new document if single selection
-    const currentDocumentId = selected.length === 1 ? selected[0].id : null;
-
-    if (currentDocumentId) {
-      websocket.joinDocument(currentDocumentId);
-    }
-
-    // Cleanup: leave when selection changes or unmount
-    return () => {
-      if (currentDocumentId) {
-        websocket.leaveDocument(currentDocumentId);
-      }
-    };
-  }, [selected, user]);
+  // Presence join/leave is handled by useCollab (CollaborativeEditor) or useCollaborativeEditing (DocumentEditor)
+  // Do NOT call websocket.joinDocument here — it creates a duplicate "Unknown" user in the presence bar
 
   // Heartbeat loop for locked documents
   useEffect(() => {
@@ -653,7 +635,7 @@ function App() {
     }
   }, [editMode, selected, getUserId]);
 
-  const handleSelectDocument = useCallback(async (doc: Document, event?: React.MouseEvent) => {
+  const doSelectDocument = useCallback(async (doc: Document, event?: React.MouseEvent) => {
     // Mark this as user-initiated selection to prevent hash-based restoration
     userInitiatedSelectionRef.current = true;
 
@@ -702,13 +684,6 @@ function App() {
         // Use setHashSelection instead of direct hash change to avoid triggering hashchange event
         setHashSelection('document', [doc.id]);
 
-        // If currently in edit mode, unlock the previous document (only if different)
-        if (editMode && selected.length > 0 && selected[0].id !== doc.id) {
-          const userId = getUserId();
-          await api.unlockDocument(selected[0].id, userId);
-          setEditMode(false);
-        }
-
         // Pre-load content before updating selection to avoid visual jump
         // Get full document with latest content first
         const result = await api.getDocument(doc.id);
@@ -736,6 +711,15 @@ function App() {
       }
     }
   }, [editMode, selected, getUserId, tree, flattenTree, lastSelectedIndex]);
+
+  // Guard document selection when in edit mode
+  const handleSelectDocument = useCallback((doc: Document, event?: React.MouseEvent) => {
+    if (editMode && selected.length > 0 && selected[0].id !== doc.id) {
+      guardAction(() => doSelectDocument(doc, event));
+    } else {
+      doSelectDocument(doc, event);
+    }
+  }, [editMode, selected, guardAction, doSelectDocument]);
 
   const expandToAndSelect = useCallback(async (id: string, treeDataLocal: Document[]) => {
     const findPath = (nodes: Document[], targetId: string, path: string[] = []): string[] | null => {
@@ -901,7 +885,6 @@ function App() {
   }, [currentWorkspace]);
 
   const handleCreateFolder = useCallback(async (parentId: string, name: string) => {
-    console.log('🔵 [CREATE FOLDER] Starting - name:', name, 'parentId:', parentId, 'workspace:', currentWorkspace);
     try {
       lastLocalChangeAtRef.current = Date.now();
 
@@ -923,7 +906,6 @@ function App() {
       // Expand path to parent before creating
       if (parentId && parentId !== 'root') {
         const pathToParent = findPathToNode(tree, parentId);
-        console.log('🔵 [CREATE FOLDER] Path to parent:', pathToParent);
         if (pathToParent) {
           // Update ref IMMEDIATELY (synchronous) before setExpanded (async)
           const newExpanded = { ...expandedRef.current };
@@ -934,16 +916,13 @@ function App() {
           newExpanded[parentId] = true;
           expandedRef.current = newExpanded; // Update ref synchronously
           setExpanded(newExpanded); // Update state
-          console.log('🔵 [CREATE FOLDER] Expanded path:', Object.keys(newExpanded));
         } else {
           // If path not found, at least expand the parent
-          console.log('🔵 [CREATE FOLDER] Path not found, expanding parent only:', parentId);
           expandedRef.current = { ...expandedRef.current, [parentId]: true }; // Update ref synchronously
           setExpanded(prev => ({ ...prev, [parentId]: true }));
         }
       }
 
-      console.log('🔵 [CREATE FOLDER] Calling API with:', { name, type: 'folder', parent_id: parentId, workspace_id: currentWorkspace });
 
       const result = await api.createDocument({
         name,
@@ -952,24 +931,20 @@ function App() {
         workspace_id: currentWorkspace,
       });
 
-      console.log('🔵 [CREATE FOLDER] API Response:', result);
 
       // Store the created folder ID for auto-selection after tree update
       if (result.success && result.document) {
         const folderId = result.document.id;
-        console.log('✅ [CREATE FOLDER] SUCCESS - Folder created:', result.document.name, 'ID:', folderId, 'Parent:', parentId);
         // Update both state and ref IMMEDIATELY with REAL ID (before WebSocket can arrive)
         // Use a synchronous update to ensure the ref is set before any async operations
         pendingSelectionRef.current = folderId;
         setPendingSelection(folderId);
-        console.log('✅ [CREATE FOLDER] Set pendingSelection:', folderId, 'ref:', pendingSelectionRef.current);
         // Ensure parent is expanded immediately (before WebSocket reload)
         if (parentId && parentId !== 'root') {
           // Update ref synchronously to ensure WebSocket handler sees the latest state
           expandedRef.current = { ...expandedRef.current, [parentId]: true };
           setExpanded(prev => {
             const updated = { ...prev, [parentId]: true };
-            console.log('✅ [CREATE FOLDER] Expanded parent:', parentId, 'expanded state:', Object.keys(updated));
             return updated;
           });
         } else if (parentId === 'root') {
@@ -979,12 +954,12 @@ function App() {
       } else {
         console.error('❌ [CREATE FOLDER] FAILED - API response:', result);
         pendingSelectionRef.current = null;
-        toast.error('Échec de la création du dossier');
+        toast.error('Failed to create folder');
       }
     } catch (err) {
       console.error('❌ [CREATE FOLDER] ERROR:', err);
       setError(err instanceof Error ? err.message : 'Failed to create folder');
-      toast.error('Erreur lors de la création du dossier');
+      toast.error('Error creating folder');
     }
   }, [currentWorkspace, tree]);
 
@@ -1074,7 +1049,7 @@ function App() {
                       onClick={onView}
                       className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400 dark:border-blue-400 dark:text-blue-300 dark:hover:bg-blue-900/30"
                     >
-                      Voir
+                      View
                     </button>
                   </div>
                 </div>
@@ -1101,7 +1076,7 @@ function App() {
 
         toast.custom(
           <ToastUpdated
-            title={`Document mis à jour : ${docName || data.document_id}`}
+            title={`Document updated: ${docName || data.document_id}`}
             onView={() => expandToAndSelect(docId, treeData)}
           />,
           { duration: 25000 }
@@ -1141,7 +1116,6 @@ function App() {
 
       // In collaborative mode, no locking needed - Yjs handles conflicts
       if (USE_COLLABORATIVE_EDITING) {
-        console.log('[Collaborative] Starting edit without lock');
         setEditMode(true);
         setEditContent(doc.content || '');
         websocket.notifyEditing(doc.id, userName);
@@ -1152,7 +1126,6 @@ function App() {
       // Check if document is already locked by current user
       if (doc.locked_by && String(doc.locked_by.user_id) === String(userId)) {
         // User already owns the lock, allow editing
-        console.log('Document already locked by current user, allowing edit');
         setEditMode(true);
         setEditContent(doc.content || '');
         websocket.notifyEditing(doc.id, userName);
@@ -1160,7 +1133,6 @@ function App() {
       }
 
       // Try to lock the document
-      console.log('Locking document with:', { userId, userName, documentId: doc.id });
       const result = await api.lockDocument(doc.id, userId, userName);
 
       if (result.success) {
@@ -1168,7 +1140,7 @@ function App() {
         setEditContent(doc.content || '');
         websocket.notifyEditing(doc.id, userName);
       } else {
-        toast.error(`Document verrouillé par ${result.locked_by?.user_name || 'un autre utilisateur'}`);
+        toast.error(`Document locked by ${result.locked_by?.user_name || 'another user'}`);
       }
     } catch (err) {
       console.error('Error locking document:', err);
@@ -1214,6 +1186,44 @@ function App() {
     }
   }, [selected, getUserId]);
 
+  // Track unsaved changes for the global guard modal
+  const originalDocContentRef = useRef('');
+  useEffect(() => {
+    if (editMode) {
+      originalDocContentRef.current = selected.length > 0 ? (selected[0].content || '') : '';
+    }
+  }, [editMode]);
+
+  useEffect(() => {
+    if (editMode) {
+      const isDirty = editContent !== originalDocContentRef.current;
+      setUnsavedChanges(isDirty, {
+        onSave: async () => {
+          if (selected.length === 0) return;
+          const doc = selected[0];
+          lastLocalChangeAtRef.current = Date.now();
+          await api.updateDocument(doc.id, { content: editContent });
+          const userId = getUserId();
+          await api.unlockDocument(doc.id, userId);
+          setSelected(prev => prev.length > 0 ? [{ ...prev[0], content: editContent, locked_by: null }] : []);
+          setEditMode(false);
+          await loadAllTags();
+          await loadDocumentTags(doc.id);
+        },
+        onDiscard: () => {
+          if (selected.length > 0) {
+            const userId = getUserId();
+            api.unlockDocument(selected[0].id, userId).catch(console.error);
+          }
+          setEditContent(selected.length > 0 ? (selected[0].content || '') : '');
+          setEditMode(false);
+        },
+      });
+    } else {
+      setUnsavedChanges(false);
+    }
+  }, [editMode, editContent, selected, getUserId, setUnsavedChanges, loadAllTags, loadDocumentTags]);
+
   const handleUnlock = useCallback(async () => {
     if (selected.length !== 1) return;
     const doc = selected[0];
@@ -1221,10 +1231,10 @@ function App() {
 
     try {
       await api.unlockDocument(doc.id, userId);
-      toast.success('Verrou retiré');
+      toast.success('Lock removed');
     } catch (err) {
       console.error('Error unlocking:', err);
-      toast.error('Impossible de retirer le verrou');
+      toast.error('Unable to remove lock');
     }
   }, [selected, getUserId]);
 
@@ -1253,10 +1263,10 @@ function App() {
         setSelected(prev => prev.length > 0 ? [{ ...prev[0], locked_by: null }] : []);
       }
 
-      toast.success('Document déverrouillé avec succès');
+      toast.success('Document unlocked successfully');
     } catch (err) {
       console.error('Error force unlocking:', err);
-      toast.error('Échec du déverrouillage du document');
+      toast.error('Failed to unlock document');
     }
   }, [selected]);
 
@@ -1325,42 +1335,9 @@ function App() {
           ? pendingSelectionRef.current
           : (pendingSelection && !pendingSelection.startsWith('temp-') ? pendingSelection : null);
 
-        console.log('🟡 [WEBSOCKET] tree_changed received - currentExpanded:', Object.keys(currentExpanded), 'pendingSelection:', currentPendingSelection, 'ref:', pendingSelectionRef.current);
 
         const result = await api.getTree(currentWorkspace);
-        console.log('🟡 [WEBSOCKET] Tree reloaded - nodes:', result.tree?.length || 0);
 
-        // Debug: Check if pendingSelection node exists in the reloaded tree and log folder-guides children
-        if (currentPendingSelection) {
-          const checkNodeExists = (nodes: Document[], targetId: string): boolean => {
-            for (const node of nodes) {
-              if (node.id === targetId) return true;
-              if (node.children && checkNodeExists(node.children, targetId)) return true;
-            }
-            return false;
-          };
-          const exists = checkNodeExists(result.tree, currentPendingSelection);
-          console.log('🟡 [WEBSOCKET] PendingSelection exists in reloaded tree:', exists, 'ID:', currentPendingSelection);
-
-          // Log the structure of folder-guides to see what's inside
-          const findFolder = (nodes: Document[], folderId: string): Document | null => {
-            for (const node of nodes) {
-              if (node.id === folderId) return node;
-              if (node.children) {
-                const found = findFolder(node.children, folderId);
-                if (found) return found;
-              }
-            }
-            return null;
-          };
-          const parentFolder = findFolder(result.tree, 'folder-guides');
-          if (parentFolder) {
-            console.log('🟡 [WEBSOCKET] folder-guides found, children count:', parentFolder.children?.length || 0);
-            console.log('🟡 [WEBSOCKET] folder-guides children:', parentFolder.children?.map(c => ({ id: c.id, name: c.name, type: c.type })) || []);
-          } else {
-            console.warn('🟡 [WEBSOCKET] folder-guides not found in tree');
-          }
-        }
 
         // Build quick lookup maps to detect changes
         const flatten = (
@@ -1454,7 +1431,7 @@ function App() {
                       onClick={onView}
                       className="rounded border border-blue-600 px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-400 dark:border-blue-400 dark:text-blue-300 dark:hover:bg-blue-900/30"
                     >
-                      Voir
+                      View
                     </button>
                   </div>
                 </div>
@@ -1487,7 +1464,7 @@ function App() {
           for (const ch of showLimited(created)) {
             toast.custom(
               <ToastChange
-                title={`Nouveau ${ch.type === 'folder' ? 'dossier' : 'document'} : ${ch.name}`}
+                title={`New ${ch.type === 'folder' ? 'folder' : 'document'}: ${ch.name}`}
                 onView={() => expandToAndSelect(ch.id, result.tree)}
               />,
               { duration: 25000 }
@@ -1496,8 +1473,8 @@ function App() {
           for (const ch of showLimited(movedOrRenamed)) {
             toast.custom(
               <ToastChange
-                title={`${ch.type === 'folder' ? 'Dossier' : 'Document'} mis à jour : ${ch.name}`}
-                subtitle="Renommé ou déplacé"
+                title={`${ch.type === 'folder' ? 'Folder' : 'Document'} updated: ${ch.name}`}
+                subtitle="Renamed or moved"
                 onView={() => expandToAndSelect(ch.id, result.tree)}
               />,
               { duration: 25000 }
@@ -1506,15 +1483,15 @@ function App() {
           for (const ch of showLimited(contentUpdated)) {
             toast.custom(
               <ToastChange
-                title={`Document mis à jour : ${ch.name}`}
-                subtitle="Contenu enregistré"
+                title={`Document updated: ${ch.name}`}
+                subtitle="Content saved"
                 onView={() => expandToAndSelect(ch.id, result.tree)}
               />,
               { duration: 25000 }
             );
           }
 
-          // Toast for deletions (without "Voir" button)
+          // Toast for deletions (without "View" button)
           for (const del of showLimited(deleted)) {
             const ToastDelete: React.FC<{ title: string; path: string }> = ({ title, path }) => {
               const [start, setStart] = React.useState(false);
@@ -1554,7 +1531,7 @@ function App() {
             };
             toast.custom(
               <ToastDelete
-                title={`${del.type === 'folder' ? 'Dossier' : 'Document'} supprimé : ${del.name}`}
+                title={`${del.type === 'folder' ? 'Folder' : 'Document'} deleted: ${del.name}`}
                 path={del.path}
               />,
               { duration: 25000 }
@@ -1568,13 +1545,11 @@ function App() {
 
         // If we have a pending selection, process it FIRST before preserving expansion
         if (currentPendingSelection && result.tree.length > 0) {
-          console.log('🟡 [WEBSOCKET] Processing pendingSelection:', currentPendingSelection);
 
           // Helper to find and select the node
           const findAndSelectNode = (nodes: Document[], targetId: string, parentPath: string[] = []): Document | null => {
             for (const node of nodes) {
               if (node.id === targetId) {
-                console.log('✅ [WEBSOCKET] Found pendingSelection node:', node.name, node.id, 'parentPath:', parentPath);
                 return node;
               }
               if (node.children) {
@@ -1605,7 +1580,6 @@ function App() {
             };
 
             const pathToNode = findPathToNode(result.tree, currentPendingSelection);
-            console.log('🟡 [WEBSOCKET] Path to pendingSelection:', pathToNode);
 
             // Merge preserved expansion with path expansion
             setExpanded(prev => {
@@ -1620,7 +1594,6 @@ function App() {
               if (pathToNode === null || pathToNode.length === 0) {
                 newExpanded.root = true;
               }
-              console.log('🟡 [WEBSOCKET] Expanded path:', pathToNode, 'final expanded:', Object.keys(newExpanded));
               return newExpanded;
             });
 
@@ -1629,7 +1602,6 @@ function App() {
               setSelected([foundNode]);
               setPendingSelection(null);
               pendingSelectionRef.current = null;
-              console.log('✅ [WEBSOCKET] Selected folder:', foundNode.name, foundNode.id);
             });
           } else {
             console.warn('🟡 [WEBSOCKET] pendingSelection node not found in tree:', currentPendingSelection);
@@ -1650,7 +1622,6 @@ function App() {
             };
             const parentId = findParent(result.tree, currentPendingSelection);
             if (parentId) {
-              console.log('🟡 [WEBSOCKET] Found parent, expanding:', parentId);
               setExpanded(prev => ({ ...prev, [parentId]: true }));
             } else {
               console.warn('🟡 [WEBSOCKET] Node not found in tree yet, might need to wait');
@@ -1659,7 +1630,6 @@ function App() {
         } else {
           // No pending selection, just preserve expansion
           setExpanded(currentExpanded);
-          console.log('🟡 [WEBSOCKET] Preserved expansion:', Object.keys(currentExpanded));
         }
       } catch (err) {
         console.error('Error reloading tree:', err);
@@ -1683,7 +1653,7 @@ function App() {
           };
           const name = findName(prevTree);
           if (name) {
-            toast(`${lockInfo.user_name} édite "${name}"`, { icon: '🔒', duration: 3000 });
+            toast(`${lockInfo.user_name} is editing "${name}"`, { icon: '🔒', duration: 3000 });
           }
         }
 
@@ -1772,10 +1742,10 @@ function App() {
       }
 
       if (successCount > 0) {
-        const targetName = targetId === 'root' ? 'la racine' : `"${targetNode?.name}"`;
+        const targetName = targetId === 'root' ? 'root' : `"${targetNode?.name}"`;
         const message = itemsToMove.length === 1
-          ? `"${itemsToMove[0].name}" déplacé vers ${targetName}`
-          : `${successCount} documents déplacés vers ${targetName}`;
+          ? `"${itemsToMove[0].name}" moved to ${targetName}`
+          : `${successCount} document(s) moved to ${targetName}`;
 
         toast.success(message);
 
@@ -1786,12 +1756,12 @@ function App() {
       }
 
       if (errors.length > 0) {
-        toast.error(`Erreur lors du déplacement de : ${errors.slice(0, 3).join(', ')}${errors.length > 3 ? '...' : ''}`);
+        toast.error(`Error moving: ${errors.slice(0, 3).join(', ')}${errors.length > 3 ? '...' : ''}`);
       }
 
     } catch (err) {
       console.error('Error moving document:', err);
-      toast.error('Erreur lors du déplacement');
+      toast.error('Error moving item');
     }
   }, [tree, selected, currentWorkspace]);
 
@@ -1922,6 +1892,19 @@ function App() {
           cursor: isResizing ? 'col-resize' : (activeId ? 'grabbing' : 'default')
         }}
       >
+        {/* Collapsed sidebar strip */}
+        {sidebarCollapsed ? (
+          <div className="flex flex-col items-center gap-2 border-r border-gray-200 bg-white py-3 px-1.5 dark:border-gray-700 dark:bg-gray-800">
+            <button
+              onClick={toggleSidebar}
+              className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              title="Show sidebar"
+            >
+              <PanelLeftOpen size={18} />
+            </button>
+          </div>
+        ) : (
+          <>
         <div className="flex flex-col" style={{ width: treeWidth }}>
           <DocumentTree
             tree={filteredTree}
@@ -1952,6 +1935,7 @@ function App() {
             mcpConfigs={mcpConfigs}
             onOpenMcpModal={handleOpenMcpModal}
             workspaceId={currentWorkspace}
+            onCollapseSidebar={toggleSidebar}
           />
         </div>
 
@@ -1963,6 +1947,8 @@ function App() {
         >
           <div className="absolute inset-y-0 -left-1 -right-1 group-hover:bg-blue-200 dark:group-hover:bg-blue-800 group-hover:opacity-20" />
         </div>
+          </>
+        )}
 
         {selected.length > 0 && selected[0].type === 'file' ? (
           editMode ? (
@@ -1975,13 +1961,14 @@ function App() {
                   onSave={async (content: string) => {
                     // Save to backend API
                     try {
+                      lastLocalChangeAtRef.current = Date.now();
                       await api.updateDocument(selected[0].id, { content });
                       setEditContent(content);
                       setSelected(prev => prev.length > 0 ? [{ ...prev[0], content }] : []);
-                      toast.success('Document enregistré');
+                      toast.success('Document saved');
                     } catch (err) {
                       console.error('Error saving document:', err);
-                      toast.error('Erreur lors de la sauvegarde');
+                      toast.error('Error saving document');
                     }
                   }}
                   onCancel={() => {
@@ -2032,8 +2019,8 @@ function App() {
             <div className="text-center">
               <p className="text-lg">
                 {selected.length > 0 && selected[0].type === 'folder'
-                  ? 'Sélectionnez un fichier pour l\'éditer'
-                  : 'Sélectionnez un document pour l\'éditer'}
+                  ? 'Select a file to edit'
+                  : 'Select a document to edit'}
               </p>
             </div>
           </div>

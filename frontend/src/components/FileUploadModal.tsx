@@ -166,7 +166,7 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
     
     // All uploads completed, show toast and close modal
     if (successCount > 0) {
-      toast.success(`${successCount} fichier(s) uploadé(s) avec succès`);
+      toast.success(`${successCount} file(s) uploaded successfully`);
       onUploadComplete();
     }
     
@@ -203,7 +203,7 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-            Uploader des fichiers
+            Upload files
           </h3>
           <button
             onClick={handleClose}
@@ -259,17 +259,17 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
               }`} 
             />
             <p className="text-gray-700 dark:text-gray-300 mb-2">
-              Glissez-déposez vos fichiers ici
+              Drag and drop your files here
             </p>
             <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-              ou
+              or
             </p>
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
               className="px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded hover:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Sélectionner des fichiers
+              Select files
             </button>
             <input
               ref={fileInputRef}
@@ -280,7 +280,7 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
               disabled={uploading}
             />
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-4">
-              Taille maximale : 100 MB par fichier
+              Maximum size: 100 MB per file
             </p>
           </div>
 
@@ -288,7 +288,7 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
           {files.length > 0 && (
             <div className="mt-4 space-y-2">
               <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Fichiers sélectionnés ({files.length})
+                Selected files ({files.length})
               </h4>
               {files.map((fileProgress, index) => {
                 // Calculate file progress (0-100%)
@@ -372,9 +372,9 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
         {/* Footer */}
         <div className="flex items-center justify-between p-4 border-t border-gray-200 dark:border-gray-700">
           <div className="text-sm text-gray-600 dark:text-gray-400">
-            {pendingCount > 0 && `${pendingCount} en attente`}
-            {successCount > 0 && ` • ${successCount} réussi(s)`}
-            {errorCount > 0 && ` • ${errorCount} erreur(s)`}
+            {pendingCount > 0 && `${pendingCount} pending`}
+            {successCount > 0 && ` • ${successCount} done`}
+            {errorCount > 0 && ` • ${errorCount} error(s)`}
           </div>
           <div className="flex gap-2">
             <button
@@ -382,7 +382,7 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
               disabled={uploading}
               className="px-4 py-2 text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
             >
-              {uploading ? 'Annulation...' : 'Annuler'}
+              {uploading ? 'Cancelling...' : 'Cancel'}
             </button>
             <button
               onClick={uploadFiles}
@@ -392,12 +392,12 @@ const FileUploadModal: React.FC<FileUploadModalProps> = ({
               {uploading ? (
                 <>
                   <Loader2 size={16} className="animate-spin" />
-                  Upload en cours...
+                  Uploading...
                 </>
               ) : (
                 <>
                   <Upload size={16} />
-                  Uploader {pendingCount > 0 && `(${pendingCount})`}
+                  Upload {pendingCount > 0 && `(${pendingCount})`}
                 </>
               )}
             </button>

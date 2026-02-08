@@ -40,20 +40,20 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
-    toast.success(`${label} copié dans le presse-papier`);
+    toast.success(`${label} copied to clipboard`);
   };
 
   const copyLinkToClipboard = () => {
-    const url = `${window.location.origin}${window.location.pathname}#vault=${password.id}`;
+    const url = `${window.location.origin}${window.location.pathname}#password=${password.id}`;
     navigator.clipboard.writeText(url);
-    toast.success('Lien copié ! Vous pouvez le coller dans un document Markdown');
+    toast.success('Link copied! You can paste it in a Markdown document');
   };
   
   const copyMarkdownToClipboard = () => {
-    const url = `${window.location.origin}${window.location.pathname}#vault=${password.id}`;
+    const url = `${window.location.origin}${window.location.pathname}#password=${password.id}`;
     const markdown = `🔑 [${password.name}](${url})`;
     navigator.clipboard.writeText(markdown);
-    toast.success('Lien Markdown copié !');
+    toast.success('Markdown link copied!');
   };
 
   // Check if current user can unlock
@@ -78,15 +78,15 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
             <button
               onClick={copyLinkToClipboard}
               className="px-3 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors flex items-center gap-2"
-              title="Copier le lien vers ce mot de passe pour le coller dans un document Markdown"
+              title="Copy link to this password for pasting in a Markdown document"
             >
               <Link className="w-4 h-4" />
-              Copier le lien
+              Copy link
             </button>
             <button
               onClick={copyMarkdownToClipboard}
               className="px-3 py-2 text-sm text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors"
-              title="Copier le lien au format Markdown : 🔑 [Nom](URL)"
+              title="Copy link as Markdown: 🔑 [Name](URL)"
             >
               Markdown
             </button>
@@ -94,10 +94,10 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
               <button
                 onClick={onUnlock}
                 className="px-3 py-2 text-sm text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 rounded transition-colors flex items-center gap-2"
-                title="Retirer mon verrou"
+                title="Remove my lock"
               >
                 <Unlock className="w-4 h-4" />
-                Déverrouiller
+                Unlock
               </button>
             )}
             {!readOnly && (
@@ -105,14 +105,14 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
                 <button
                   onClick={onEdit}
                   className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
-                  title="Modifier"
+                  title="Edit"
                 >
                   <Edit2 className="w-5 h-5" />
                 </button>
                 <button
                   onClick={onDelete}
                   className="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors"
-                  title="Supprimer"
+                  title="Delete"
                 >
                   <Trash2 className="w-5 h-5" />
                 </button>
@@ -131,7 +131,7 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
                 type="text"
                 value={password.username || ''}
                 readOnly
-                placeholder="Non renseigné"
+                placeholder="Not set"
                 className="flex-1 px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-gray-100"
               />
               <button
@@ -139,7 +139,7 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
                 onClick={() => copyToClipboard(password.username || '', 'Login')}
                 disabled={!password.username}
                 className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Copier le login"
+                title="Copy login"
               >
                 <Copy className="w-5 h-5" />
               </button>
@@ -157,7 +157,7 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
                   value={password.password || ''}
                   readOnly
                   autoComplete="off"
-                  placeholder="Non renseigné"
+                  placeholder="Not set"
                   className="w-full px-3 py-2 pr-10 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded font-mono text-gray-900 dark:text-gray-100 transition-all duration-200"
                 />
                 <button
@@ -186,7 +186,7 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
                 onClick={() => copyToClipboard(password.password || '', 'Password')}
                 disabled={!password.password}
                 className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Copier le mot de passe"
+                title="Copy password"
               >
                 <Copy className="w-5 h-5" />
               </button>
@@ -202,7 +202,7 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
                 type="url"
                 value={password.url || ''}
                 readOnly
-                placeholder="Non renseigné"
+                placeholder="Not set"
                 className="flex-1 px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-gray-100"
               />
               <button
@@ -210,7 +210,7 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
                 onClick={() => copyToClipboard(password.url || '', 'URL')}
                 disabled={!password.url}
                 className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Copier l'URL"
+                title="Copy URL"
               >
                 <Copy className="w-5 h-5" />
               </button>
@@ -219,22 +219,22 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
 
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Commentaires
+              Comments
             </label>
             <div className="flex items-start gap-2">
               <textarea
                 value={password.notes || ''}
                 readOnly
-                placeholder="Non renseigné"
+                placeholder="Not set"
                 rows={3}
                 className="flex-1 px-3 py-2 bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded text-gray-900 dark:text-gray-100 resize-none"
               />
               <button
                 type="button"
-                onClick={() => copyToClipboard(password.notes || '', 'Commentaires')}
+                onClick={() => copyToClipboard(password.notes || '', 'Comments')}
                 disabled={!password.notes}
                 className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-0.5"
-                title="Copier les commentaires"
+                title="Copy comments"
               >
                 <Copy className="w-5 h-5" />
               </button>
@@ -242,8 +242,8 @@ const PasswordDetailView: React.FC<PasswordDetailViewProps> = ({
           </div>
 
           <div className="pt-4 border-t dark:border-gray-700 text-xs text-gray-500 dark:text-gray-400">
-            <p>Créé le : {password.created_at ? new Date(password.created_at).toLocaleString('fr-FR') : '-'}</p>
-            <p>Modifié le : {password.updated_at ? new Date(password.updated_at).toLocaleString('fr-FR') : '-'}</p>
+            <p>Created: {password.created_at ? new Date(password.created_at).toLocaleString() : '-'}</p>
+            <p>Modified: {password.updated_at ? new Date(password.updated_at).toLocaleString() : '-'}</p>
           </div>
 
           {/* Tags section - at the very bottom */}

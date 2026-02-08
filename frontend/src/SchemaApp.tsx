@@ -10,7 +10,7 @@ import SchemaCanvas from './components/SchemaCanvas';
 import DevicePropertiesPanel from './components/DevicePropertiesPanel';
 import CustomTemplateEditor from './components/CustomTemplateEditor';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent } from '@dnd-kit/core';
-import { Network, Folder, X, Trash2 } from 'lucide-react';
+import { Network, Folder, X, Trash2, PanelLeftOpen } from 'lucide-react';
 import { DeviceTemplate, CustomDeviceTemplate } from './types';
 import { getHashSelection, setHashSelection, onHashChange } from './utils/urlHash';
 
@@ -26,6 +26,16 @@ function SchemaApp() {
     const saved = localStorage.getItem('markd_schemas_tree_width');
     return saved ? parseInt(saved, 10) : 320;
   });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    return localStorage.getItem('markd_schemas_sidebar_collapsed') === 'true';
+  });
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem('markd_schemas_sidebar_collapsed', String(next));
+      return next;
+    });
+  }, []);
   const [isResizing, setIsResizing] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -154,14 +164,12 @@ function SchemaApp() {
     if (storedUser) {
       try {
         const user = JSON.parse(storedUser);
-        console.log('User ID from localStorage:', user.id);
         return String(user.id);
       } catch (e) {
         console.error('Error parsing stored user:', e);
       }
     }
     const fallbackId = `user-${Math.random().toString(36).substr(2, 9)}`;
-    console.log('Using fallback user ID:', fallbackId);
     return fallbackId;
   }, []);
   
@@ -922,7 +930,7 @@ function SchemaApp() {
   const handleTemplateEditorSave = useCallback(async () => {
     // Reload device templates after save
     try {
-      const result = await api.getDeviceTemplates(currentWorkspace?.id || 'demo');
+      const result = await api.getDeviceTemplates(currentWorkspace || 'demo');
       if (result.success) {
         setDeviceTemplates(result.templates);
         // Trigger refresh in SchemaCanvas
@@ -1059,11 +1067,11 @@ function SchemaApp() {
         
         // Restore selection after tree update
         if (selectedIds.length > 0 && result.tree.length > 0) {
-          const findItem = (nodes: SchemaItem[], targetId: string): SchemaItem | null => {
+          const findItemInTree = (nodes: SchemaItem[], targetId: string): SchemaItem | null => {
             for (const node of nodes) {
               if (node.id === targetId) return node;
               if (node.children) {
-                const found = findItem(node.children, targetId);
+                const found = findItemInTree(node.children, targetId);
                 if (found) return found;
               }
             }
@@ -1072,7 +1080,7 @@ function SchemaApp() {
           
           const foundItems: SchemaItem[] = [];
           for (const id of selectedIds) {
-            const item = findItem(result.tree, id);
+            const item = findItemInTree(result.tree, id);
             if (item) foundItems.push(item);
           }
           
@@ -1454,6 +1462,19 @@ function SchemaApp() {
           cursor: isResizing ? 'col-resize' : (activeId ? 'grabbing' : 'default') 
         }}
       >
+        {/* Collapsed sidebar strip */}
+        {sidebarCollapsed ? (
+          <div className="flex flex-col items-center gap-2 border-r border-gray-200 bg-white py-3 px-1.5 dark:border-gray-700 dark:bg-gray-800">
+            <button
+              onClick={toggleSidebar}
+              className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+              title="Show sidebar"
+            >
+              <PanelLeftOpen size={18} />
+            </button>
+          </div>
+        ) : (
+          <>
         <div className="flex flex-col" style={{ width: treeWidth }}>
           <SchemaTree
             tree={filteredTree}
@@ -1478,6 +1499,7 @@ function SchemaApp() {
             allTags={allTags}
             selectedTags={selectedTags}
             onTagFilterChange={setSelectedTags}
+            onCollapseSidebar={toggleSidebar}
           />
         </div>
         
@@ -1489,6 +1511,8 @@ function SchemaApp() {
         >
           <div className="absolute inset-y-0 -left-1 -right-1 group-hover:bg-blue-200 dark:group-hover:bg-blue-800 group-hover:opacity-20" />
         </div>
+          </>
+        )}
 
         {selected.length > 0 && selected[0].type === 'schema' && selectedSchema ? (
           <div className="flex-1 flex flex-col relative">
@@ -1517,7 +1541,7 @@ function SchemaApp() {
               onTemplatesLoaded={setDeviceTemplates}
               onEditTemplate={handleEditTemplate}
               onCreateTemplate={handleCreateTemplate}
-              workspaceId={currentWorkspace?.id || 'demo'}
+              workspaceId={currentWorkspace || 'demo'}
               refreshTemplatesTrigger={templatesRefreshTrigger}
             />
             
@@ -1571,7 +1595,7 @@ function SchemaApp() {
       {showTemplateEditor && (
         <CustomTemplateEditor
           template={editingTemplate}
-          workspaceId={currentWorkspace?.id || 'demo'}
+          workspaceId={currentWorkspace || 'demo'}
           onClose={() => {
             setShowTemplateEditor(false);
             setEditingTemplate(null);

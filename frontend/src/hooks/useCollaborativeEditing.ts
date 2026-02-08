@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { io, Socket } from 'socket.io-client';
+import { Socket } from 'socket.io-client';
 import { PresenceUser } from '../components/PresenceBar';
+import { websocket } from '../services/websocket';
 
 interface StreamingSession {
   session_id: string;
@@ -31,8 +32,6 @@ interface UseCollaborativeEditingReturn {
   leaveDocument: () => void;
 }
 
-const SOCKET_URL = import.meta.env.VITE_API_URL || '';
-
 export function useCollaborativeEditing({
   documentId,
   userId,
@@ -47,34 +46,34 @@ export function useCollaborativeEditing({
   const socketRef = useRef<Socket | null>(null);
   const hasJoinedRef = useRef(false);
 
-  // Initialize socket connection
+  // Use the shared global socket instead of creating a new connection
   useEffect(() => {
     if (!documentId) return;
 
-    // Use existing socket or create new one
-    const socket = io(SOCKET_URL, {
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-    });
+    // Ensure global websocket is connected and get the shared socket
+    websocket.connect();
+    const socket = websocket.getSocket();
+    if (!socket) return;
 
     socketRef.current = socket;
+    setIsConnected(socket.connected);
 
-    socket.on('connect', () => {
+    // Listen for connect/disconnect on the shared socket
+    const onConnect = () => {
       setIsConnected(true);
-      console.log('[Collaborative] Connected to server');
-      
-      // Re-join document if we were previously joined
+      console.log('[Collaborative] Shared socket connected');
       if (hasJoinedRef.current) {
         joinDocumentInternal();
       }
-    });
+    };
 
-    socket.on('disconnect', () => {
+    const onDisconnect = () => {
       setIsConnected(false);
-      console.log('[Collaborative] Disconnected from server');
-    });
+      console.log('[Collaborative] Shared socket disconnected');
+    };
+
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
 
     // Heartbeat to keep presence alive (every 30 seconds)
     const heartbeatInterval = setInterval(() => {
@@ -87,19 +86,17 @@ export function useCollaborativeEditing({
     }, 30000);
 
     // Presence events
-    socket.on('presence:list', (data: { document_id: string; users: PresenceUser[] }) => {
+    const onPresenceList = (data: { document_id: string; users: PresenceUser[] }) => {
       if (data.document_id === documentId) {
         setUsers(data.users);
       }
-    });
+    };
 
-    socket.on('presence:join', (data: { document_id: string; user: PresenceUser }) => {
+    const onPresenceJoin = (data: { document_id: string; user: PresenceUser }) => {
       if (data.document_id === documentId) {
         setUsers(prev => {
-          // Check if user already exists
           const existingIndex = prev.findIndex(u => u.user_id === data.user.user_id);
           if (existingIndex >= 0) {
-            // Update existing user (important for is_agent flag)
             const updated = [...prev];
             updated[existingIndex] = data.user;
             return updated;
@@ -107,15 +104,15 @@ export function useCollaborativeEditing({
           return [...prev, data.user];
         });
       }
-    });
+    };
 
-    socket.on('presence:leave', (data: { document_id: string; user_id: string }) => {
+    const onPresenceLeave = (data: { document_id: string; user_id: string }) => {
       if (data.document_id === documentId) {
         setUsers(prev => prev.filter(u => u.user_id !== data.user_id));
       }
-    });
+    };
 
-    socket.on('presence:cursor', (data: {
+    const onPresenceCursor = (data: {
       document_id: string;
       user_id: string;
       cursor_position?: number;
@@ -135,23 +132,21 @@ export function useCollaborativeEditing({
           return u;
         }));
       }
-    });
+    };
 
-    // Legacy presence event for backward compatibility
-    socket.on('presence_updated', (data: { document_id: string; users: PresenceUser[] }) => {
+    const onPresenceUpdated = (data: { document_id: string; users: PresenceUser[] }) => {
       if (data.document_id === documentId) {
         setUsers(data.users);
       }
-    });
+    };
 
-    // Streaming events
-    socket.on('stream:start', (data: StreamingSession) => {
+    const onStreamStart = (data: StreamingSession) => {
       if (data.document_id === documentId) {
         setStreamingSessions(prev => [...prev, data]);
       }
-    });
+    };
 
-    socket.on('stream:chunk', (data: {
+    const onStreamChunkEvent = (data: {
       document_id: string;
       session_id: string;
       text: string;
@@ -161,18 +156,17 @@ export function useCollaborativeEditing({
       if (data.document_id === documentId && onStreamChunk) {
         onStreamChunk(data.text, data.position, data.agent_name);
       }
-    });
+    };
 
-    socket.on('stream:end', (data: { document_id: string; session_id: string }) => {
+    const onStreamEnd = (data: { document_id: string; session_id: string }) => {
       if (data.document_id === documentId) {
         setStreamingSessions(prev => 
           prev.filter(s => s.session_id !== data.session_id)
         );
       }
-    });
+    };
 
-    // Content change events from other users
-    socket.on('content:change', (data: {
+    const onContentChangeEvent = (data: {
       document_id: string;
       content?: string;
       text?: string;
@@ -182,14 +176,12 @@ export function useCollaborativeEditing({
       username?: string;
     }) => {
       if (data.document_id === documentId && data.content) {
-        // Mark the user as typing
         if (data.user_id) {
           setUsers(prev => prev.map(u => 
             u.user_id === data.user_id 
               ? { ...u, is_typing: true } 
               : u
           ));
-          // Clear typing indicator after 2 seconds
           setTimeout(() => {
             setUsers(prev => prev.map(u => 
               u.user_id === data.user_id 
@@ -199,30 +191,53 @@ export function useCollaborativeEditing({
           }, 2000);
         }
         
-        // Use the dedicated remote content change handler if available
         if (onRemoteContentChange) {
           onRemoteContentChange(data.content);
         } else if (onContentChange) {
           onContentChange(data.content);
         }
       }
-    });
+    };
 
-    socket.on('content:sync', (data: {
+    const onContentSync = (data: {
       document_id: string;
       content: string;
     }) => {
       if (data.document_id === documentId && onContentChange) {
         onContentChange(data.content);
       }
-    });
+    };
+
+    socket.on('presence:list', onPresenceList);
+    socket.on('presence:join', onPresenceJoin);
+    socket.on('presence:leave', onPresenceLeave);
+    socket.on('presence:cursor', onPresenceCursor);
+    socket.on('presence_updated', onPresenceUpdated);
+    socket.on('stream:start', onStreamStart);
+    socket.on('stream:chunk', onStreamChunkEvent);
+    socket.on('stream:end', onStreamEnd);
+    socket.on('content:change', onContentChangeEvent);
+    socket.on('content:sync', onContentSync);
 
     return () => {
       clearInterval(heartbeatInterval);
       if (hasJoinedRef.current) {
         socket.emit('leave_document', { document_id: documentId });
+        hasJoinedRef.current = false;
       }
-      socket.disconnect();
+      // Remove only our listeners, do NOT disconnect the shared socket
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      socket.off('presence:list', onPresenceList);
+      socket.off('presence:join', onPresenceJoin);
+      socket.off('presence:leave', onPresenceLeave);
+      socket.off('presence:cursor', onPresenceCursor);
+      socket.off('presence_updated', onPresenceUpdated);
+      socket.off('stream:start', onStreamStart);
+      socket.off('stream:chunk', onStreamChunkEvent);
+      socket.off('stream:end', onStreamEnd);
+      socket.off('content:change', onContentChangeEvent);
+      socket.off('content:sync', onContentSync);
       socketRef.current = null;
     };
   }, [documentId, userId]);

@@ -39,7 +39,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         } else if (currentExists) {
           // Update name and permission from fresh data
           setWorkspaceName(currentExists.name);
-          setUserPermission(currentExists.user_permission || 'read');
+          setUserPermission(currentExists.user_permission ?? 'read');
         }
       }
     } catch (error) {
@@ -60,7 +60,7 @@ export const WorkspaceProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const ws = workspaces.find(w => w.id === currentWorkspace);
       if (ws) {
         setWorkspaceName(ws.name);
-        setUserPermission(ws.user_permission || 'read');
+        setUserPermission(ws.user_permission ?? 'read');
         // Persist choice
         localStorage.setItem('last_workspace', currentWorkspace);
       }

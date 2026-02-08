@@ -76,7 +76,7 @@ const SortableItem: React.FC<SortableItemProps> = ({
           {...attributes}
           {...listeners}
           className="cursor-grab text-gray-300 opacity-0 transition-opacity hover:text-gray-400 group-hover:opacity-100 active:cursor-grabbing dark:text-gray-600 dark:hover:text-gray-500"
-          title="Réorganiser"
+          title="Reorder"
         >
           <GripVertical size={16} />
         </button>
@@ -318,9 +318,9 @@ const TaskChecklist: React.FC<TaskChecklistProps> = ({
                 <div className="rounded-full bg-gray-100 p-3 dark:bg-gray-800">
                   <ListChecks size={24} className="text-gray-400" />
                 </div>
-                <h3 className="text-sm font-medium text-gray-900 dark:text-white">Aucune sous-tâche</h3>
+                <h3 className="text-sm font-medium text-gray-900 dark:text-white">No subtasks</h3>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
-                  {canEdit ? 'Ajoutez des sous-tâches pour décomposer cette tâche.' : 'Aucune sous-tâche pour cette tâche.'}
+                  {canEdit ? 'Add subtasks to break down this task.' : 'No subtasks for this task.'}
                 </p>
               </div>
             ) : (

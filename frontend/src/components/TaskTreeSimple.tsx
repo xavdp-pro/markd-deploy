@@ -9,7 +9,6 @@ import {
   Copy,
   ChevronRight,
   ChevronDown,
-  Lock,
   Search,
   X,
 } from 'lucide-react';
@@ -30,7 +29,6 @@ interface TaskTreeProps {
   onDelete?: (id: string) => void;
   onRename?: (id: string, newName: string) => void;
   onCopy: (id: string) => void;
-  onUnlock?: (id: string) => void;
   // width?: number;
   readOnly?: boolean;
   userPermission?: string;
@@ -50,7 +48,6 @@ interface ContextMenuProps {
   onDelete?: (id: string) => void;
   onRename?: (id: string, newName: string) => void;
   onCopy: (id: string) => void;
-  onUnlock?: (id: string) => void;
   readOnly?: boolean;
 }
 
@@ -64,7 +61,6 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
   onDelete,
   onRename,
   onCopy,
-  onUnlock,
 }) => {
   const { user } = useAuth();
   const menuRef = useRef<HTMLDivElement>(null);
@@ -210,15 +206,6 @@ const ContextMenu: React.FC<ContextMenuProps> = ({
             Delete
           </button>
 
-          {node.locked_by && node.locked_by.user_id !== user?.id?.toString() && (
-            <button
-              onClick={() => handleAction(() => onUnlock?.(node.id))}
-              className="w-full px-3 py-2 text-left text-sm text-orange-600 hover:bg-orange-50 flex items-center gap-2"
-            >
-              <Lock size={14} />
-              Force unlock
-            </button>
-          )}
         </>
       )}
 
@@ -259,7 +246,6 @@ const TaskTree: React.FC<TaskTreeProps> = ({
   onDelete,
   onRename,
   onCopy,
-  onUnlock,
   // width,
   readOnly = false,
   userPermission = 'read',
@@ -367,12 +353,6 @@ const TaskTree: React.FC<TaskTreeProps> = ({
             </span>
           )}
 
-          {/* Lock indicator */}
-          {node.locked_by && (
-            <span title={`Locked by ${node.locked_by.user_name}`} className="flex items-center">
-              <Lock size={14} className="text-orange-500 flex-shrink-0" />
-            </span>
-          )}
         </div>
 
         {/* Children */}
@@ -473,7 +453,6 @@ const TaskTree: React.FC<TaskTreeProps> = ({
           onDelete={onDelete}
           onRename={onRename}
           onCopy={onCopy}
-          onUnlock={onUnlock}
           readOnly={readOnly}
         />
       )}

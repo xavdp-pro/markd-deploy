@@ -14,11 +14,11 @@ const ForgotPasswordPage: React.FC = () => {
   const navigate = useNavigate();
 
   const validatePassword = (password: string): string | null => {
-    if (password.length < 10) return 'Au moins 10 caractères requis';
-    if (!/[A-Z]/.test(password)) return 'Au moins 1 majuscule requise';
-    if (!/[a-z]/.test(password)) return 'Au moins 1 minuscule requise';
-    if (!/[0-9]/.test(password)) return 'Au moins 1 chiffre requis';
-    if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) return 'Au moins 1 symbole requis';
+    if (password.length < 10) return 'At least 10 characters required';
+    if (!/[A-Z]/.test(password)) return 'At least 1 uppercase letter required';
+    if (!/[a-z]/.test(password)) return 'At least 1 lowercase letter required';
+    if (!/[0-9]/.test(password)) return 'At least 1 digit required';
+    if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) return 'At least 1 symbol required';
     return null;
   };
 
@@ -36,13 +36,13 @@ const ForgotPasswordPage: React.FC = () => {
       });
 
       if (response.ok) {
-        setSuccess('Code de réinitialisation envoyé par email');
+        setSuccess('Reset code sent to your email');
         setStep('code');
       } else {
-        setError('Email non trouvé');
+        setError('Email not found');
       }
     } catch (err) {
-      setError('Une erreur est survenue');
+      setError('An error occurred');
     } finally {
       setIsLoading(false);
     }
@@ -64,10 +64,10 @@ const ForgotPasswordPage: React.FC = () => {
       if (response.ok) {
         setStep('reset');
       } else {
-        setError('Code invalide ou expiré');
+        setError('Invalid or expired code');
       }
     } catch (err) {
-      setError('Une erreur est survenue');
+      setError('An error occurred');
     } finally {
       setIsLoading(false);
     }
@@ -79,7 +79,7 @@ const ForgotPasswordPage: React.FC = () => {
     setSuccess('');
 
     if (password !== confirmPassword) {
-      setError('Les mots de passe ne correspondent pas');
+      setError('Passwords do not match');
       return;
     }
 
@@ -99,13 +99,13 @@ const ForgotPasswordPage: React.FC = () => {
       });
 
       if (response.ok) {
-        setSuccess('Mot de passe réinitialisé avec succès');
+        setSuccess('Password reset successfully');
         setTimeout(() => navigate('/login'), 2000);
       } else {
-        setError('Échec de la réinitialisation');
+        setError('Reset failed');
       }
     } catch (err) {
-      setError('Une erreur est survenue');
+      setError('An error occurred');
     } finally {
       setIsLoading(false);
     }
@@ -125,7 +125,7 @@ const ForgotPasswordPage: React.FC = () => {
             className="flex items-center gap-2 text-blue-600 hover:text-blue-700 mb-6"
           >
             <ArrowLeft className="w-4 h-4" />
-            Retour à la connexion
+            Back to login
           </button>
 
           {error && (
@@ -143,10 +143,10 @@ const ForgotPasswordPage: React.FC = () => {
           {step === 'email' && (
             <>
               <h2 className="text-2xl font-semibold text-center text-gray-700 mb-6">
-                Mot de passe oublié
+                Forgot Password
               </h2>
               <p className="text-gray-600 text-center mb-6">
-                Entrez votre email pour recevoir un code de réinitialisation
+                Enter your email to receive a reset code
               </p>
               <form onSubmit={handleRequestCode} className="space-y-6">
                 <div>
@@ -168,7 +168,7 @@ const ForgotPasswordPage: React.FC = () => {
                   disabled={isLoading}
                   className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 disabled:opacity-50"
                 >
-                  {isLoading ? 'Envoi...' : 'Envoyer le code'}
+                  {isLoading ? 'Sending...' : 'Send code'}
                 </button>
               </form>
             </>
@@ -177,16 +177,16 @@ const ForgotPasswordPage: React.FC = () => {
           {step === 'code' && (
             <>
               <h2 className="text-2xl font-semibold text-center text-gray-700 mb-6">
-                Vérifier le code
+                Verify code
               </h2>
               <p className="text-gray-600 text-center mb-6">
-                Entrez le code de 6 chiffres reçu par email
+                Enter the 6-digit code received by email
               </p>
               <form onSubmit={handleVerifyCode} className="space-y-6">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
                     <Key className="w-4 h-4" />
-                    Code de vérification
+                    Verification code
                   </label>
                   <input
                     type="text"
@@ -204,7 +204,7 @@ const ForgotPasswordPage: React.FC = () => {
                   disabled={isLoading || code.length !== 6}
                   className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 disabled:opacity-50"
                 >
-                  {isLoading ? 'Vérification...' : 'Vérifier'}
+                  {isLoading ? 'Verifying...' : 'Verify'}
                 </button>
               </form>
             </>
@@ -213,22 +213,22 @@ const ForgotPasswordPage: React.FC = () => {
           {step === 'reset' && (
             <>
               <h2 className="text-2xl font-semibold text-center text-gray-700 mb-6">
-                Nouveau mot de passe
+                New Password
               </h2>
               <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg mb-6 text-sm">
-                <p className="font-semibold mb-1">Le mot de passe doit contenir :</p>
+                <p className="font-semibold mb-1">Password must contain:</p>
                 <ul className="list-disc list-inside space-y-1">
-                  <li>Au moins 10 caractères</li>
-                  <li>Au moins 1 majuscule (A-Z)</li>
-                  <li>Au moins 1 minuscule (a-z)</li>
-                  <li>Au moins 1 chiffre (0-9)</li>
-                  <li>Au moins 1 symbole (!@#$%...)</li>
+                  <li>At least 10 characters</li>
+                  <li>At least 1 uppercase letter (A-Z)</li>
+                  <li>At least 1 lowercase letter (a-z)</li>
+                  <li>At least 1 digit (0-9)</li>
+                  <li>At least 1 symbol (!@#$%...)</li>
                 </ul>
               </div>
               <form onSubmit={handleResetPassword} className="space-y-6">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Nouveau mot de passe
+                    New password
                   </label>
                   <input
                     type="password"
@@ -241,7 +241,7 @@ const ForgotPasswordPage: React.FC = () => {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Confirmer le mot de passe
+                    Confirm password
                   </label>
                   <input
                     type="password"
@@ -257,7 +257,7 @@ const ForgotPasswordPage: React.FC = () => {
                   disabled={isLoading}
                   className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 disabled:opacity-50"
                 >
-                  {isLoading ? 'Réinitialisation...' : 'Réinitialiser le mot de passe'}
+                  {isLoading ? 'Resetting...' : 'Reset password'}
                 </button>
               </form>
             </>

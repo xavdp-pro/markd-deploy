@@ -70,13 +70,13 @@ const PasswordForm: React.FC<PasswordFormProps> = ({
   return (
     <div className="max-w-2xl mx-auto bg-white dark:bg-gray-800 rounded-lg shadow p-6">
       <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-6">
-        {isEditing ? 'Modifier le mot de passe' : 'Nouveau mot de passe'}
+        {isEditing ? 'Edit password' : 'New password'}
       </h3>
       
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            Titre *
+            Title *
           </label>
           <input
             type="text"
@@ -116,7 +116,7 @@ const PasswordForm: React.FC<PasswordFormProps> = ({
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                 autoComplete="new-password"
                 className="w-full px-3 py-2 pr-10 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono transition-all duration-200"
-                placeholder={isEditing ? "Entrez le nouveau mot de passe" : "Mot de passe"}
+                placeholder={isEditing ? "Enter new password" : "Password"}
               />
               <button
                 type="button"
@@ -143,14 +143,14 @@ const PasswordForm: React.FC<PasswordFormProps> = ({
               onClick={generatePassword}
               className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
             >
-              Générer
+              Generate
             </button>
           </div>
         </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            URL (optionnel)
+            URL (optional)
           </label>
           <input
             type="url"
@@ -163,14 +163,14 @@ const PasswordForm: React.FC<PasswordFormProps> = ({
 
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            Commentaires (optionnel)
+            Comments (optional)
           </label>
           <textarea
             value={formData.notes}
             onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
             rows={3}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder="Commentaires additionnels..."
+            placeholder="Additional comments..."
           />
         </div>
 
@@ -204,14 +204,14 @@ const PasswordForm: React.FC<PasswordFormProps> = ({
             disabled={isLoading}
             className="flex-1 px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded hover:bg-blue-700 dark:hover:bg-blue-600 disabled:opacity-50 transition-colors"
           >
-            {isLoading ? 'Enregistrement...' : isEditing ? 'Modifier' : 'Créer'}
+            {isLoading ? 'Saving...' : isEditing ? 'Update' : 'Create'}
           </button>
           <button
             type="button"
             onClick={onCancel}
             className="px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
           >
-            Annuler
+            Cancel
           </button>
         </div>
       </form>

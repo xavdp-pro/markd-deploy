@@ -1,7 +1,7 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import MDEditor from '@uiw/react-md-editor';
 import { Document, Tag as TagType } from '../types';
-import { Image, Upload, Tag } from 'lucide-react';
+import { Image, Upload, Tag, Code, Columns2, Eye } from 'lucide-react';
 import toast from 'react-hot-toast';
 import TagSelector from './TagSelector';
 import { api } from '../services/api';
@@ -31,6 +31,7 @@ const DocumentEditor: React.FC<DocumentEditorProps> = ({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [viewMode, setViewMode] = useState<'edit' | 'live' | 'preview'>('live');
   const [tags, setTags] = useState<TagType[]>([]);
   const [availableTags, setAvailableTags] = useState<TagType[]>([]);
   
@@ -314,7 +315,7 @@ const DocumentEditor: React.FC<DocumentEditorProps> = ({
       <div className="p-4 border-b bg-white dark:bg-gray-800 dark:border-gray-700">
         <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <h2 className="font-bold text-lg text-gray-900 dark:text-white">{document.name}</h2>
+          <h2 className="font-bold text-lg text-gray-900 dark:text-white truncate mr-4">{document.name}</h2>
           {isConnected && (
             <span className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400">
               <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
@@ -322,7 +323,43 @@ const DocumentEditor: React.FC<DocumentEditorProps> = ({
             </span>
           )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          {/* View mode toggle */}
+          <div className="flex items-center rounded-lg border border-gray-200 dark:border-gray-600 overflow-hidden">
+            <button
+              onClick={() => setViewMode('edit')}
+              className={`p-2 transition-colors ${
+                viewMode === 'edit'
+                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400'
+                  : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700'
+              }`}
+              title="Edit only"
+            >
+              <Code size={16} />
+            </button>
+            <button
+              onClick={() => setViewMode('live')}
+              className={`p-2 border-x border-gray-200 dark:border-gray-600 transition-colors ${
+                viewMode === 'live'
+                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400'
+                  : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700'
+              }`}
+              title="Split view"
+            >
+              <Columns2 size={16} />
+            </button>
+            <button
+              onClick={() => setViewMode('preview')}
+              className={`p-2 transition-colors ${
+                viewMode === 'preview'
+                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400'
+                  : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700'
+              }`}
+              title="Preview only"
+            >
+              <Eye size={16} />
+            </button>
+          </div>
           <input
             ref={fileInputRef}
             type="file"
@@ -413,8 +450,8 @@ const DocumentEditor: React.FC<DocumentEditorProps> = ({
             onChange={handleEditorChange}
             height="100%"
             data-color-mode={isDarkMode ? 'dark' : 'light'}
-            preview="edit"
-            hideToolbar={false}
+            preview={viewMode}
+            hideToolbar={viewMode === 'preview'}
             extraCommands={[]}
           />
         </div>

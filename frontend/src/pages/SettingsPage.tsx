@@ -6,10 +6,9 @@ import { Save, Bell } from 'lucide-react';
 const SettingsPage: React.FC = () => {
   const [settings, setSettings] = useState({
     emailNotifications: true,
-    autoSave: true,
   });
   const handleSave = async () => {
-    toast.success('Paramètres enregistrés avec succès');
+    toast.success('Settings saved successfully');
   };
 
   return (
@@ -18,7 +17,7 @@ const SettingsPage: React.FC = () => {
       
       <div className="flex-1 overflow-auto p-8">
         <div className="max-w-2xl mx-auto">
-          <h2 className="text-3xl font-bold text-gray-800 dark:text-white mb-8">Paramètres de l'application</h2>
+          <h2 className="text-3xl font-bold text-gray-800 dark:text-white mb-8">Application Settings</h2>
 
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 mb-6">
             <h3 className="text-xl font-semibold text-gray-800 dark:text-white mb-4 flex items-center gap-2">
@@ -42,21 +41,6 @@ const SettingsPage: React.FC = () => {
                 </label>
               </div>
 
-              <div className="flex items-center justify-between">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Auto-save</label>
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Automatically save documents</p>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={settings.autoSave}
-                    onChange={(e) => setSettings({ ...settings, autoSave: e.target.checked })}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                </label>
-              </div>
             </div>
           </div>
 

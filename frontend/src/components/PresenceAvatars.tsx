@@ -1,7 +1,7 @@
 import React from 'react';
 
 interface PresenceAvatarsProps {
-  users: Array<{ id: string; username: string }>;
+  users: Array<{ id?: string; user_id?: string; username: string }>;
   maxVisible?: number;
 }
 
@@ -38,7 +38,7 @@ const PresenceAvatars: React.FC<PresenceAvatarsProps> = ({ users, maxVisible = 3
     <div className="flex items-center -space-x-2">
       {visibleUsers.map((user) => (
         <div
-          key={user.id}
+          key={user.id || user.user_id || user.username}
           className={`relative w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-medium border-2 border-white dark:border-gray-800 ${getAvatarColor(
             user.username
           )}`}

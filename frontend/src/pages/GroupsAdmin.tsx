@@ -77,7 +77,7 @@ const GroupsAdmin: React.FC = () => {
       }
     } catch (err) {
       console.error('Error loading groups:', err);
-      toast.error('Erreur lors du chargement des groupes');
+      toast.error('Error loading groups');
     } finally {
       setLoading(false);
     }
@@ -99,7 +99,7 @@ const GroupsAdmin: React.FC = () => {
 
   const handleCreate = async () => {
     if (!formData.name.trim()) {
-      toast.error('Le nom est requis');
+      toast.error('Name is required');
       return;
     }
 
@@ -113,20 +113,20 @@ const GroupsAdmin: React.FC = () => {
       const data = await response.json();
       
       if (data.success) {
-        toast.success('Groupe créé avec succès');
+        toast.success('Group created successfully');
         setCreating(false);
         setFormData({ name: '', description: '' });
         loadGroups();
       }
     } catch (err) {
       console.error('Error creating group:', err);
-      toast.error('Erreur lors de la création');
+      toast.error('Error creating group');
     }
   };
 
   const handleUpdate = async (id: string) => {
     if (!formData.name.trim()) {
-      toast.error('Le nom est requis');
+      toast.error('Name is required');
       return;
     }
 
@@ -140,25 +140,25 @@ const GroupsAdmin: React.FC = () => {
       const data = await response.json();
       
       if (data.success) {
-        toast.success('Groupe modifié avec succès');
+        toast.success('Group updated successfully');
         setEditing(null);
         setFormData({ name: '', description: '' });
         loadGroups();
       }
     } catch (err) {
       console.error('Error updating group:', err);
-      toast.error('Erreur lors de la modification');
+      toast.error('Error updating group');
     }
   };
 
   const handleDelete = async (id: string, name: string) => {
     // Prevent deleting only the ALL group
     if (id === 'all') {
-      toast.error('Impossible de supprimer le groupe ALL');
+      toast.error('Cannot delete the ALL group');
       return;
     }
 
-    if (!confirm(`Voulez-vous vraiment supprimer le groupe "${name}" ?\n\nCela supprimera aussi tous ses membres et permissions.`)) {
+    if (!confirm(`Are you sure you want to delete the group "${name}"?\n\nThis will also remove all its members and permissions.`)) {
       return;
     }
 
@@ -170,14 +170,14 @@ const GroupsAdmin: React.FC = () => {
       const data = await response.json();
       
       if (data.success) {
-        toast.success('Groupe supprimé avec succès');
+        toast.success('Group deleted successfully');
         loadGroups();
       } else {
-        toast.error(data.message || 'Erreur lors de la suppression');
+        toast.error(data.message || 'Error deleting group');
       }
     } catch (err) {
       console.error('Error deleting group:', err);
-      toast.error('Erreur lors de la suppression');
+      toast.error('Error deleting group');
     }
   };
 
@@ -209,7 +209,7 @@ const GroupsAdmin: React.FC = () => {
       }
     } catch (err) {
       console.error('Error loading group members:', err);
-      toast.error('Erreur lors du chargement des membres');
+      toast.error('Error loading members');
     }
   };
 
@@ -224,25 +224,25 @@ const GroupsAdmin: React.FC = () => {
       const data = await response.json();
       
       if (data.success) {
-        toast.success('Membre ajouté');
+        toast.success('Member added');
         setAddingMember(false);
         loadGroupMembers(groupId);
         loadGroups();
       }
     } catch (err) {
       console.error('Error adding member:', err);
-      toast.error('Erreur lors de l\'ajout');
+      toast.error('Error adding member');
     }
   };
 
   const handleRemoveMember = async (groupId: string, userId: number) => {
     // Prevent removing users from ALL group
     if (groupId === 'all') {
-      toast.error('Impossible de retirer un utilisateur du groupe ALL');
+      toast.error('Cannot remove a user from the ALL group');
       return;
     }
 
-    if (!confirm('Retirer cet utilisateur du groupe ?')) return;
+    if (!confirm('Remove this user from the group?')) return;
 
     try {
       const response = await fetch(`/api/groups/${groupId}/users/${userId}`, {
@@ -252,13 +252,13 @@ const GroupsAdmin: React.FC = () => {
       const data = await response.json();
       
       if (data.success) {
-        toast.success('Membre retiré');
+        toast.success('Member removed');
         loadGroupMembers(groupId);
         loadGroups();
       }
     } catch (err) {
       console.error('Error removing member:', err);
-      toast.error('Erreur lors de la suppression');
+      toast.error('Error removing member');
     }
   };
 
@@ -271,22 +271,22 @@ const GroupsAdmin: React.FC = () => {
   };
 
   if (loading) {
-    return <div className="p-8 text-center text-gray-900 dark:text-gray-100 bg-gray-50 dark:bg-gray-900 min-h-screen">Chargement...</div>;
+    return <div className="p-8 text-center text-gray-900 dark:text-gray-100 bg-gray-50 dark:bg-gray-900 min-h-screen">Loading...</div>;
   }
 
   return (
     <div className="p-8 max-w-7xl mx-auto bg-gray-50 dark:bg-gray-900 min-h-screen">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Gestion des Groupes</h1>
-          <p className="text-gray-600 dark:text-gray-400 mt-1">Organisez les utilisateurs en groupes métier</p>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Group Management</h1>
+          <p className="text-gray-600 dark:text-gray-400 mt-1">Organize users into business groups</p>
         </div>
         <button
           onClick={() => setCreating(true)}
           className="flex items-center gap-2 px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors"
         >
           <Plus className="w-5 h-5" />
-          Nouveau Groupe
+          New Group
         </button>
       </div>
 
@@ -294,11 +294,11 @@ const GroupsAdmin: React.FC = () => {
       <div className="mb-6 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 flex items-start gap-3">
         <Info className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
         <div className="text-sm text-blue-900 dark:text-blue-300">
-          <p className="font-medium mb-1">Groupes métier :</p>
+          <p className="font-medium mb-1">Business groups:</p>
           <ul className="list-disc list-inside space-y-1 text-blue-800 dark:text-blue-400">
-            <li><strong>ALL</strong> : Tous les utilisateurs (ajoutés automatiquement)</li>
-            <li><strong>Developers, Novice, Visitor</strong> : Groupes métier prédéfinis</li>
-            <li>Les permissions par workspace se configurent dans "Workspaces"</li>
+            <li><strong>ALL</strong>: All users (added automatically)</li>
+            <li><strong>Developers, Novice, Visitor</strong>: Predefined business groups</li>
+            <li>Per-workspace permissions are configured in "Workspaces"</li>
           </ul>
         </div>
       </div>
@@ -306,18 +306,18 @@ const GroupsAdmin: React.FC = () => {
       {/* Create Form */}
       {creating && (
         <div className="mb-6 p-6 bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700">
-          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">Créer un groupe</h3>
+          <h3 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">Create a group</h3>
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Nom du groupe *
+                Group name *
               </label>
               <input
                 type="text"
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="Ex: Équipe Marketing"
+                placeholder="e.g. Marketing Team"
               />
             </div>
             <div>
@@ -329,7 +329,7 @@ const GroupsAdmin: React.FC = () => {
                 onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 rows={3}
-                placeholder="Description du groupe et de son rôle..."
+                placeholder="Group description and role..."
               />
             </div>
             <div className="flex gap-2">
@@ -338,14 +338,14 @@ const GroupsAdmin: React.FC = () => {
                 className="px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded-md hover:bg-blue-700 dark:hover:bg-blue-600 flex items-center gap-2"
               >
                 <Save className="w-4 h-4" />
-                Créer
+                Create
               </button>
               <button
                 onClick={cancelEdit}
                 className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-300 dark:hover:bg-gray-600 flex items-center gap-2"
               >
                 <X className="w-4 h-4" />
-                Annuler
+                Cancel
               </button>
             </div>
           </div>
@@ -377,14 +377,14 @@ const GroupsAdmin: React.FC = () => {
                     className="px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded-md hover:bg-blue-700 dark:hover:bg-blue-600 flex items-center gap-2"
                   >
                     <Save className="w-4 h-4" />
-                    Enregistrer
+                    Save
                   </button>
                   <button
                     onClick={cancelEdit}
                     className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-300 dark:hover:bg-gray-600 flex items-center gap-2"
                   >
                     <X className="w-4 h-4" />
-                    Annuler
+                    Cancel
                   </button>
                 </div>
               </div>
@@ -396,7 +396,7 @@ const GroupsAdmin: React.FC = () => {
                       <Users className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                       <h3 className="text-xl font-semibold text-gray-900 dark:text-white">{group.name}</h3>
                       {isBusinessGroup(group.id) && (
-                        <span className="px-2 py-0.5 text-xs bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded">Métier</span>
+                        <span className="px-2 py-0.5 text-xs bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded">Business</span>
                       )}
                     </div>
                     {group.description && (
@@ -407,7 +407,7 @@ const GroupsAdmin: React.FC = () => {
                     <button
                       onClick={() => startEdit(group)}
                       className="p-2 text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
-                      title="Modifier"
+                      title="Edit"
                     >
                       <Edit2 className="w-4 h-4" />
                     </button>
@@ -415,7 +415,7 @@ const GroupsAdmin: React.FC = () => {
                       <button
                         onClick={() => handleDelete(group.id, group.name)}
                         className="p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-colors"
-                        title="Supprimer"
+                        title="Delete"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -426,7 +426,7 @@ const GroupsAdmin: React.FC = () => {
                 <div className="flex gap-6 mb-4 text-sm text-gray-600 dark:text-gray-400">
                   <div className="flex items-center gap-1">
                     <Users className="w-4 h-4" />
-                    <span>{group.user_count} membre{group.user_count !== 1 ? 's' : ''}</span>
+                    <span>{group.user_count} member{group.user_count !== 1 ? 's' : ''}</span>
                   </div>
                 </div>
 
@@ -436,7 +436,7 @@ const GroupsAdmin: React.FC = () => {
                     className="flex items-center gap-2 px-3 py-1.5 text-sm bg-blue-600 dark:bg-blue-500 text-white rounded-md hover:bg-blue-700 dark:hover:bg-blue-600 transition-colors"
                   >
                     <UserPlus className="w-4 h-4" />
-                    Gérer les membres
+                    Manage members
                   </button>
                 </div>
               </>
@@ -450,10 +450,10 @@ const GroupsAdmin: React.FC = () => {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white dark:bg-gray-800 rounded-lg max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col">
             <div className="p-6 border-b dark:border-gray-700">
-              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Membres du groupe</h2>
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Group Members</h2>
               {managingMembers === 'all' && (
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                  Tous les utilisateurs sont automatiquement dans ce groupe
+                  All users are automatically in this group
                 </p>
               )}
             </div>
@@ -466,7 +466,7 @@ const GroupsAdmin: React.FC = () => {
                       className="mb-4 flex items-center gap-2 px-4 py-2 bg-blue-600 dark:bg-blue-500 text-white rounded-lg hover:bg-blue-700 dark:hover:bg-blue-600"
                     >
                       <Plus className="w-4 h-4" />
-                      Ajouter un membre
+                      Add member
                     </button>
                   )}
                   <div className="space-y-2">
@@ -487,13 +487,13 @@ const GroupsAdmin: React.FC = () => {
                       </div>
                     ))}
                     {groupMembers.length === 0 && (
-                      <p className="text-center text-gray-500 py-8">Aucun membre dans ce groupe</p>
+                      <p className="text-center text-gray-500 py-8">No members in this group</p>
                     )}
                   </div>
                 </>
               ) : (
                 <div className="space-y-4">
-                  <h3 className="font-semibold">Ajouter un utilisateur</h3>
+                  <h3 className="font-semibold">Add a user</h3>
                   <div className="space-y-2">
                     {allUsers
                       .filter(u => !groupMembers.find(m => m.id === u.id))
@@ -512,7 +512,7 @@ const GroupsAdmin: React.FC = () => {
                     onClick={() => setAddingMember(false)}
                     className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300"
                   >
-                    Annuler
+                    Cancel
                   </button>
                 </div>
               )}
@@ -525,7 +525,7 @@ const GroupsAdmin: React.FC = () => {
                 }}
                 className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300"
               >
-                Fermer
+                Close
               </button>
             </div>
           </div>

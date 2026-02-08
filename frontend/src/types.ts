@@ -175,9 +175,8 @@ export interface Task {
   assigned_to?: string;
   responsible_user_id?: number | null;
   responsible_user_name?: string | null;
+  assignees?: Array<{ user_id: number; user_name: string }>;
   due_date?: string;
-  estimated_hours?: number | null;
-  time_spent?: number | null;
   created_at?: string;
   updated_at?: string;
   children?: Task[];
@@ -185,33 +184,6 @@ export interface Task {
     user_id: string;
     user_name: string;
   } | null;
-}
-
-export interface TaskTimelineFile {
-  id: string;
-  timeline_entry_id: string;
-  task_id: string;
-  file_name: string;
-  original_name: string;
-  content_type?: string | null;
-  file_size?: number | null;
-  uploaded_by?: number | null;
-  uploaded_by_name?: string | null;
-  uploaded_at: string;
-  download_url: string;
-}
-
-export interface TaskTimelineItem {
-  id: string;
-  task_id: string;
-  event_type: string;
-  title: string;
-  description?: string | null;
-  metadata?: Record<string, unknown> | null;
-  user_id?: number | null;
-  user_name?: string | null;
-  created_at: string;
-  files?: TaskTimelineFile[];
 }
 
 export interface TaskComment {
@@ -249,7 +221,6 @@ export interface TaskFile {
   uploaded_by_name?: string | null;
   uploaded_at: string;
   download_url: string;
-  markdown_note?: string | null;
 }
 
 export interface TaskAssignee {
@@ -291,4 +262,13 @@ export interface Workflow {
   id: number;
   name: string;
   statuses: TaskStatus[];
+}
+
+export interface WorkflowStep {
+  id: string;
+  workspace_id: string;
+  name: string;
+  slug: string;
+  color: string;
+  sort_order: number;
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
-import { io, Socket } from 'socket.io-client';
+import { Socket } from 'socket.io-client';
+import { websocket } from '../services/websocket';
 
 export interface CollabUser {
     id: string;
@@ -13,6 +14,7 @@ export interface CollabUser {
         line: number;
         column: number;
     };
+    isTyping?: boolean; // Visual indicator when user is actively typing
 }
 
 export function useCollab(documentId: string, userId: string, userName: string, initialContent: string) {
@@ -25,84 +27,113 @@ export function useCollab(documentId: string, userId: string, userName: string, 
 
     const socketRef = useRef<Socket | null>(null);
 
-    // Connect to Socket.IO server
+    // Use the shared global socket instead of creating a separate connection
     useEffect(() => {
-        // Connect to the same host, but via socket.io path
-        const socket = io('/', {
-            path: '/socket.io',
-            reconnectionAttempts: 5,
-            reconnectionDelay: 1000,
-            transports: ['websocket', 'polling']
-        });
+        websocket.connect();
+        const socket = websocket.getSocket();
+        if (!socket) return;
 
-        socket.on('connect', () => {
-            console.log('[Collab] Connected to server', socket.id);
+        setIsConnected(socket.connected);
+
+        const onConnect = () => {
+            console.log('[Collab] Shared socket connected', socket.id);
             setIsConnected(true);
 
             // Join the document room
             socket.emit('join_document', {
                 document_id: documentId,
-                user: { id: userId, username: userName }
+                user: { id: userId, username: userName, user_id: userId }
+            }, (response: any) => {
+                console.log('[Collab] join_document response', response);
+                if (Array.isArray(response)) {
+                    const newUsers = new Map<string, CollabUser>();
+                    response.forEach((u: any) => {
+                        const uId = String(u.user_id || u.id || '');
+                        if (uId === String(userId)) {
+                            if (u.color) setMyColor(u.color);
+                        } else {
+                            newUsers.set(uId, {
+                                id: uId,
+                                clientId: uId,
+                                name: u.username || u.name || 'Unknown',
+                                color: u.color || '#888',
+                                isLocal: false,
+                                isAgent: u.is_agent || false,
+                                agentName: u.agent_name,
+                                cursor: u.cursor_line !== undefined && u.cursor_line !== null ? {
+                                    line: u.cursor_line,
+                                    column: u.cursor_column || 0
+                                } : undefined,
+                                isTyping: false
+                            });
+                        }
+                    });
+                    setRemoteUsers(newUsers);
+                    setIsSynced(true);
+                }
             });
-        });
+        };
 
-        socket.on('disconnect', () => {
-            console.log('[Collab] Disconnected');
+        const onDisconnect = () => {
+            console.log('[Collab] Shared socket disconnected');
             setIsConnected(false);
             setIsSynced(false);
-        });
+        };
 
-        // Receive list of current users when joining
-        socket.on('presence:list', (data: any) => {
-            if (data.document_id !== documentId) return;
-            // Not implemented in backend yet, but join returns users list if we use REST or ACK
-            // For now, let's rely on 'join' events or improve backend later.
-            // Wait! join_document in backend returns users list!
-            // But via ACK callback, not emitted event 'presence:list'.
-            // Socket.IO emit with callback is tricky in React useEffect.
-            // Alternatively, we can listen to 'presence:join' for ourselves?
-            // No, the backend emits 'presence:join' to room.
-            // We need the initial list.
-            // Let's rely on the ACK of emit('join_document').
-        });
+        socket.on('connect', onConnect);
+        socket.on('disconnect', onDisconnect);
+
+        // If already connected, join immediately
+        if (socket.connected) {
+            onConnect();
+        }
 
         // Backend emit: 'presence:join'
-        socket.on('presence:join', (data: any) => {
+        const onPresenceJoin = (data: any) => {
             if (data.document_id !== documentId) return;
             const u = data.user;
+            const uId = String(u.user_id || u.id || '');
 
             // If it's me providing the color
-            if (u.user_id === userId) {
+            if (uId === String(userId)) {
                 setMyColor(u.color);
-                // Don't return, add myself to remoteUsers? No, local user is handled separately.
+                // Don't add myself to remoteUsers, local user is handled separately
                 return;
             }
 
             setRemoteUsers(prev => {
                 const next = new Map(prev);
-                next.set(u.user_id, {
-                    id: u.user_id,
-                    clientId: u.user_id,
-                    name: u.username,
-                    color: u.color,
+                const existing = prev.get(uId);
+                next.set(uId, {
+                    id: uId,
+                    clientId: uId,
+                    name: u.username || u.name || 'Unknown',
+                    color: u.color || '#888',
                     isLocal: false,
-                    isAgent: u.is_agent,
+                    isAgent: u.is_agent || false,
                     agentName: u.agent_name,
-                    cursor: undefined
+                    cursor: u.cursor_line !== undefined && u.cursor_line !== null ? {
+                        line: u.cursor_line,
+                        column: u.cursor_column || 0
+                    } : undefined,
+                    isTyping: existing?.isTyping || false // Preserve typing state
                 });
                 return next;
             });
-        });
+        };
+        socket.on('presence:join', onPresenceJoin);
 
         // Backend emit: 'presence:leave'
-        socket.on('presence:leave', (data: any) => {
+        const onPresenceLeave = (data: any) => {
             if (data.document_id !== documentId) return;
+            const uId = String(data.user_id || data.id || '');
             setRemoteUsers(prev => {
                 const next = new Map(prev);
-                next.delete(data.user_id);
+                next.delete(uId);
                 return next;
             });
-        });
+        };
+        socket.on('presence:leave', onPresenceLeave);
 
         // Backend emit: 'cursor_update' (Wait, backend emits 'cursor_update' OR 'presence:cursor'?)
         // In main.py: await sio.emit('cursor_update', ...)
@@ -113,8 +144,8 @@ export function useCollab(documentId: string, userId: string, userName: string, 
 
         const handleCursor = (data: any) => {
             if (data.document_id !== documentId) return;
-            const uid = data.user_id || data.id;
-            if (uid === userId) return;
+            const uid = String(data.user_id || data.id || '');
+            if (uid === String(userId)) return;
 
             setRemoteUsers(prev => {
                 const next = new Map(prev);
@@ -122,7 +153,7 @@ export function useCollab(documentId: string, userId: string, userName: string, 
 
                 // If user not known (joined before we did?), add placeholder
                 const color = data.color || (existing?.color || '#888');
-                const name = data.username || (existing?.name || 'Unknown');
+                const name = data.username || data.name || (existing?.name || 'Unknown');
 
                 next.set(uid, {
                     id: uid,
@@ -130,11 +161,11 @@ export function useCollab(documentId: string, userId: string, userName: string, 
                     name: name,
                     color: color,
                     isLocal: false,
-                    isAgent: data.is_agent,
+                    isAgent: data.is_agent || false,
                     agentName: data.agent_name,
                     cursor: {
-                        line: data.cursor_line || data.line,
-                        column: data.cursor_column || data.column || 0
+                        line: data.cursor_line !== undefined ? data.cursor_line : (data.line !== undefined ? data.line : 0),
+                        column: data.cursor_column !== undefined ? data.cursor_column : (data.column !== undefined ? data.column : 0)
                     }
                 });
                 return next;
@@ -142,66 +173,163 @@ export function useCollab(documentId: string, userId: string, userName: string, 
         };
 
         socket.on('presence:cursor', handleCursor);
-        socket.on('cursor_update', handleCursor); // Legacy support
+        socket.on('cursor_update', handleCursor);
 
         // Backend emit: 'content:change'
-        socket.on('content:change', (data: any) => {
+        const onContentChange = (data: any) => {
             if (data.document_id !== documentId) return;
-            if (data.user_id !== userId) {
-                if (data.content !== undefined) {
-                    setContentState(data.content);
-                }
-                // Handle other change types if implemented
+            const senderId = String(data.user_id || data.id || '');
+            if (senderId !== String(userId) && data.content !== undefined) {
+                // Update content state directly (this is a remote change, not local)
+                setContentState(data.content);
+                // Also update lastEmittedContentRef to prevent echo loops
+                lastEmittedContentRef.current = data.content;
+                // Mark user as typing + update cursor position if provided
+                setRemoteUsers(prev => {
+                    const next = new Map(prev);
+                    const existing = next.get(senderId);
+                    const baseUser: CollabUser = existing || {
+                        id: senderId,
+                        clientId: senderId,
+                        name: data.username || 'Unknown',
+                        color: '#888',
+                        isLocal: false,
+                        isAgent: false,
+                    };
+                    const cursorUpdate = (data.cursor_line !== undefined && data.cursor_line !== null)
+                        ? { line: data.cursor_line, column: data.cursor_column || 0 }
+                        : baseUser.cursor;
+                    next.set(senderId, { ...baseUser, isTyping: true, cursor: cursorUpdate });
+                    return next;
+                });
+                // Clear typing indicator after 2 seconds
+                setTimeout(() => {
+                    setRemoteUsers(current => {
+                        const updated = new Map(current);
+                        const u = updated.get(senderId);
+                        if (u) {
+                            updated.set(senderId, { ...u, isTyping: false });
+                        }
+                        return updated;
+                    });
+                }, 2000);
             }
-        });
+        };
+        socket.on('content:change', onContentChange);
 
         // Backend emit: 'content:sync'
-        socket.on('content:sync', (data: any) => {
+        const onContentSync = (data: any) => {
             if (data.document_id !== documentId) return;
             setContentState(data.content);
             setIsSynced(true);
-        });
+        };
+        socket.on('content:sync', onContentSync);
+
+        // Backend emit: 'stream:start' - MCP agent starts streaming
+        const onStreamStart = (data: any) => {
+            if (data.document_id !== documentId) return;
+            console.log('[Collab] Stream started', data);
+        };
+        socket.on('stream:start', onStreamStart);
+
+        // Backend emit: 'stream:chunk' - MCP agent sends text chunk
+        const onStreamChunk = (data: any) => {
+            if (data.document_id !== documentId) return;
+            if (data.user_id === userId) return; // Skip our own chunks
+            
+            console.log('[Collab] Stream chunk received', data);
+            
+            // Insert chunk at position in current content
+            setContentState(prevContent => {
+                // Use position from data, or append at end if not provided
+                const position = data.position !== undefined ? data.position : prevContent.length;
+                // Insert text at position
+                const newContent = prevContent.substring(0, position) + data.text + prevContent.substring(position);
+                return newContent;
+            });
+            
+            // Mark user as typing
+            if (data.user_id) {
+                setRemoteUsers(prev => {
+                    const next = new Map(prev);
+                    const existing = next.get(data.user_id);
+                    if (existing) {
+                        next.set(data.user_id, { ...existing, isTyping: true });
+                    }
+                    return next;
+                });
+                setTimeout(() => {
+                    setRemoteUsers(current => {
+                        const updated = new Map(current);
+                        const u = updated.get(data.user_id);
+                        if (u) {
+                            updated.set(data.user_id, { ...u, isTyping: false });
+                        }
+                        return updated;
+                    });
+                }, 2000);
+            }
+        };
+        socket.on('stream:chunk', onStreamChunk);
+
+        // Backend emit: 'stream:end' - MCP agent ends streaming
+        const onStreamEnd = (data: any) => {
+            if (data.document_id !== documentId) return;
+            console.log('[Collab] Stream ended', data);
+        };
+        socket.on('stream:end', onStreamEnd);
 
         socketRef.current = socket;
 
-        // Fetch initial users list via REST or a specific event if needed.
-        // For now, we might miss existing users if we don't get a list on join.
-        // Let's invoke a callback on join.
-        socket.emit('join_document', {
-            document_id: documentId,
-            user: { id: userId, username: userName }
-        }, (response: any) => {
-            // If backend supports callback (it returns list in main.py but does socketio support return?)
-            // main.py: return get_deduplicated_users(document_id)
-            // Yes, Python-socketio supports ack.
-            if (Array.isArray(response)) {
+        // Listen for presence_updated to get full list of users
+        const onPresenceUpdated = (data: any) => {
+            if (data.document_id !== documentId) return;
+            if (Array.isArray(data.users)) {
                 const newUsers = new Map<string, CollabUser>();
-                response.forEach((u: any) => {
-                    if (u.user_id === userId) {
-                        setMyColor(u.color);
-                    } else {
-                        newUsers.set(u.user_id, {
-                            id: u.user_id,
-                            clientId: u.user_id,
-                            name: u.username,
-                            color: u.color,
-                            isLocal: false,
-                            isAgent: u.is_agent,
-                            agentName: u.agent_name,
-                            cursor: u.cursor_line ? { line: u.cursor_line, column: u.cursor_column || 0 } : undefined
-                        });
+                data.users.forEach((u: any) => {
+                    const uId = String(u.user_id || u.id || '');
+                    if (uId === String(userId)) {
+                        if (u.color) setMyColor(u.color);
+                        return;
                     }
+                    newUsers.set(uId, {
+                        id: uId,
+                        clientId: uId,
+                        name: u.username || u.name || 'Unknown',
+                        color: u.color || '#888',
+                        isLocal: false,
+                        isAgent: u.is_agent || false,
+                        agentName: u.agent_name,
+                        cursor: u.cursor_line !== undefined && u.cursor_line !== null ? {
+                            line: u.cursor_line,
+                            column: u.cursor_column || 0
+                        } : undefined,
+                        isTyping: false
+                    });
                 });
                 setRemoteUsers(newUsers);
-                setIsSynced(true);
             }
-        });
+        };
+        socket.on('presence_updated', onPresenceUpdated);
 
         return () => {
             socket.emit('leave_document', { document_id: documentId });
-            socket.disconnect();
+            // Remove only our listeners, do NOT disconnect the shared socket
+            socket.off('connect', onConnect);
+            socket.off('disconnect', onDisconnect);
+            socket.off('presence:join', onPresenceJoin);
+            socket.off('presence:leave', onPresenceLeave);
+            socket.off('presence:cursor', handleCursor);
+            socket.off('cursor_update', handleCursor);
+            socket.off('content:change', onContentChange);
+            socket.off('content:sync', onContentSync);
+            socket.off('stream:start', onStreamStart);
+            socket.off('stream:chunk', onStreamChunk);
+            socket.off('stream:end', onStreamEnd);
+            socket.off('presence_updated', onPresenceUpdated);
+            socketRef.current = null;
         };
-    }, [documentId, userId]); // Removed userName from deps to avoid reconnect loops if name changes
+    }, [documentId, userId]);
 
     // Heartbeat Loop - Keeps session alive and prevents ghosts
     useEffect(() => {
@@ -209,32 +337,76 @@ export function useCollab(documentId: string, userId: string, userName: string, 
             if (socketRef.current?.connected) {
                 socketRef.current.emit('presence_heartbeat', { document_id: documentId });
             }
-        }, 5000); // 5 seconds heartbeat
+        }, 15000); // 15 seconds heartbeat (backend cleanup is 60s, so 4x margin)
         return () => clearInterval(interval);
     }, [documentId]);
 
+    // Debounce content updates to avoid spam, but keep it responsive (100ms)
+    const contentDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const lastEmittedContentRef = useRef<string>('');
+    
     const setContent = useCallback((newContent: string) => {
         setContentState(newContent);
-        if (socketRef.current?.connected) {
-            socketRef.current.emit('content:change', {
-                document_id: documentId,
-                content: newContent,
-                user_id: userId,
-                username: userName
-            });
+        
+        // Skip if content hasn't changed
+        if (newContent === lastEmittedContentRef.current) {
+            return;
         }
+        
+        // Clear existing debounce
+        if (contentDebounceRef.current) {
+            clearTimeout(contentDebounceRef.current);
+        }
+        
+        // Debounce: emit after 300ms of inactivity (balance between real-time feel and performance)
+        contentDebounceRef.current = setTimeout(() => {
+            if (socketRef.current?.connected && newContent !== lastEmittedContentRef.current) {
+                lastEmittedContentRef.current = newContent;
+                // Include cursor position so remote users see cursor move while typing
+                const cursor = lastEmittedCursorRef.current;
+                socketRef.current.emit('content:change', {
+                    document_id: documentId,
+                    content: newContent,
+                    user_id: userId,
+                    username: userName,
+                    cursor_line: cursor?.line,
+                    cursor_column: cursor?.column
+                });
+            }
+        }, 300);
     }, [documentId, userId, userName]);
 
+    // Debounce cursor updates to avoid spam
+    const cursorDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const lastEmittedCursorRef = useRef<{ line: number; column: number } | null>(null);
+    
     const setCursor = useCallback((cursor: { line: number, column: number }) => {
         setLocalCursor(cursor);
-        if (socketRef.current?.connected) {
-            socketRef.current.emit('cursor_update', {
-                document_id: documentId,
-                cursor_line: cursor.line, // Match backend expectation
-                cursor_column: cursor.column,
-                position: 0
-            });
+        
+        // Skip if cursor hasn't changed
+        const last = lastEmittedCursorRef.current;
+        if (last && last.line === cursor.line && last.column === cursor.column) {
+            return;
         }
+        
+        lastEmittedCursorRef.current = cursor;
+        
+        // Clear existing debounce
+        if (cursorDebounceRef.current) {
+            clearTimeout(cursorDebounceRef.current);
+        }
+        
+        // Debounce: only emit after 150ms of inactivity
+        cursorDebounceRef.current = setTimeout(() => {
+            if (socketRef.current?.connected) {
+                socketRef.current.emit('cursor_update', {
+                    document_id: documentId,
+                    cursor_line: cursor.line,
+                    cursor_column: cursor.column,
+                    position: 0
+                });
+            }
+        }, 150);
     }, [documentId]);
 
     // Build the full users list including the local user for rendering

@@ -309,6 +309,13 @@ fi
 # Step 7: Start services
 print_step "Starting services..."
 
+# Use ports from backend/.env if present (e.g. API_PORT=8200 for markd-v2)
+if [ -f "backend/.env" ]; then
+  source backend/.env 2>/dev/null || true
+  [ -n "${API_PORT:-}" ] && BACKEND_PORT="$API_PORT"
+  [ -n "${FRONTEND_PORT:-}" ] && FRONTEND_PORT="$FRONTEND_PORT"
+fi
+
 # Create logs directory
 mkdir -p logs
 

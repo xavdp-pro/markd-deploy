@@ -108,11 +108,11 @@ def get_device_templates() -> List[Dict[str, Any]]:
         'default_size': {'width': 100, 'height': 160}
     })
     
-    # Téléphone IP
+    # IP Phone
     templates.append({
         'device_type': 'phone_ip',
-        'name': 'Téléphone IP',
-        'description': 'Téléphone IP avec port réseau et port PC',
+        'name': 'IP Phone',
+        'description': 'IP Phone with network port and PC port',
         'default_ports': [
             {'name': 'Network', 'type': 'LAN', 'position': 'left'},
             {'name': 'PC', 'type': 'LAN', 'position': 'right'},
@@ -124,8 +124,8 @@ def get_device_templates() -> List[Dict[str, Any]]:
     # Ordinateur
     templates.append({
         'device_type': 'computer',
-        'name': 'Ordinateur',
-        'description': 'Ordinateur de bureau ou portable',
+        'name': 'Computer',
+        'description': 'Desktop or laptop computer',
         'default_ports': [
             {'name': 'Ethernet', 'type': 'LAN', 'position': 'left'},
         ],
@@ -136,8 +136,8 @@ def get_device_templates() -> List[Dict[str, Any]]:
     # Serveur
     templates.append({
         'device_type': 'server',
-        'name': 'Serveur',
-        'description': 'Serveur avec multi-NIC',
+        'name': 'Server',
+        'description': 'Server with multi-NIC',
         'default_ports': [
             {'name': 'NIC1', 'type': 'LAN', 'position': 'left'},
             {'name': 'NIC2', 'type': 'LAN', 'position': 'left'},
@@ -152,7 +152,7 @@ def get_device_templates() -> List[Dict[str, Any]]:
     templates.append({
         'device_type': 'ap_wifi',
         'name': 'Access Point WiFi',
-        'description': 'Point d\'accès WiFi',
+        'description': 'WiFi Access Point',
         'default_ports': [
             {'name': 'Ethernet', 'type': 'LAN', 'position': 'bottom'},
         ],
@@ -178,11 +178,11 @@ def get_device_templates() -> List[Dict[str, Any]]:
         'default_size': {'width': 100, 'height': 80}
     })
     
-    # Routeur générique
+    # Generic Router
     templates.append({
         'device_type': 'router_generic',
-        'name': 'Routeur',
-        'description': 'Routeur générique',
+        'name': 'Router',
+        'description': 'Generic router',
         'default_ports': [
             {'name': 'WAN1', 'type': 'WAN', 'position': 'left'},
             {'name': 'WAN2', 'type': 'WAN', 'position': 'left'},

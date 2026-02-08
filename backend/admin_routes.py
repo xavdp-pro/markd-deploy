@@ -1,6 +1,6 @@
 """
-Admin Routes - Routes d'administration pour MarkD
-Gestion des logs d'activité et autres fonctionnalités admin
+Admin Routes - Administration routes for MarkD
+Activity log management and other admin features
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional, Dict, List
@@ -43,19 +43,19 @@ async def get_activity_logs_endpoint(
     end_date: Optional[str] = Query(None)
 ):
     """
-    Récupère les logs d'activité (Admin uniquement)
+    Retrieve activity logs (Admin only)
     
     Query Parameters:
-        - limit: Nombre maximum de résultats (défaut: 100, max: 1000)
-        - offset: Décalage pour la pagination (défaut: 0)
-        - user_id: Filtrer par utilisateur
-        - workspace_id: Filtrer par workspace
-        - item_type: Filtrer par type ('document', 'task', 'password')
-        - action: Filtrer par action ('create', 'update', 'delete', 'move', etc.)
-        - start_date: Date de début (format ISO)
-        - end_date: Date de fin (format ISO)
+        - limit: Maximum number of results (default: 100, max: 1000)
+        - offset: Pagination offset (default: 0)
+        - user_id: Filter by user
+        - workspace_id: Filter by workspace
+        - item_type: Filter by type ('document', 'task', 'password')
+        - action: Filter by action ('create', 'update', 'delete', 'move', etc.)
+        - start_date: Start date (ISO format)
+        - end_date: End date (ISO format)
     """
-    # Vérifier que l'utilisateur est admin
+    # Check that user is admin
     if user.get('role') != 'admin':
         raise HTTPException(status_code=403, detail="Admin access required")
     
@@ -90,13 +90,13 @@ async def get_activity_stats_endpoint(
     days: int = Query(30, ge=1, le=365)
 ):
     """
-    Récupère les statistiques d'activité (Admin uniquement)
+    Retrieve activity statistics (Admin only)
     
     Query Parameters:
-        - workspace_id: Filtrer par workspace (optionnel)
-        - days: Nombre de jours à analyser (défaut: 30, max: 365)
+        - workspace_id: Filter by workspace (optional)
+        - days: Number of days to analyze (default: 30, max: 365)
     """
-    # Vérifier que l'utilisateur est admin
+    # Check that user is admin
     if user.get('role') != 'admin':
         raise HTTPException(status_code=403, detail="Admin access required")
     
@@ -123,23 +123,23 @@ async def export_activity_logs(
     end_date: Optional[str] = Query(None)
 ):
     """
-    Exporte les logs d'activité en CSV (Admin uniquement)
+    Export activity logs as CSV (Admin only)
     """
-    # Vérifier que l'utilisateur est admin
+    # Check that user is admin
     if user.get('role') != 'admin':
         raise HTTPException(status_code=403, detail="Admin access required")
     
     try:
-        # Récupérer tous les logs sans limite
+        # Retrieve all logs without limit
         logs = get_activity_logs(
-            limit=10000,  # Limite raisonnable pour l'export
+            limit=10000,  # Reasonable limit for export
             offset=0,
             workspace_id=workspace_id,
             start_date=start_date,
             end_date=end_date
         )
         
-        # Générer le CSV
+        # Generate CSV
         import csv
         import io
         from fastapi.responses import StreamingResponse
@@ -147,7 +147,7 @@ async def export_activity_logs(
         output = io.StringIO()
         writer = csv.writer(output)
         
-        # En-têtes
+        # Headers
         writer.writerow([
             'Date',
             'User',
@@ -159,7 +159,7 @@ async def export_activity_logs(
             'Item Path'
         ])
         
-        # Données
+        # Data
         for log in logs:
             writer.writerow([
                 log.get('created_at', ''),
@@ -191,7 +191,7 @@ async def get_all_mcp_configs(
     user: Dict = Depends(get_current_user)
 ):
     """
-    Récupère toutes les configurations MCP (Admin uniquement)
+    Retrieve all MCP configurations (Admin only)
     """
     if user.get('role') != 'admin':
         raise HTTPException(status_code=403, detail="Admin access required")

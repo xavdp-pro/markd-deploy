@@ -1,8 +1,14 @@
 from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
 from database import db
+from auth import get_current_user
 import uuid
+
+def require_admin(user: Dict):
+    """Raise 403 if user is not admin"""
+    if user.get('role') != 'admin':
+        raise HTTPException(status_code=403, detail="Admin access required")
 
 router = APIRouter(prefix="/api")
 
@@ -26,10 +32,10 @@ class GroupWorkspacePermission(BaseModel):
 # ===== Group Management Endpoints =====
 
 @router.get("/groups")
-async def get_groups(request: Request):
+async def get_groups(request: Request, user: Dict = Depends(get_current_user)):
     """Get all groups (admin only)"""
     try:
-        # Note: Add authentication check here
+        require_admin(user)
         query = """
             SELECT g.*, COUNT(DISTINCT ug.user_id) as user_count,
                    COUNT(DISTINCT gwp.workspace_id) as workspace_count
@@ -45,8 +51,9 @@ async def get_groups(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/groups")
-async def create_group(group: GroupBase, request: Request):
+async def create_group(group: GroupBase, request: Request, user: Dict = Depends(get_current_user)):
     """Create a new group (admin only)"""
+    require_admin(user)
     try:
         group_id = str(uuid.uuid4())
         query = """
@@ -67,8 +74,9 @@ async def create_group(group: GroupBase, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.put("/groups/{group_id}")
-async def update_group(group_id: str, group: GroupUpdate, request: Request):
+async def update_group(group_id: str, group: GroupUpdate, request: Request, user: Dict = Depends(get_current_user)):
     """Update a group (admin only)"""
+    require_admin(user)
     try:
         # Build update query dynamically
         updates = []
@@ -99,12 +107,17 @@ async def update_group(group_id: str, group: GroupUpdate, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/groups/{group_id}")
-async def delete_group(group_id: str, request: Request):
+async def delete_group(group_id: str, request: Request, user: Dict = Depends(get_current_user)):
     """Delete a group (admin only)"""
     try:
-        # Prevent deleting only the ALL group
-        if group_id == 'all':
-            raise HTTPException(status_code=400, detail="Cannot delete the ALL group")
+        require_admin(user)
+        
+        # Prevent deleting system groups
+        system_check = db.execute_query(
+            "SELECT is_system FROM user_groups_table WHERE id = %s", (group_id,)
+        )
+        if system_check and system_check[0].get('is_system'):
+            raise HTTPException(status_code=400, detail="Cannot delete a system group")
         
         query = "DELETE FROM `groups` WHERE id = %s"
         affected = db.execute_update(query, (group_id,))
@@ -121,8 +134,9 @@ async def delete_group(group_id: str, request: Request):
 # ===== Group Users Management =====
 
 @router.get("/groups/{group_id}/users")
-async def get_group_users(group_id: str, request: Request):
+async def get_group_users(group_id: str, request: Request, user: Dict = Depends(get_current_user)):
     """Get all users in a group"""
+    require_admin(user)
     try:
         query = """
             SELECT u.id, u.username, u.email, u.role, ug.added_at
@@ -137,8 +151,9 @@ async def get_group_users(group_id: str, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/groups/{group_id}/users")
-async def add_user_to_group(group_id: str, data: GroupUserAdd, request: Request):
+async def add_user_to_group(group_id: str, data: GroupUserAdd, request: Request, user: Dict = Depends(get_current_user)):
     """Add a user to a group (admin only)"""
+    require_admin(user)
     try:
         # Check if user exists
         user_query = "SELECT id FROM users WHERE id = %s"
@@ -167,11 +182,16 @@ async def add_user_to_group(group_id: str, data: GroupUserAdd, request: Request)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/groups/{group_id}/users/{user_id}")
-async def remove_user_from_group(group_id: str, user_id: int, request: Request):
+async def remove_user_from_group(group_id: str, user_id: int, request: Request, current_user: Dict = Depends(get_current_user)):
     """Remove a user from a group (admin only)"""
     try:
-        # Prevent removing users from ALL group
-        if group_id == 'all':
+        require_admin(current_user)
+        
+        # Prevent removing users from system groups like ALL
+        system_check = db.execute_query(
+            "SELECT name, is_system FROM user_groups_table WHERE id = %s", (group_id,)
+        )
+        if system_check and system_check[0].get('name') == 'ALL':
             raise HTTPException(status_code=400, detail="Cannot remove users from ALL group")
         
         query = "DELETE FROM user_groups WHERE group_id = %s AND user_id = %s"
@@ -189,8 +209,9 @@ async def remove_user_from_group(group_id: str, user_id: int, request: Request):
 # ===== Group Workspace Permissions =====
 
 @router.get("/groups/{group_id}/workspaces")
-async def get_group_workspaces(group_id: str, request: Request):
+async def get_group_workspaces(group_id: str, request: Request, user: Dict = Depends(get_current_user)):
     """Get all workspaces accessible by a group"""
+    require_admin(user)
     try:
         query = """
             SELECT w.id, w.name, w.description, gwp.permission_level, gwp.granted_at
@@ -205,8 +226,9 @@ async def get_group_workspaces(group_id: str, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/groups/{group_id}/workspaces")
-async def add_workspace_to_group(group_id: str, data: GroupWorkspacePermission, request: Request):
+async def add_workspace_to_group(group_id: str, data: GroupWorkspacePermission, request: Request, user: Dict = Depends(get_current_user)):
     """Grant a group access to a workspace (admin only)"""
+    require_admin(user)
     try:
         # Validate permission level
         if data.permission_level not in ['read', 'write', 'admin']:
@@ -243,9 +265,11 @@ async def update_group_workspace_permission(
     group_id: str, 
     workspace_id: str, 
     data: GroupWorkspacePermission, 
-    request: Request
+    request: Request,
+    user: Dict = Depends(get_current_user)
 ):
     """Update group permission for a workspace (admin only)"""
+    require_admin(user)
     try:
         # Validate permission level
         if data.permission_level not in ['read', 'write', 'admin']:
@@ -268,8 +292,9 @@ async def update_group_workspace_permission(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/groups/{group_id}/workspaces/{workspace_id}")
-async def remove_workspace_from_group(group_id: str, workspace_id: str, request: Request):
+async def remove_workspace_from_group(group_id: str, workspace_id: str, request: Request, user: Dict = Depends(get_current_user)):
     """Revoke group access to a workspace (admin only)"""
+    require_admin(user)
     try:
         query = "DELETE FROM group_workspace_permissions WHERE group_id = %s AND workspace_id = %s"
         affected = db.execute_update(query, (group_id, workspace_id))

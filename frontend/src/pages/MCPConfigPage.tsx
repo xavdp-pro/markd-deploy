@@ -28,7 +28,7 @@ interface NewCredentials {
   api_secret: string;
 }
 
-// Composant pour sélectionner un dossier dans l'arbre
+// Component to select a folder from the tree
 interface TreeSelectorProps {
   tree: Document[];
   expanded: Record<string, boolean>;
@@ -39,7 +39,7 @@ interface TreeSelectorProps {
 
 const TreeSelector: React.FC<TreeSelectorProps> = ({ tree, expanded, onToggleExpand, onSelect, selectedNode }) => {
   const renderNode = (node: Document, level: number = 0): React.ReactNode => {
-    if (node.type === 'file') return null; // Ne montrer que les dossiers
+    if (node.type === 'file') return null; // Only show folders
     
     const isExpanded = expanded[node.id] || false;
     const isSelected = selectedNode?.id === node.id;
@@ -119,7 +119,7 @@ const MCPConfigPage: React.FC = () => {
     onConfirm: () => void;
   } | null>(null);
 
-  // Lire les paramètres URL au chargement
+  // Read URL parameters on load
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const workspaceId = params.get('workspace_id');
@@ -134,9 +134,9 @@ const MCPConfigPage: React.FC = () => {
         workspace_id: workspaceId,
         destination_path: decodedPath
       }));
-      // Ouvrir automatiquement le modal de création
+      // Automatically open the create modal
       setShowCreateModal(true);
-      // Charger l'arbre du workspace
+      // Load the workspace tree
       loadWorkspaceTree(workspaceId);
     }
   }, [location.search]);
@@ -150,7 +150,7 @@ const MCPConfigPage: React.FC = () => {
       const result = await api.getTree(workspaceId);
       if (result.success) {
         setWorkspaceTree(result.tree || []);
-        // Expand root par défaut
+        // Expand root by default
         setTreeExpanded({ root: true });
       }
     } catch (error) {
@@ -158,7 +158,7 @@ const MCPConfigPage: React.FC = () => {
     }
   };
 
-  // Charger l'arbre quand le workspace change dans le formulaire
+  // Load tree when workspace changes in the form
   useEffect(() => {
     if (formData.workspace_id) {
       loadWorkspaceTree(formData.workspace_id);
@@ -177,7 +177,7 @@ const MCPConfigPage: React.FC = () => {
       }
     } catch (error) {
       console.error('Error fetching MCP configs:', error);
-      toast.error('Erreur lors du chargement des configurations');
+      toast.error('Error loading configurations');
     } finally {
       setLoading(false);
     }
@@ -198,14 +198,14 @@ const MCPConfigPage: React.FC = () => {
 
   const handleCreate = async () => {
     if (!formData.workspace_id) {
-      toast.error('Workspace est requis');
+      toast.error('Workspace is required');
       return;
     }
 
-    // Vérifier les permissions
+    // Check permissions
     const permissionCheck = await checkWorkspacePermission(formData.workspace_id);
     if (!permissionCheck.mcp_allowed) {
-      toast.error(`Permissions insuffisantes. Le MCP nécessite 'write' ou 'admin' sur le workspace. Permission actuelle: ${permissionCheck.user_permission}`);
+      toast.error(`Insufficient permissions. MCP requires 'write' or 'admin' on the workspace. Current permission: ${permissionCheck.user_permission}`);
       return;
     }
 
@@ -216,20 +216,20 @@ const MCPConfigPage: React.FC = () => {
         credentials: 'include',
         body: JSON.stringify({
           ...formData,
-          source_path: formData.source_path || null  // Envoyer null si vide
+          source_path: formData.source_path || null  // Send null if empty
         })
       });
 
       const data = await response.json();
       if (data.success) {
-        toast.success('Configuration créée avec succès');
+        toast.success('Configuration created successfully');
         setShowCreateModal(false);
         setFormData({ workspace_id: '', source_path: '', destination_path: '', enabled: true });
         setSelectedDestinationNode(null);
-        // Nettoyer l'URL
+        // Clean up the URL
         navigate('/mcp-config', { replace: true });
         
-        // Afficher les credentials générés
+        // Show generated credentials
         if (data.config.api_key && data.config.api_secret) {
           setNewCredentials({
             api_key: data.config.api_key,
@@ -240,19 +240,19 @@ const MCPConfigPage: React.FC = () => {
         
         fetchConfigs();
       } else {
-        toast.error(data.detail || 'Erreur lors de la création');
+        toast.error(data.detail || 'Error creating configuration');
       }
     } catch (error) {
       console.error('Error creating config:', error);
-      toast.error('Erreur lors de la création');
+      toast.error('Error creating configuration');
     }
   };
 
   const handleRegenerateCredentials = (configId: string) => {
     setConfirmModal({
       isOpen: true,
-      title: 'Régénérer les credentials',
-      message: '⚠️ Régénérer les credentials invalidera les anciens. Continuer ?',
+      title: 'Regenerate credentials',
+      message: '⚠️ Regenerating credentials will invalidate the previous ones. Continue?',
       onConfirm: async () => {
         setConfirmModal(null);
         setRegeneratingId(configId);
@@ -271,11 +271,11 @@ const MCPConfigPage: React.FC = () => {
             setShowCredentialsModal(true);
             fetchConfigs();
           } else {
-            toast.error(data.detail || 'Erreur lors de la régénération');
+            toast.error(data.detail || 'Error regenerating credentials');
           }
         } catch (error) {
           console.error('Error regenerating credentials:', error);
-          toast.error('Erreur lors de la régénération');
+          toast.error('Error regenerating credentials');
         } finally {
           setRegeneratingId(null);
         }
@@ -285,7 +285,7 @@ const MCPConfigPage: React.FC = () => {
 
   const copyToClipboard = (text: string, label: string) => {
     navigator.clipboard.writeText(text);
-    toast.success(`${label} copié !`);
+    toast.success(`${label} copied!`);
   };
 
   const handleUpdate = async () => {
@@ -305,25 +305,25 @@ const MCPConfigPage: React.FC = () => {
 
       const data = await response.json();
       if (data.success) {
-        toast.success('Configuration mise à jour');
+        toast.success('Configuration updated');
         setEditingConfig(null);
         setFormData({ workspace_id: '', source_path: '', destination_path: '', enabled: true });
         setSelectedDestinationNode(null);
         fetchConfigs();
       } else {
-        toast.error(data.detail || 'Erreur lors de la mise à jour');
+        toast.error(data.detail || 'Error updating configuration');
       }
     } catch (error) {
       console.error('Error updating config:', error);
-      toast.error('Erreur lors de la mise à jour');
+      toast.error('Error updating configuration');
     }
   };
 
   const handleDelete = (configId: string) => {
     setConfirmModal({
       isOpen: true,
-      title: 'Supprimer la configuration',
-      message: 'Êtes-vous sûr de vouloir supprimer cette configuration ?',
+      title: 'Delete configuration',
+      message: 'Are you sure you want to delete this configuration?',
       onConfirm: async () => {
         setConfirmModal(null);
         try {
@@ -334,14 +334,14 @@ const MCPConfigPage: React.FC = () => {
 
           const data = await response.json();
           if (data.success) {
-            toast.success('Configuration supprimée');
+            toast.success('Configuration deleted');
             fetchConfigs();
           } else {
-            toast.error(data.detail || 'Erreur lors de la suppression');
+            toast.error(data.detail || 'Error deleting configuration');
           }
         } catch (error) {
           console.error('Error deleting config:', error);
-          toast.error('Erreur lors de la suppression');
+          toast.error('Error deleting configuration');
         }
       }
     });
@@ -400,27 +400,27 @@ const MCPConfigPage: React.FC = () => {
           <div className="flex items-center justify-between mb-8">
             <div>
               <h2 className="text-3xl font-bold text-gray-800 dark:text-white mb-2">
-                Configuration MCP
+                MCP Configuration
               </h2>
               <p className="text-gray-600 dark:text-gray-400">
-                Configurez les chemins et workspaces autorisés pour le serveur MCP local
+                Configure paths and authorized workspaces for the local MCP server
               </p>
               <p className="text-sm text-gray-500 dark:text-gray-500 mt-1">
-                💡 Pour créer une configuration, faites un clic droit sur un dossier dans l'arbre des documents
+                💡 To create a configuration, right-click on a folder in the document tree
               </p>
             </div>
           </div>
 
           {loading ? (
-            <div className="text-center py-12 text-gray-500">Chargement...</div>
+            <div className="text-center py-12 text-gray-500">Loading...</div>
           ) : configs.length === 0 ? (
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-12 text-center">
               <FolderTree className="w-16 h-16 mx-auto text-gray-400 mb-4" />
               <p className="text-gray-600 dark:text-gray-400 mb-4">
-                Aucune configuration MCP
+                No MCP configuration
               </p>
               <p className="text-sm text-gray-500 dark:text-gray-500">
-                Faites un clic droit sur un dossier dans l'arbre des documents pour créer une configuration
+                Right-click on a folder in the document tree to create a configuration
               </p>
             </div>
           ) : (
@@ -435,13 +435,13 @@ const MCPConfigPage: React.FC = () => {
                       API Key
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                      Chemin source
+                      Source Path
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                      Chemin destination
+                      Destination Path
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
-                      Statut
+                      Status
                     </th>
                     <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                       Actions
@@ -468,20 +468,20 @@ const MCPConfigPage: React.FC = () => {
                             <button
                               onClick={() => copyToClipboard(config.api_key!, 'API Key')}
                               className="p-1 text-gray-500 hover:text-blue-600"
-                              title="Copier l'API Key"
+                              title="Copy API Key"
                             >
                               <Copy className="w-3 h-3" />
                             </button>
                           </div>
                         ) : (
-                          <span className="text-xs text-gray-400 italic">Non généré</span>
+                          <span className="text-xs text-gray-400 italic">Not generated</span>
                         )}
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2 text-sm text-gray-900 dark:text-white">
                           <Folder className="w-4 h-4 text-gray-400" />
                           {config.source_path || (
-                            <span className="text-gray-400 italic">À configurer</span>
+                            <span className="text-gray-400 italic">To be configured</span>
                           )}
                         </div>
                       </td>
@@ -497,7 +497,7 @@ const MCPConfigPage: React.FC = () => {
                             ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-300'
                             : 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-300'
                         }`}>
-                          {config.enabled ? 'Activé' : 'Désactivé'}
+                          {config.enabled ? 'Enabled' : 'Disabled'}
                         </span>
                       </td>
                       <td className="px-6 py-4 text-right">
@@ -506,7 +506,7 @@ const MCPConfigPage: React.FC = () => {
                             onClick={() => handleRegenerateCredentials(config.id)}
                             disabled={regeneratingId === config.id}
                             className="p-2 text-gray-600 dark:text-gray-400 hover:text-amber-600 dark:hover:text-amber-400 disabled:opacity-50"
-                            title="Régénérer les credentials"
+                            title="Regenerate credentials"
                           >
                             <RefreshCw className={`w-4 h-4 ${regeneratingId === config.id ? 'animate-spin' : ''}`} />
                           </button>
@@ -522,14 +522,14 @@ const MCPConfigPage: React.FC = () => {
                               loadWorkspaceTree(config.workspace_id);
                             }}
                             className="p-2 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
-                            title="Modifier"
+                            title="Edit"
                           >
                             <Edit className="w-4 h-4" />
                           </button>
                           <button
                             onClick={() => handleDelete(config.id)}
                             className="p-2 text-gray-600 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400"
-                            title="Supprimer"
+                            title="Delete"
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
@@ -550,7 +550,7 @@ const MCPConfigPage: React.FC = () => {
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-xl font-bold text-gray-800 dark:text-white">
-                Nouvelle configuration MCP
+                New MCP Configuration
               </h3>
               <button
                 onClick={() => {
@@ -578,23 +578,23 @@ const MCPConfigPage: React.FC = () => {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Chemin source (local) <span className="text-gray-400 font-normal">- optionnel</span>
+                  Source path (local) <span className="text-gray-400 font-normal">- optional</span>
                 </label>
                 <input
                   type="text"
                   value={formData.source_path}
                   onChange={(e) => setFormData({ ...formData, source_path: e.target.value })}
-                  placeholder="/path/to/docs ou ./docs"
+                  placeholder="/path/to/docs or ./docs"
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  Peut être configuré plus tard dans le client MCP local
+                  Can be configured later in the local MCP client
                 </p>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Chemin destination (workspace)
+                  Destination path (workspace)
                 </label>
                 <div className="flex gap-2">
                   <input
@@ -609,18 +609,18 @@ const MCPConfigPage: React.FC = () => {
                       type="button"
                       onClick={() => setShowTreeSelector(!showTreeSelector)}
                       className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 flex items-center gap-2"
-                      title="Sélectionner depuis l'arbre"
+                      title="Select from tree"
                     >
                       <FolderTree className="w-4 h-4" />
-                      {showTreeSelector ? 'Masquer' : 'Arbre'}
+                      {showTreeSelector ? 'Hide' : 'Tree'}
                     </button>
                   )}
                 </div>
                 <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  Chemin dans l'arbre du workspace (vide = root)
+                  Path in the workspace tree (empty = root)
                 </p>
                 
-                {/* Sélecteur d'arbre */}
+                {/* Tree selector */}
                 {showTreeSelector && formData.workspace_id && workspaceTree.length > 0 && (
                   <div className="mt-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 max-h-64 overflow-auto p-2">
                     <TreeSelector
@@ -649,7 +649,7 @@ const MCPConfigPage: React.FC = () => {
                   className="w-4 h-4"
                 />
                 <label htmlFor="enabled" className="text-sm text-gray-700 dark:text-gray-300">
-                  Configuration activée
+                  Configuration enabled
                 </label>
               </div>
             </div>
@@ -665,14 +665,14 @@ const MCPConfigPage: React.FC = () => {
                 }}
                 className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
               >
-                Annuler
+                Cancel
               </button>
               <button
                 onClick={handleCreate}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
               >
                 <Save className="w-4 h-4" />
-                Créer
+                Create
               </button>
             </div>
           </div>
@@ -689,7 +689,7 @@ const MCPConfigPage: React.FC = () => {
                   <Key className="w-5 h-5 text-green-600 dark:text-green-400" />
                 </div>
                 <h3 className="text-xl font-bold text-gray-800 dark:text-white">
-                  Credentials MCP générés
+                  MCP Credentials Generated
                 </h3>
               </div>
               <button
@@ -708,7 +708,7 @@ const MCPConfigPage: React.FC = () => {
               <div className="flex items-start gap-2">
                 <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
                 <div className="text-sm text-amber-800 dark:text-amber-300">
-                  <strong>Important :</strong> Le secret API ne sera plus jamais affiché. Copiez-le maintenant et conservez-le en lieu sûr.
+                  <strong>Important:</strong> The API secret will never be shown again. Copy it now and store it safely.
                 </div>
               </div>
             </div>
@@ -725,7 +725,7 @@ const MCPConfigPage: React.FC = () => {
                   <button
                     onClick={() => copyToClipboard(newCredentials.api_key, 'API Key')}
                     className="p-2 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 bg-gray-100 dark:bg-gray-700 rounded-lg"
-                    title="Copier"
+                    title="Copy"
                   >
                     <Copy className="w-4 h-4" />
                   </button>
@@ -743,14 +743,14 @@ const MCPConfigPage: React.FC = () => {
                   <button
                     onClick={() => setShowSecret(!showSecret)}
                     className="p-2 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 bg-gray-100 dark:bg-gray-700 rounded-lg"
-                    title={showSecret ? 'Masquer' : 'Afficher'}
+                    title={showSecret ? 'Hide' : 'Show'}
                   >
                     {showSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                   <button
                     onClick={() => copyToClipboard(newCredentials.api_secret, 'API Secret')}
                     className="p-2 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 bg-gray-100 dark:bg-gray-700 rounded-lg"
-                    title="Copier"
+                    title="Copy"
                   >
                     <Copy className="w-4 h-4" />
                   </button>
@@ -760,10 +760,10 @@ const MCPConfigPage: React.FC = () => {
 
             <div className="mt-6 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
               <h4 className="text-sm font-medium text-gray-800 dark:text-white mb-2">
-                Configuration du client MCP
+                MCP Client Configuration
               </h4>
               <pre className="text-xs bg-gray-900 text-green-400 p-3 rounded-lg overflow-x-auto">
-{`# Dans votre fichier .env ou config
+{`# In your .env or config file
 MCP_API_KEY=${newCredentials.api_key}
 MCP_API_SECRET=${newCredentials.api_secret}`}
               </pre>
@@ -778,7 +778,7 @@ MCP_API_SECRET=${newCredentials.api_secret}`}
                 }}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
               >
-                J'ai copié les credentials
+                I've copied the credentials
               </button>
             </div>
           </div>
@@ -791,7 +791,7 @@ MCP_API_SECRET=${newCredentials.api_secret}`}
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-xl font-bold text-gray-800 dark:text-white">
-                Modifier la configuration
+                Edit Configuration
               </h3>
               <button
                 onClick={() => {
@@ -818,20 +818,20 @@ MCP_API_SECRET=${newCredentials.api_secret}`}
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Chemin source (local) <span className="text-gray-400 font-normal">- optionnel</span>
+                  Source path (local) <span className="text-gray-400 font-normal">- optional</span>
                 </label>
                 <input
                   type="text"
                   value={formData.source_path}
                   onChange={(e) => setFormData({ ...formData, source_path: e.target.value })}
-                  placeholder="Peut être configuré dans le client MCP"
+                  placeholder="Can be configured in the MCP client"
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Chemin destination (workspace)
+                  Destination path (workspace)
                 </label>
                 <div className="flex gap-2">
                   <input
@@ -845,15 +845,15 @@ MCP_API_SECRET=${newCredentials.api_secret}`}
                       type="button"
                       onClick={() => setShowTreeSelector(!showTreeSelector)}
                       className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600 flex items-center gap-2"
-                      title="Sélectionner depuis l'arbre"
+                      title="Select from tree"
                     >
                       <FolderTree className="w-4 h-4" />
-                      {showTreeSelector ? 'Masquer' : 'Arbre'}
+                      {showTreeSelector ? 'Hide' : 'Tree'}
                     </button>
                   )}
                 </div>
                 
-                {/* Sélecteur d'arbre */}
+                {/* Tree selector */}
                 {showTreeSelector && formData.workspace_id && workspaceTree.length > 0 && (
                   <div className="mt-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 max-h-64 overflow-auto p-2">
                     <TreeSelector
@@ -882,11 +882,11 @@ MCP_API_SECRET=${newCredentials.api_secret}`}
                   className="w-4 h-4"
                 />
                 <label htmlFor="enabled-edit" className="text-sm text-gray-700 dark:text-gray-300">
-                  Configuration activée
+                  Configuration enabled
                 </label>
               </div>
 
-              {/* Afficher l'API Key existante */}
+              {/* Show existing API Key */}
               {editingConfig.api_key && (
                 <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -899,7 +899,7 @@ MCP_API_SECRET=${newCredentials.api_secret}`}
                     <button
                       onClick={() => copyToClipboard(editingConfig.api_key!, 'API Key')}
                       className="p-2 text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 bg-gray-100 dark:bg-gray-700 rounded-lg"
-                      title="Copier"
+                      title="Copy"
                     >
                       <Copy className="w-4 h-4" />
                     </button>
@@ -907,13 +907,13 @@ MCP_API_SECRET=${newCredentials.api_secret}`}
                       onClick={() => handleRegenerateCredentials(editingConfig.id)}
                       disabled={regeneratingId === editingConfig.id}
                       className="p-2 text-gray-600 dark:text-gray-400 hover:text-amber-600 dark:hover:text-amber-400 bg-gray-100 dark:bg-gray-700 rounded-lg disabled:opacity-50"
-                      title="Régénérer"
+                      title="Regenerate"
                     >
                       <RefreshCw className={`w-4 h-4 ${regeneratingId === editingConfig.id ? 'animate-spin' : ''}`} />
                     </button>
                   </div>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    Le secret n'est plus visible. Régénérez si vous l'avez perdu.
+                    The secret is no longer visible. Regenerate if you lost it.
                   </p>
                 </div>
               )}
@@ -929,14 +929,14 @@ MCP_API_SECRET=${newCredentials.api_secret}`}
                 }}
                 className="px-4 py-2 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
               >
-                Annuler
+                Cancel
               </button>
               <button
                 onClick={handleUpdate}
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2"
               >
                 <Save className="w-4 h-4" />
-                Enregistrer
+                Save
               </button>
             </div>
           </div>
@@ -952,8 +952,8 @@ MCP_API_SECRET=${newCredentials.api_secret}`}
           onConfirm={confirmModal.onConfirm}
           onCancel={() => setConfirmModal(null)}
           variant="warning"
-          confirmText="Confirmer"
-          cancelText="Annuler"
+          confirmText="Confirm"
+          cancelText="Cancel"
         />
       )}
     </div>
